@@ -56,6 +56,19 @@ impl RustEmitter {
     /// rather than being inherited: the handle must dispatch to the value
     /// inside it, not run the interface's own default.
     fn emit_interface_rc_forwarding_impl(&mut self, interface: &juxc_ast::InterfaceDecl) {
+        let twin_mark = self.w.mark();
+        self.emit_interface_rc_forwarding_impl_inner(interface);
+        // An erased bounded value implements the interface through the
+        // dispatch object it keeps (ERRATA E1XX-GAP39h).
+        if self.erased_bound_trait(&interface.name.text) {
+            let text = self.w.text_from(twin_mark).to_string();
+            if let Some(twin) = Self::erased_twin_of_forwarding_impl(&text) {
+                self.w.push_str(&twin);
+            }
+        }
+    }
+
+    fn emit_interface_rc_forwarding_impl_inner(&mut self, interface: &juxc_ast::InterfaceDecl) {
         let iface_bare = interface.name.text.clone();
         let methods: Vec<juxc_ast::FnDecl> = interface
             .methods

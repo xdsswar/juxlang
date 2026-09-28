@@ -1,0 +1,103 @@
+// Polymorphic recursion over a bounded type parameter (ERRATA E1XX-GAP39h):
+// `nest<T extends Sized2>` calls itself as `nest<Wrap<T>>`, so it is compiled
+// with its type argument erased (E1XX-GAP39g) -- and the erased value keeps
+// what its bound promises. Where the value is boxed, its type is known, so it
+// is kept as the bound's dispatch object too: a member of the bound called
+// through the erased `T` (`x.name()`, `x.size()`), or the value handed on
+// where the bound's type is expected (`describe(x)`, `Named` being a
+// supertype of `Sized2`), reaches the value's own method. The same holds
+// for a class bound (`A extends Animal`) and an intersection bound
+// (`T extends Named & Aged`).
+
+import rust.std.Vec;
+
+interface Named {
+    String name();
+}
+
+interface Aged {
+    int age();
+}
+
+interface Sized2 extends Named {
+    int size();
+}
+
+class Tag implements Sized2, Aged {
+    String label;
+    Tag(String label) { this.label = label; }
+    public String name() { return label; }
+    public int size() { return 1; }
+    public int age() { return 3; }
+}
+
+class Wrap<T extends Sized2> implements Sized2 {
+    T inner;
+    Wrap(T inner) { this.inner = inner; }
+    public String name() { return "wrap(" + inner.name() + ")"; }
+    public int size() { return inner.size() + 1; }
+}
+
+String describe(Named n) {
+    return "named " + n.name();
+}
+
+<T extends Sized2> String nest(T x, int n, Vec<String> log) {
+    log.push(n + ": " + x.name() + " size " + x.size() + ", " + describe(x));
+    if (n == 0) {
+        return x.name();
+    }
+    return nest<Wrap<T>>(new Wrap<T>(x), n - 1, log);
+}
+
+// A class bound, and a subclass overriding what the bound declares.
+abstract class Animal {
+    abstract String sound();
+    int legs() { return 4; }
+}
+
+class Dog extends Animal {
+    String sound() { return "woof"; }
+}
+
+class Pen<A extends Animal> extends Animal {
+    A held;
+    Pen(A held) { this.held = held; }
+    String sound() { return "pen[" + held.sound() + "]"; }
+    @Override
+    int legs() { return held.legs() + 1; }
+}
+
+<A extends Animal> String corral(A a, int n) {
+    String here = a.sound() + " " + a.legs();
+    if (n == 0) {
+        return here;
+    }
+    return here + " | " + corral<Pen<A>>(new Pen<A>(a), n - 1);
+}
+
+// An intersection bound: both interfaces are kept.
+class Both<T extends Named & Aged> implements Named, Aged {
+    T inner;
+    Both(T inner) { this.inner = inner; }
+    public String name() { return "both(" + inner.name() + ")"; }
+    public int age() { return inner.age() + 10; }
+}
+
+<T extends Named & Aged> String pair(T x, int n) {
+    String here = x.name() + " aged " + x.age();
+    if (n == 0) {
+        return here;
+    }
+    return here + " | " + pair<Both<T>>(new Both<T>(x), n - 1);
+}
+
+public void main() {
+    Vec<String> log = new Vec<String>();
+    print(nest<Tag>(new Tag("t"), 5, log));
+    for (String line : log) {
+        print(line);
+    }
+    print(corral<Dog>(new Dog(), 3));
+    print(pair<Tag>(new Tag("p"), 3));
+}

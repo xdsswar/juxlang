@@ -1,0 +1,37 @@
+// Polymorphic recursion over a type parameter with operator bounds (ERRATA
+// E1XX-GAP39h): the erased value keeps its type's `<=>`, `==` and `+` the
+// way it keeps its text and hash, so `a < b`, `a == b` and `a + b` on an
+// erased `T` run the value's own operators at every depth.
+
+class Box<T> {
+    T v;
+    Box(T v) { this.v = v; }
+    public int operator<=>(Box<T> other) { return depthOf() - other.depthOf(); }
+    public bool operator==(Box<T> other) { return v == other.v; }
+    public int operator hash() { return v.operator hash(); }
+    public Box<T> operator+(Box<T> other) { return new Box<T>(v); }
+    int depthOf() { return 1; }
+    public String operator string() { return "[" + v + "]"; }
+}
+
+<T> String compare(T a, T b, int n) where T has operator<=>(T) -> int {
+    String here = n + ": " + a + " " + b + " less=" + (a < b) + " same=" + (a == b);
+    if (n == 0) {
+        return here;
+    }
+    return here + "\n" + compare(new Box<T>(a), new Box<T>(b), n - 1);
+}
+
+<T> T sum(T a, T b, int n) where T has operator+(T) -> T {
+    if (n == 0) {
+        return a + b;
+    }
+    return sum(new Box<T>(a), new Box<T>(b), n - 1).v;
+}
+
+public void main() {
+    print(compare<int>(1, 2, 3));
+    print(compare<String>("x", "x", 2));
+    print(sum<int>(20, 22, 0));
+    print(sum<int>(20, 22, 3));
+}

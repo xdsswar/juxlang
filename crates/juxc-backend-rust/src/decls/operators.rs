@@ -871,7 +871,14 @@ impl RustEmitter {
     ) {
         let rhs_ty = op.params.first();
         self.w.emit_indent();
-        self.w.push_str("impl ");
+        self.w.push_str("impl");
+        // A generic class's operator is its generic impl's (ERRATA
+        // E1XX-GAP39h: a `where T has operator+` bound needs the trait).
+        let generic = self.op_impl_class.clone();
+        if let Some(decl) = &generic {
+            self.emit_class_impl_generic_params(decl);
+        }
+        self.w.push(' ');
         self.w.push_str(trait_path);
         // **The operand type is the trait's type argument.** Rust's `std::ops`
         // traits default `Rhs = Self`, so an operator over the receiver's own
@@ -894,6 +901,12 @@ impl RustEmitter {
         }
         self.w.push_str(" for ");
         self.w.push_str(class_name);
+        if let Some(decl) = &generic {
+            self.emit_generic_params_as_args(&decl.generic_params);
+            // What the inherent operator method asks of the parameters.
+            let clause = self.relaxed_where(op.span, None);
+            self.w.push_str(&clause);
+        }
         self.w.push_str(" {\n");
         self.w.indent_inc();
         // `type Output = …;` from the user's declared return type.

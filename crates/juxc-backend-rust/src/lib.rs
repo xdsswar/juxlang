@@ -754,47 +754,64 @@ pub(crate) struct PendingSetterObserver {
 pub(crate) const ARRAY_POP_RAISE: &str = ".unwrap_or_else(|| crate::jux_empty_fail())";
 /// The erased-value support the prelude carries (ERRATA E141).
 pub(crate) const ERASED_PRELUDE: &str = r##"#[derive(Clone)]
-pub struct JuxErased(std::rc::Rc<JuxErasedValue>);
-pub struct JuxErasedValue {
+pub struct JuxErased {
     value: std::rc::Rc<dyn std::any::Any>,
-    type_id: std::any::TypeId,
-    show: std::rc::Rc<dyn Fn(&dyn std::any::Any) -> String>,
-    eq: Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>,
-    hash: Option<fn(&dyn std::any::Any) -> u64>,
+    vt: std::rc::Rc<JuxErasedVtable>,
+}
+pub type JuxErasedBin = fn(&dyn std::any::Any, &dyn std::any::Any) -> std::rc::Rc<dyn std::any::Any>;
+pub type JuxErasedUn = fn(&dyn std::any::Any) -> std::rc::Rc<dyn std::any::Any>;
+pub struct JuxErasedVtable {
+    pub type_id: std::any::TypeId,
+    pub show: std::rc::Rc<dyn Fn(&dyn std::any::Any) -> String>,
+    pub eq: Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>,
+    pub hash: Option<fn(&dyn std::any::Any) -> u64>,
+    pub cmp: Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> Option<std::cmp::Ordering>>,
+    pub ident: Option<fn(&dyn std::any::Any) -> *const ()>,
+    pub bin: [Option<JuxErasedBin>; 10],
+    pub neg: Option<JuxErasedUn>,
+    pub not: Option<JuxErasedUn>,
+    pub views: std::rc::Rc<dyn Fn(&dyn std::any::Any, std::any::TypeId) -> Option<std::rc::Rc<dyn std::any::Any>>>,
 }
 impl JuxErased {
-    pub fn wrap<X: 'static>(
-        v: X,
-        show: std::rc::Rc<dyn Fn(&dyn std::any::Any) -> String>,
-        eq: Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>,
-        hash: Option<fn(&dyn std::any::Any) -> u64>,
-    ) -> JuxErased {
+    pub fn wrap<X: 'static>(v: X, vt: JuxErasedVtable) -> JuxErased {
         let any: &dyn std::any::Any = &v;
         match any.downcast_ref::<JuxErased>() {
             Some(already) => already.clone(),
-            None => JuxErased(std::rc::Rc::new(JuxErasedValue {
-                value: std::rc::Rc::new(v),
-                type_id: std::any::TypeId::of::<X>(),
-                show,
-                eq,
-                hash,
-            })),
+            None => JuxErased { value: std::rc::Rc::new(v), vt: std::rc::Rc::new(vt) },
         }
     }
     pub fn get<X: Clone + 'static>(&self) -> X {
         let me: &dyn std::any::Any = self;
         match me.downcast_ref::<X>() {
             Some(same) => same.clone(),
-            None => match self.0.value.downcast_ref::<X>() {
+            None => match self.value.downcast_ref::<X>() {
                 Some(v) => v.clone(),
                 None => jux_erased_mismatch(std::any::type_name::<X>()),
             },
         }
     }
+    pub fn jux_view<V: Clone + 'static>(&self) -> V {
+        match (self.vt.views)(&*self.value, std::any::TypeId::of::<V>()) {
+            Some(view) => match view.downcast_ref::<V>() {
+                Some(v) => v.clone(),
+                None => jux_erased_mismatch(std::any::type_name::<V>()),
+            },
+            None => jux_erased_mismatch(std::any::type_name::<V>()),
+        }
+    }
+    fn same_kind(&self, other: &JuxErased) -> bool {
+        self.vt.type_id == other.vt.type_id
+    }
+    fn bin_op(self, k: usize, o: JuxErased, what: &str) -> JuxErased {
+        match self.vt.bin[k] {
+            Some(f) if self.same_kind(&o) => JuxErased { value: f(&*self.value, &*o.value), vt: self.vt.clone() },
+            _ => jux_erased_mismatch(what),
+        }
+    }
 }
 pub fn jux_erased_mismatch(want: &str) -> ! {
     std::panic::panic_any(format!(
-        "internal compiler error: an erased value was read as `{}`, which it is not (ERRATA E141)",
+        "internal compiler error: an erased value was read as `{}`, which it is not (ERRATA E1XX-GAP39g)",
         want
     ))
 }
@@ -808,8 +825,8 @@ pub fn jux_erased_cast<X: 'static>(_: std::marker::PhantomData<X>, a: &dyn std::
     }
 }
 pub struct JuxErasedProbe<X>(pub std::marker::PhantomData<X>);
-pub trait JuxErasedEqViaPartialEq { fn jux_eq_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>; }
-impl<X: PartialEq + 'static> JuxErasedEqViaPartialEq for &&JuxErasedProbe<X> {
+pub trait JuxErasedEqVia { fn jux_eq_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>; }
+impl<X: PartialEq + 'static> JuxErasedEqVia for &&JuxErasedProbe<X> {
     fn jux_eq_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool> {
         Some(|a, b| match (a.downcast_ref::<X>(), b.downcast_ref::<X>()) {
             (Some(x), Some(y)) => x == y,
@@ -817,12 +834,12 @@ impl<X: PartialEq + 'static> JuxErasedEqViaPartialEq for &&JuxErasedProbe<X> {
         })
     }
 }
-pub trait JuxErasedEqViaIdentity { fn jux_eq_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>; }
-impl<X> JuxErasedEqViaIdentity for &JuxErasedProbe<X> {
+pub trait JuxErasedEqNone { fn jux_eq_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>; }
+impl<X> JuxErasedEqNone for &JuxErasedProbe<X> {
     fn jux_eq_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> bool> { None }
 }
-pub trait JuxErasedHashViaHash { fn jux_hash_fn(&self) -> Option<fn(&dyn std::any::Any) -> u64>; }
-impl<X: std::hash::Hash + 'static> JuxErasedHashViaHash for &&JuxErasedProbe<X> {
+pub trait JuxErasedHashVia { fn jux_hash_fn(&self) -> Option<fn(&dyn std::any::Any) -> u64>; }
+impl<X: std::hash::Hash + 'static> JuxErasedHashVia for &&JuxErasedProbe<X> {
     fn jux_hash_fn(&self) -> Option<fn(&dyn std::any::Any) -> u64> {
         Some(|a| {
             use std::hash::Hasher;
@@ -834,72 +851,206 @@ impl<X: std::hash::Hash + 'static> JuxErasedHashViaHash for &&JuxErasedProbe<X> 
         })
     }
 }
-pub trait JuxErasedHashViaIdentity { fn jux_hash_fn(&self) -> Option<fn(&dyn std::any::Any) -> u64>; }
-impl<X> JuxErasedHashViaIdentity for &JuxErasedProbe<X> {
+pub trait JuxErasedHashNone { fn jux_hash_fn(&self) -> Option<fn(&dyn std::any::Any) -> u64>; }
+impl<X> JuxErasedHashNone for &JuxErasedProbe<X> {
     fn jux_hash_fn(&self) -> Option<fn(&dyn std::any::Any) -> u64> { None }
 }
+pub trait JuxErasedCmpVia { fn jux_cmp_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> Option<std::cmp::Ordering>>; }
+impl<X: PartialOrd + 'static> JuxErasedCmpVia for &&JuxErasedProbe<X> {
+    fn jux_cmp_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> Option<std::cmp::Ordering>> {
+        Some(|a, b| match (a.downcast_ref::<X>(), b.downcast_ref::<X>()) {
+            (Some(x), Some(y)) => x.partial_cmp(y),
+            _ => None,
+        })
+    }
+}
+pub trait JuxErasedCmpNone { fn jux_cmp_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> Option<std::cmp::Ordering>>; }
+impl<X> JuxErasedCmpNone for &JuxErasedProbe<X> {
+    fn jux_cmp_fn(&self) -> Option<fn(&dyn std::any::Any, &dyn std::any::Any) -> Option<std::cmp::Ordering>> { None }
+}
+pub trait JuxErasedIdentVia { fn jux_ident_fn(&self) -> Option<fn(&dyn std::any::Any) -> *const ()>; }
+impl<X: JuxIdentity + 'static> JuxErasedIdentVia for &&JuxErasedProbe<X> {
+    fn jux_ident_fn(&self) -> Option<fn(&dyn std::any::Any) -> *const ()> {
+        Some(|a| match a.downcast_ref::<X>() {
+            Some(x) => x.__jux_identity(),
+            None => std::ptr::null(),
+        })
+    }
+}
+pub trait JuxErasedIdentNone { fn jux_ident_fn(&self) -> Option<fn(&dyn std::any::Any) -> *const ()>; }
+impl<X> JuxErasedIdentNone for &JuxErasedProbe<X> {
+    fn jux_ident_fn(&self) -> Option<fn(&dyn std::any::Any) -> *const ()> { None }
+}
+macro_rules! __jux_erased_binop {
+    ($via:ident, $none:ident, $f:ident, $tr:ident, $m:ident, $k:expr, $sym:expr) => {
+        pub trait $via { fn $f(&self) -> Option<JuxErasedBin>; }
+        impl<X: std::ops::$tr<Output = X> + Clone + 'static> $via for &&JuxErasedProbe<X> {
+            fn $f(&self) -> Option<JuxErasedBin> {
+                Some(|a, b| match (a.downcast_ref::<X>(), b.downcast_ref::<X>()) {
+                    (Some(x), Some(y)) => std::rc::Rc::new(std::ops::$tr::$m(x.clone(), y.clone())),
+                    _ => jux_erased_mismatch($sym),
+                })
+            }
+        }
+        pub trait $none { fn $f(&self) -> Option<JuxErasedBin>; }
+        impl<X> $none for &JuxErasedProbe<X> {
+            fn $f(&self) -> Option<JuxErasedBin> { None }
+        }
+        impl std::ops::$tr for JuxErased {
+            type Output = JuxErased;
+            fn $m(self, o: JuxErased) -> JuxErased { self.bin_op($k, o, $sym) }
+        }
+    };
+}
+__jux_erased_binop!(JuxErasedAddVia, JuxErasedAddNone, jux_add_fn, Add, add, 0, "operator +");
+__jux_erased_binop!(JuxErasedSubVia, JuxErasedSubNone, jux_sub_fn, Sub, sub, 1, "operator -");
+__jux_erased_binop!(JuxErasedMulVia, JuxErasedMulNone, jux_mul_fn, Mul, mul, 2, "operator *");
+__jux_erased_binop!(JuxErasedDivVia, JuxErasedDivNone, jux_div_fn, Div, div, 3, "operator /");
+__jux_erased_binop!(JuxErasedRemVia, JuxErasedRemNone, jux_rem_fn, Rem, rem, 4, "operator %");
+__jux_erased_binop!(JuxErasedAndVia, JuxErasedAndNone, jux_and_fn, BitAnd, bitand, 5, "operator &");
+__jux_erased_binop!(JuxErasedOrVia, JuxErasedOrNone, jux_or_fn, BitOr, bitor, 6, "operator |");
+__jux_erased_binop!(JuxErasedXorVia, JuxErasedXorNone, jux_xor_fn, BitXor, bitxor, 7, "operator ^");
+__jux_erased_binop!(JuxErasedShlVia, JuxErasedShlNone, jux_shl_fn, Shl, shl, 8, "operator <<");
+__jux_erased_binop!(JuxErasedShrVia, JuxErasedShrNone, jux_shr_fn, Shr, shr, 9, "operator >>");
+macro_rules! __jux_erased_unop {
+    ($via:ident, $none:ident, $f:ident, $tr:ident, $m:ident, $slot:ident, $sym:expr) => {
+        pub trait $via { fn $f(&self) -> Option<JuxErasedUn>; }
+        impl<X: std::ops::$tr<Output = X> + Clone + 'static> $via for &&JuxErasedProbe<X> {
+            fn $f(&self) -> Option<JuxErasedUn> {
+                Some(|a| match a.downcast_ref::<X>() {
+                    Some(x) => std::rc::Rc::new(std::ops::$tr::$m(x.clone())),
+                    None => jux_erased_mismatch($sym),
+                })
+            }
+        }
+        pub trait $none { fn $f(&self) -> Option<JuxErasedUn>; }
+        impl<X> $none for &JuxErasedProbe<X> {
+            fn $f(&self) -> Option<JuxErasedUn> { None }
+        }
+        impl std::ops::$tr for JuxErased {
+            type Output = JuxErased;
+            fn $m(self) -> JuxErased {
+                match self.vt.$slot {
+                    Some(f) => JuxErased { value: f(&*self.value), vt: self.vt.clone() },
+                    None => jux_erased_mismatch($sym),
+                }
+            }
+        }
+    };
+}
+__jux_erased_unop!(JuxErasedNegVia, JuxErasedNegNone, jux_neg_fn, Neg, neg, neg, "operator -");
+__jux_erased_unop!(JuxErasedNotVia, JuxErasedNotNone, jux_not_fn, Not, not, not, "operator ~");
 impl std::fmt::Display for JuxErased {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", (self.0.show)(&*self.0.value))
+        write!(f, "{}", (self.vt.show)(&*self.value))
     }
 }
 impl std::fmt::Debug for JuxErased {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", (self.0.show)(&*self.0.value))
+        write!(f, "{}", (self.vt.show)(&*self.value))
     }
 }
 impl PartialEq for JuxErased {
     fn eq(&self, other: &Self) -> bool {
-        if std::rc::Rc::ptr_eq(&self.0, &other.0) {
+        if std::rc::Rc::ptr_eq(&self.value, &other.value) {
             true
-        } else if self.0.type_id != other.0.type_id {
+        } else if !self.same_kind(other) {
             false
         } else {
-            match self.0.eq {
-                Some(eq) => eq(&*self.0.value, &*other.0.value),
-                None => std::rc::Rc::ptr_eq(&self.0.value, &other.0.value),
+            match self.vt.eq {
+                Some(eq) => eq(&*self.value, &*other.value),
+                None => self.__jux_identity() == other.__jux_identity(),
             }
         }
     }
 }
 impl Eq for JuxErased {}
+impl PartialOrd for JuxErased {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match self.vt.cmp {
+            Some(c) if self.same_kind(other) => c(&*self.value, &*other.value),
+            _ => None,
+        }
+    }
+}
 impl std::hash::Hash for JuxErased {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self.0.hash {
-            Some(h) => h(&*self.0.value).hash(state),
-            None => std::ptr::hash(std::rc::Rc::as_ptr(&self.0.value) as *const u8, state),
+        match self.vt.hash {
+            Some(h) => h(&*self.value).hash(state),
+            None => std::ptr::hash(self.__jux_identity(), state),
+        }
+    }
+}
+impl JuxIdentity for JuxErased {
+    fn __jux_identity(&self) -> *const () {
+        match self.vt.ident {
+            Some(i) => i(&*self.value),
+            None => std::rc::Rc::as_ptr(&self.value) as *const (),
         }
     }
 }
 #[macro_export]
 macro_rules! __jux_erase {
-    (@wrap $ev:ident) => {{
+    (@wrap $ev:ident; $($view:ty),*) => {{
         #[allow(unused_imports)]
         use $crate::{
-            JuxErasedEqViaIdentity as _, JuxErasedEqViaPartialEq as _, JuxErasedHashViaHash as _,
-            JuxErasedHashViaIdentity as _,
+            JuxErasedEqVia as _, JuxErasedEqNone as _, JuxErasedHashVia as _, JuxErasedHashNone as _,
+            JuxErasedCmpVia as _, JuxErasedCmpNone as _, JuxErasedIdentVia as _, JuxErasedIdentNone as _,
+            JuxErasedAddVia as _, JuxErasedAddNone as _, JuxErasedSubVia as _, JuxErasedSubNone as _,
+            JuxErasedMulVia as _, JuxErasedMulNone as _, JuxErasedDivVia as _, JuxErasedDivNone as _,
+            JuxErasedRemVia as _, JuxErasedRemNone as _, JuxErasedAndVia as _, JuxErasedAndNone as _,
+            JuxErasedOrVia as _, JuxErasedOrNone as _, JuxErasedXorVia as _, JuxErasedXorNone as _,
+            JuxErasedShlVia as _, JuxErasedShlNone as _, JuxErasedShrVia as _, JuxErasedShrNone as _,
+            JuxErasedNegVia as _, JuxErasedNegNone as _, JuxErasedNotVia as _, JuxErasedNotNone as _,
         };
         let __jux_ep = $crate::jux_erased_phantom(&$ev);
-        let __jux_eq = (&&&$crate::JuxErasedProbe(__jux_ep)).jux_eq_fn();
-        let __jux_eh = (&&&$crate::JuxErasedProbe(__jux_ep)).jux_hash_fn();
-        $crate::JuxErased::wrap(
-            $ev,
-            std::rc::Rc::new(move |a: &dyn std::any::Any| {
+        let __jux_p = &&&$crate::JuxErasedProbe(__jux_ep);
+        let __jux_etab = $crate::JuxErasedVtable {
+            type_id: $crate::jux_erased_type_id(&$ev),
+            show: std::rc::Rc::new(move |a: &dyn std::any::Any| {
                 let x = $crate::jux_erased_cast(__jux_ep, a);
                 $crate::__jux_show!(*x)
             }),
-            __jux_eq,
-            __jux_eh,
-        )
+            eq: __jux_p.jux_eq_fn(),
+            hash: __jux_p.jux_hash_fn(),
+            cmp: __jux_p.jux_cmp_fn(),
+            ident: __jux_p.jux_ident_fn(),
+            bin: [
+                __jux_p.jux_add_fn(), __jux_p.jux_sub_fn(), __jux_p.jux_mul_fn(), __jux_p.jux_div_fn(),
+                __jux_p.jux_rem_fn(), __jux_p.jux_and_fn(), __jux_p.jux_or_fn(), __jux_p.jux_xor_fn(),
+                __jux_p.jux_shl_fn(), __jux_p.jux_shr_fn(),
+            ],
+            neg: __jux_p.jux_neg_fn(),
+            not: __jux_p.jux_not_fn(),
+            views: std::rc::Rc::new(move |a: &dyn std::any::Any, want: std::any::TypeId| {
+                #[allow(unused_variables)]
+                let x = $crate::jux_erased_cast(__jux_ep, a);
+                $(
+                    if want == std::any::TypeId::of::<$view>() {
+                        let v: $view = std::rc::Rc::new(::std::clone::Clone::clone(x));
+                        Some(std::rc::Rc::new(v) as std::rc::Rc<dyn std::any::Any>)
+                    } else
+                )*
+                { None }
+            }),
+        };
+        $crate::JuxErased::wrap($ev, __jux_etab)
+    }};
+    ($v:expr, $t:ty; $($view:ty),*) => {{
+        let __jux_ev: $t = ::std::clone::Clone::clone(&$v);
+        $crate::__jux_erase!(@wrap __jux_ev; $($view),*)
     }};
     ($v:expr, $t:ty) => {{
         let __jux_ev: $t = ::std::clone::Clone::clone(&$v);
-        $crate::__jux_erase!(@wrap __jux_ev)
+        $crate::__jux_erase!(@wrap __jux_ev;)
     }};
     ($v:expr) => {{
         let __jux_ev = ::std::clone::Clone::clone(&$v);
-        $crate::__jux_erase!(@wrap __jux_ev)
+        $crate::__jux_erase!(@wrap __jux_ev;)
     }};
+}
+pub fn jux_erased_type_id<X: 'static>(_: &X) -> std::any::TypeId {
+    std::any::TypeId::of::<X>()
 }
 "##;
 
@@ -1510,7 +1661,7 @@ struct RustEmitter {
     pub(crate) into_receivers: std::collections::HashMap<juxc_source::Span, juxc_ast::TypeRef>,
     /// Expressions (by span) that fill a slot declared as an erased type
     /// parameter, boxed where they are emitted (ERRATA E141).
-    pub(crate) erase_on_emit: std::collections::HashMap<crate::erasure::EraseKey, Option<juxc_ast::TypeRef>>,
+    pub(crate) erase_on_emit: std::collections::HashMap<crate::erasure::EraseKey, crate::erasure::EraseMark>,
     /// The expressions being boxed or unboxed right now, so the recursive
     /// emission of the value itself does not wrap it again.
     pub(crate) erasing_now: std::collections::HashSet<(crate::erasure::EraseKey, bool)>,

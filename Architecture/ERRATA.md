@@ -5494,7 +5494,9 @@ private method boundary with it. GAPS.md gap 39f is closed.
 4. **`E0438` is left for a bound.** An erased value has none of a bound's
    members, so a cycle with a bounded type parameter (`<T extends Named>`
    calling itself at `Wrap<T>`) cannot be erased: `E0438` names the parameter
-   and the function that keeps growing it.
+   and the function that keeps growing it. Superseded by E1XX-GAP39h: the
+   erased value keeps each bound as its dispatch object, and `E0438` is left
+   for a bound that names a type parameter.
 5. **An early read throws `NullPointerException`** (superseding E140's
    `IllegalStateException`), which is what Java's `null` throws. The message
    still names the field ("field 'gear' of Mill read before it was
@@ -5517,6 +5519,58 @@ now holds the bounded case.
 §7.3.1 and `JUX-SEMANTICS-ADDENDUM.md` §S.4.4 name `NullPointerException`.
 E137's and E140's corresponding statements are superseded. GAPS.md gap 39g is
 closed.
+
+## E1XX-GAP39h. A bounded type parameter on a polymorphic-recursion cycle
+
+**Conflict.** E141 compiled polymorphic recursion by erasing the type
+arguments on the cycle, and refused (`E0438`) a cycle with a bounded type
+parameter (`nest<T extends Named>` calling `nest<Wrap<T>>`): the erased
+value carried its type's text, `==` and hash, but none of a bound's
+members, so `x.name()` on an erased `T` had nothing to call.
+
+**Resolution.**
+
+1. **The erased value keeps its bounds.** Where a value is boxed into a
+   slot declared as a bounded type parameter, its type is known, so it is
+   kept as each bound's dispatch object as well (`Rc<dyn Named>` for an
+   interface, `Rc<dyn AnimalKind>` for a class), one per bound of an
+   intersection (`T extends Named & Aged`) and one per supertrait of each (an
+   interface's `extends`, a class's ancestors and the interfaces it
+   implements). The boxing site builds them, since the checker has verified
+   that the value's type meets the bound.
+2. **The erased type implements each such bound** by forwarding every
+   member to the dispatch object it keeps, the same members (methods, a
+   class's field accessors and downcast hooks, a method with type parameters
+   of its own) the `Rc` handle of the bound forwards. So a member of the bound
+   called through an erased `T` reaches the value's own method, and an erased
+   `T` handed on where the bound's type is expected is wrapped as that type,
+   as any bounded `T` is. A bounded `T` is now also accepted where a
+   supertype of its bound is expected (`T extends Sized2` into a `Named`
+   slot, `Sized2 extends Named`); it was rustc's E0308.
+3. **Operator bounds are kept the same way.** `where T has operator<=>`,
+   `operator==`, `hash`, `operator string` and the arithmetic, bitwise and
+   shift operators are taken from the value's type where it is boxed, as its
+   `==` and hash already were, and the erased type implements the matching
+   Rust traits through them. A generic class's arithmetic and bitwise
+   operators now also implement the Rust operator traits (they were bridged
+   for a non-generic class only), so such a class meets an operator bound.
+4. **`E0438` is left for a bound that is not one fixed type**: a bound
+   naming the type parameter itself or another one (`T extends Ranked<T>`),
+   which has no one dispatch object to keep, and a `const` parameter on the
+   cycle.
+
+**Tests.** `examples/polymorphic_recursion_bounded.jux` (`nest<T extends
+Sized2>` to depth 5 calling `name()` and `size()` and handing the value to a
+`Named` parameter at each depth, a class-bounded `corral<A extends Animal>`,
+an intersection-bounded `pair<T extends Named & Aged>`), pinned by the
+output Java prints and differential case `86_polymorphic_recursion_bounded`;
+`examples/polymorphic_recursion_operators.jux` (`<=>`, `==`, `+` through
+erased values); `tests/ui/generic_method_dispatch_limits` holds the
+self-referencing bound.
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10 and
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0438` row are amended; E141's bound
+refusal is superseded. GAPS.md gap 39h is closed.
 
 ---
 When you edit any addendum that touches one of the items above,

@@ -5288,15 +5288,14 @@ impl crate::RustEmitter {
         // declared bound names the target interface / polymorphic base, which we
         // read from the in-scope `type_param_bounds`.
         if let juxc_tycheck::Ty::Param(pname) = src_ty {
+            // The bound itself, or a bound that reaches the target through
+            // its own supertypes (`T extends Sized2` into a `Named` slot when
+            // `Sized2 extends Named`).
+            let bounds = self.type_param_bounds.get(pname).cloned().unwrap_or_default();
             let bounded_by_target = self
-                .type_param_bounds
-                .get(pname)
-                .map(|bounds| {
-                    bounds.iter().any(|b| {
-                        b.name.segments.last().map(|s| s.text.as_str()) == Some(target_bare)
-                    })
-                })
-                .unwrap_or(false);
+                .erased_view_traits(&bounds)
+                .iter()
+                .any(|b| b.name.segments.last().map(|s| s.text.as_str()) == Some(target_bare));
             if bounded_by_target {
                 return IfaceCoercion::WrapClass {
                     clone_first: self.wrapper_value_needs_clone(expr),

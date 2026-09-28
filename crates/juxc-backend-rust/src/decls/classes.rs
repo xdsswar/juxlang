@@ -2325,7 +2325,22 @@ impl RustEmitter {
     /// hash and ordering. `operator string` is bridged on its own path, and
     /// the arithmetic bridges are still non-generic only.
     pub(crate) fn bridged_for_generic_class(kind: OperatorKind) -> bool {
-        matches!(kind, OperatorKind::Eq | OperatorKind::Hash | OperatorKind::Cmp)
+        matches!(
+            kind,
+            OperatorKind::Eq
+                | OperatorKind::Hash
+                | OperatorKind::Cmp
+                | OperatorKind::Plus
+                | OperatorKind::Minus
+                | OperatorKind::Mul
+                | OperatorKind::Div
+                | OperatorKind::Rem
+                | OperatorKind::BitAnd
+                | OperatorKind::BitOr
+                | OperatorKind::BitXor
+                | OperatorKind::Shl
+                | OperatorKind::Shr
+        )
     }
 
     /// Record which of the class's type parameters its bodies compare with
@@ -4274,6 +4289,25 @@ impl RustEmitter {
     /// handle to a SUBCLASS trait (`Rc<dyn DogKind>` satisfies `AnimalKind`
     /// through `DogKind`'s supertrait).
     fn emit_kind_rc_forwarding_impl(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        own_methods: &[(String, MethodSig)],
+        hook_targets: &[String],
+        accessor_fields: &[(String, juxc_ast::TypeRef)],
+    ) {
+        let twin_mark = self.w.mark();
+        self.emit_kind_rc_forwarding_impl_inner(class_decl, own_methods, hook_targets, accessor_fields);
+        // An erased value bounded by the class implements its `Kind` through
+        // the dispatch object it keeps (ERRATA E1XX-GAP39h).
+        if self.erased_bound_trait(&class_decl.name.text) {
+            let text = self.w.text_from(twin_mark).to_string();
+            if let Some(twin) = Self::erased_twin_of_forwarding_impl(&text) {
+                self.w.push_str(&twin);
+            }
+        }
+    }
+
+    fn emit_kind_rc_forwarding_impl_inner(
         &mut self,
         class_decl: &juxc_ast::ClassDecl,
         own_methods: &[(String, MethodSig)],

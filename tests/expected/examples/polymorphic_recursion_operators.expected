@@ -1,0 +1,9 @@
+3: 1 2 less=true same=false
+2: [1] [2] less=false same=false
+1: [[1]] [[2]] less=false same=false
+0: [[[1]]] [[[2]]] less=false same=false
+2: x x less=false same=true
+1: [x] [x] less=false same=true
+0: [[x]] [[x]] less=false same=true
+42
+20

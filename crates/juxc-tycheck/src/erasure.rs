@@ -121,19 +121,30 @@ pub fn plan(symbols: &SymbolTable) -> Erasure {
             break;
         }
     }
-    // A bound cannot be erased: that part of the program is `E0438`.
+    // A bound is carried along with the value (ERRATA E1XX-GAP39h): the
+    // boxing site, which knows the value's type, keeps it as the bound's
+    // dispatch object too. A bound that is not a fixed type (one naming a
+    // type parameter, `T extends Comparable<T>`) has no one object to keep,
+    // and a `const` parameter is not a type: those cycles are `E0438`.
     let grower = fns.iter().next().cloned().or_else(|| closure.unbounded.values().next().cloned()).unwrap_or_default();
     let mut refused: Vec<(String, String, juxc_ast::TypeParam)> = Vec::new();
     for c in &classes {
-        for p in generic_params_of(symbols, c).unwrap_or_default() {
-            if p.is_const() || !p.bounds.is_empty() {
-                refused.push((c.clone(), grower.clone(), p));
+        let params = generic_params_of(symbols, c).unwrap_or_default();
+        for p in &params {
+            if !erasable(p, &params, symbols) {
+                refused.push((c.clone(), grower.clone(), p.clone()));
             }
         }
     }
     for k in &fns {
+        let mut params = key_generic_params(symbols, k);
+        if let Some(m) = k.strip_prefix("method:") {
+            if let Some((class, _)) = m.rsplit_once('.') {
+                params.extend(generic_params_of(symbols, class).unwrap_or_default());
+            }
+        }
         for p in key_generic_params(symbols, k) {
-            if p.is_const() || !p.bounds.is_empty() {
+            if !erasable(&p, &params, symbols) {
                 refused.push((k.clone(), grower.clone(), p));
             }
         }
@@ -148,6 +159,39 @@ pub fn plan(symbols: &SymbolTable) -> Erasure {
     });
     fns.retain(|k| !key_generic_params(symbols, k).is_empty());
     Erasure { classes, fns, refused: Vec::new() }
+}
+
+/// Whether a type parameter can be erased: not a `const` one, and every
+/// bound a fixed Jux type (an interface or a class) that names none of the
+/// declaration's type parameters.
+fn erasable(p: &juxc_ast::TypeParam, params: &[juxc_ast::TypeParam], symbols: &SymbolTable) -> bool {
+    if p.is_const() {
+        return false;
+    }
+    p.bounds.iter().all(|b| {
+        let names_param = |t: &juxc_ast::TypeRef| {
+            let mut found = false;
+            fn walk(t: &juxc_ast::TypeRef, params: &[juxc_ast::TypeParam], found: &mut bool) {
+                if t.name.segments.len() == 1 && params.iter().any(|q| q.name.text == t.name.segments[0].text) {
+                    *found = true;
+                }
+                for a in &t.generic_args {
+                    if let Some(x) = a.as_type() {
+                        walk(x, params, found);
+                    }
+                }
+            }
+            walk(t, params, &mut found);
+            found
+        };
+        let bare = b.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        let jux_type = symbols
+            .interfaces
+            .iter()
+            .any(|(k, i)| !i.is_external && k.rsplit('.').next() == Some(bare))
+            || symbols.classes.iter().any(|(k, c)| !c.is_external && k.rsplit('.').next() == Some(bare));
+        jux_type && !names_param(b)
+    })
 }
 
 /// `E0438` for each cycle [`plan`] could not erase.
@@ -170,7 +214,11 @@ pub fn refused_diagnostics(symbols: &SymbolTable) -> Vec<(usize, juxc_diagnostic
             .map(crate::symbol_table::render_type_ref)
             .collect::<Vec<_>>()
             .join(" & ");
-        let what = if param.is_const() { "a `const` parameter".to_string() } else { format!("bounded (`extends {bound}`)") };
+        let what = if param.is_const() {
+            "a `const` parameter".to_string()
+        } else {
+            format!("bounded by `{bound}`, which is not one fixed type")
+        };
         out.push((
             unit,
             juxc_diagnostics::Diagnostic::error(
@@ -178,13 +226,13 @@ pub fn refused_diagnostics(symbols: &SymbolTable) -> Vec<(usize, juxc_diagnostic
                 format!(
                     "`{grower}` calls itself at an ever-larger type argument (polymorphic recursion), which is \
                      compiled by erasing the type arguments of every function and class on that cycle -- but \
-                     `{}` of `{name}` is {what}, and an erased value has none of a bound's members",
+                     `{}` of `{name}` is {what}, so an erased value cannot carry it",
                     param.name.text,
                 ),
             )
             .with_span(param.span)
             .with_help(format!(
-                "drop the bound on `{}`, or keep `{grower}` from calling itself at a larger type argument",
+                "bound `{}` by a fixed interface or class, or keep `{grower}` from calling itself at a larger type argument",
                 param.name.text
             )),
         ));

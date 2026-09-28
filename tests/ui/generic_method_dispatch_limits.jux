@@ -1,25 +1,28 @@
 // Polymorphic recursion -- a function calling itself at an ever-larger type
 // argument -- is compiled by erasing the type arguments of the functions and
-// classes on the cycle (ERRATA E141). An erased value carries its
-// own type but none of a bound's members, so a bounded type parameter on
-// the cycle cannot be erased (E0438).
-interface Named { String name(); }
+// classes on the cycle, and an erased value keeps each of its bounds as that
+// bound's dispatch object (ERRATA E1XX-GAP39g, E1XX-GAP39h). A bound that
+// names the type parameter itself (`T extends Ranked<T>`) is not one fixed
+// type, so there is no one object to keep (E0438).
+interface Ranked<T> { int rank(T other); }
 
-class Tag implements Named {
-    public String name() { return "tag"; }
+class Level implements Ranked<Level> {
+    int n;
+    Level(int n) { this.n = n; }
+    public int rank(Level other) { return n - other.n; }
 }
 
-class Wrap<T extends Named> implements Named {
+class Up<T extends Ranked<T>> implements Ranked<Up<T>> {
     T inner;
-    Wrap(T inner) { this.inner = inner; }
-    public String name() { return "wrap(" + inner.name() + ")"; }
+    Up(T inner) { this.inner = inner; }
+    public int rank(Up<T> other) { return inner.rank(other.inner); }
 }
 
-<T extends Named> String nest(T x, int n) {
-    if (n == 0) { return x.name(); }
-    return nest<Wrap<T>>(new Wrap<T>(x), n - 1);
+<T extends Ranked<T>> int climb(T a, T b, int n) {
+    if (n == 0) { return a.rank(b); }
+    return climb<Up<T>>(new Up<T>(a), new Up<T>(b), n - 1);
 }
 
 public void main() {
-    print(nest<Tag>(new Tag(), 3));
+    print(climb<Level>(new Level(3), new Level(1), 3));
 }

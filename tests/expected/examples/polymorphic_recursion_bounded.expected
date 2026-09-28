@@ -1,0 +1,9 @@
+wrap(wrap(wrap(wrap(wrap(t)))))
+5: t size 1, named t
+4: wrap(t) size 2, named wrap(t)
+3: wrap(wrap(t)) size 3, named wrap(wrap(t))
+2: wrap(wrap(wrap(t))) size 4, named wrap(wrap(wrap(t)))
+1: wrap(wrap(wrap(wrap(t)))) size 5, named wrap(wrap(wrap(wrap(t))))
+0: wrap(wrap(wrap(wrap(wrap(t))))) size 6, named wrap(wrap(wrap(wrap(wrap(t)))))
+woof 4 | pen[woof] 5 | pen[pen[woof]] 6 | pen[pen[pen[woof]]] 7
+p aged 3 | both(p) aged 13 | both(both(p)) aged 23 | both(both(both(p))) aged 33
