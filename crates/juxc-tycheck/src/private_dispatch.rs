@@ -88,18 +88,19 @@ impl PrivateDispatch<'_> {
             }
             PrivateAccess { class: decl.to_string(), member: member.clone(), is_method: false }
         } else if let Some((method, decl)) = method {
-            if method.is_static || !matches!(method.visibility, juxc_ast::Visibility::Private) {
-                return None;
-            }
-            // One stand-in per name: an overloaded private method stays as
-            // it is.
-            let overloaded = self
+            // An overloaded method: the overload this call picked decides
+            // (ERRATA E1XX-GAP39f). Each private overload has a stand-in of
+            // its own, all under the one hidden name, so the stand-ins are an
+            // overload group of their own and the call picks among them as it
+            // picked here.
+            let group = self.symbols.merged_method_overloads(name, member);
+            let picked = self
                 .symbols
-                .classes
-                .get(decl)
-                .and_then(|c| c.method_overloads.get(member.as_str()))
-                .is_some_and(|g| g.len() > 1);
-            if overloaded {
+                .method_selections
+                .get(&f.span)
+                .and_then(|&k| group.get(k).cloned())
+                .unwrap_or_else(|| method.clone());
+            if picked.is_static || !matches!(picked.visibility, juxc_ast::Visibility::Private) {
                 return None;
             }
             PrivateAccess { class: decl.to_string(), member: member.clone(), is_method: true }

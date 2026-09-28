@@ -1,0 +1,13 @@
+root.r1
+root.init
+root.r2
+root.body
+root sees: middle seen=0 tag=unset
+middle.m1
+middle.body seen=42
+middle.extra seen=47
+leaf.init
+leaf.l1
+leaf.body
+middle seen=47 tag=middle-tag
+1 3 6 10

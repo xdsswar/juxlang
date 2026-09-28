@@ -1,9 +1,11 @@
 // Construction order, value copies and identity (JUX-LANG-V1 §7.3.1, §7.7.2,
-// OPERATORS §O.4.1, ERRATA E21).
+// OPERATORS §O.4.1, ERRATA E1XX-GAP39f).
 //
-// - Every field initializer of a hierarchy runs before any constructor body,
-//   base class first, then each class's `init` blocks and body, root first. A
-//   subclass with no constructor of its own still runs its parent's.
+// - Construction is Java's: each class, root first, runs its `super(..)`,
+//   its field initializers and `init` blocks, then its body. A base
+//   constructor that calls an override sees the subclass's fields at their
+//   default values (`""`, `0`). A subclass with no constructor of its own
+//   still runs its parent's.
 // - An enum value with a payload is copied, so reading it again after passing
 //   or assigning it works.
 // - A class without `operator==` compares and hashes by identity.

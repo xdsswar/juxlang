@@ -1,0 +1,86 @@
+// Construction in Java's order (ERRATA E1XX-GAP39f): for `new C(..)`, each
+// class of the hierarchy, root first, runs its `super(..)`, then its own field
+// initializers and `init` blocks in the order they are written, then the rest
+// of its constructor body. `this(..)` runs the initializers once, in the
+// constructor that calls `super`. A base constructor that calls an overridden
+// method sees the subclass's fields at their default values, as in Java; one
+// with no default value (a class) is unset, and reading it throws
+// `IllegalStateException` ("field 'tag' of Middle read before it was
+// initialized"), where Java reads `null`.
+
+import rust.std.Vec;
+
+class Log {
+    static Vec<String> events = new Vec<String>();
+    static int mark(String what) {
+        events.push(what);
+        return events.len() as int;
+    }
+}
+
+class Tag {
+    String text;
+    Tag(String text) { this.text = text; }
+}
+
+class Root {
+    int r1 = Log.mark("root.r1");
+    init { Log.mark("root.init"); }
+    int r2 = Log.mark("root.r2");
+
+    Root() {
+        Log.mark("root.body");
+        Log.mark("root sees: " + describe());
+    }
+
+    String describe() { return "root"; }
+}
+
+class Middle extends Root {
+    int m1 = Log.mark("middle.m1");
+    int seen = 42;
+    Tag tag = new Tag("middle-tag");
+
+    Middle() {
+        super();
+        Log.mark("middle.body seen=" + seen);
+    }
+
+    // `this(..)`: the initializers above still run once.
+    Middle(int extra) {
+        this();
+        seen += extra;
+        Log.mark("middle.extra seen=" + seen);
+    }
+
+    @Override
+    String describe() {
+        String t;
+        try {
+            t = tag.text;
+        } catch (IllegalStateException e) {
+            // Java: a NullPointerException, the field still being null.
+            t = "unset";
+        }
+        return "middle seen=" + seen + " tag=" + t;
+    }
+}
+
+class Leaf extends Middle {
+    init { Log.mark("leaf.init"); }
+    int l1 = Log.mark("leaf.l1");
+
+    Leaf(int extra) {
+        super(extra);
+        Log.mark("leaf.body");
+    }
+}
+
+void main() {
+    Leaf leaf = new Leaf(5);
+    for (String e : Log.events) {
+        print(e);
+    }
+    print(leaf.describe());
+    print(leaf.r1 + " " + leaf.r2 + " " + leaf.m1 + " " + leaf.l1);
+}

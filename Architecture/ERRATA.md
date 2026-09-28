@@ -669,6 +669,8 @@ constructor body have NOT run yet. A class that declares no constructor gets the
 implicit one, which still runs its parent's constructor chain.
 
 **Spec status:** §S.4.4 and §M.1.4 are corrected to match §7.3.1.
+Superseded by E1XX-GAP39f: construction now runs in Java's order, each class's
+initializers after its `super(..)`, by the user's choice of Java parity.
 
 ---
 
@@ -5357,7 +5359,12 @@ closed.
    stand-ins exist only while the program is compiled: `check` and the
    editor never see them. Anywhere the member is not visible it is the
    ordinary private-access refusal, `E0414`. `E0437` is retired; its number
-   is not reused. An overloaded private method is not given a stand-in.
+   is not reused. ~~An overloaded private method is not given a stand-in.~~
+   Each overload is given its own since E1XX-GAP39f.
+
+The order in item 1 ("before any `init` block or constructor body") is
+superseded by E1XX-GAP39f: each class's initializers now run after its
+`super(..)`, in Java's order.
 
 **Tests.** `examples/field_initializers_use_object.jux` and
 `examples/anonymous_private_members.jux`, pinned by hand-written
@@ -5369,6 +5376,75 @@ the shape it held builds.
 §S.4.4 step 3 are amended; `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 has `E0499`,
 retires `E0437` and narrows `E0981`. E138's "Known boundary" is resolved
 here, and E43 is resolved except for observers. GAPS.md gap 39e is closed.
+
+## E1XX-GAP39f. Construction in Java's order; overloaded private methods through a dispatch value
+
+**Conflict.** E21 ran every field initializer of a hierarchy before any
+constructor body, a deliberate divergence from Java: a base constructor
+that called an override saw the subclass's fields already initialized. The
+user chose Java parity instead: a Java program's construction must print
+what Java prints. Separately, E139 gave an overloaded private method no
+stand-in, so reaching one through a dispatch value was still E0900.
+
+**Resolution.**
+
+1. **Java's construction order** supersedes E21. For `new C(..)`, each class
+   of the hierarchy, root first, runs its `super(..)` (explicit, or the
+   implicit no-argument one), then its own instance field initializers and
+   `init` blocks, in the order they are written in the class, then the rest
+   of its constructor body. A `this(..)` chain runs the initializers once, in
+   the constructor that calls `super`. A class with no constructor of its own
+   runs the same steps through the implicit one, also as an ancestor.
+2. **What a base constructor sees.** A method it calls that reads a
+   subclass's field reads the field's default value (`0`, `false`, `""`,
+   `null` for an optional), as Java does (Java's `null` for a `String` is
+   `""`, the String's default value, JUX-LANG-V1 §6.5). A field whose type
+   has no default value (a class, an interface with several methods, a type
+   parameter) holds none yet: the read throws `IllegalStateException`
+   ("field 'tag' of Middle read before it was initialized"), which the
+   program can catch, where Java reads `null`. Such a field gets a nullable
+   slot while compiling (E139's `late_fields`), now also when only the
+   constructor assigns it and an ancestor's construction can reach the
+   object. An unset read of any E139 late field throws the same exception
+   (it was the `!!` failure).
+3. **The lowering.** The object is still built as one struct holding every
+   class's fields; an initializer is evaluated into it only where nothing can
+   tell (`juxc_tycheck::field_init`): it does not use the object, comes
+   before the class's first `init` block, and either has no effect or no
+   ancestor's construction has one. Otherwise it runs against the finished
+   object at its place in the order, with every initializer after it; and
+   all of a class's do when an ancestor's construction reaches the object
+   (calls a method on it, hands it out). Each class's deferred initializers
+   and `init` blocks run, interleaved in source order, after its ancestors'
+   part and before its body (an ancestor's replayed as part of the
+   ancestor's construction). A constructor whose ancestors reach the object
+   runs against the handle too, and stores nothing early. The
+   representation selector (E121) gives every such class its cell.
+4. **Overloaded private methods.** Each private overload gets a stand-in of
+   its own, all under the one hidden name `__jux_priv_<Class>_<method>`, so
+   the stand-ins are an overload group (`__ovK` in the lowering) and a call
+   through a dispatch value picks among them by its arguments as it picked
+   among the methods. A private overload beside a non-private one of the
+   same name is reached the same way; the non-private one is called as it
+   is. A call whose receiver is bound to a temporary before its arguments
+   run kept the overload pick of the last call in its arguments instead of
+   its own (`add(x, name())` called the one-argument `add`); it keeps its
+   own now.
+
+**Tests.** `examples/construction_order_java.jux` (a three-level hierarchy:
+initializers with effects, `init` blocks, `this(..)`, a base constructor
+calling an override that reads a subclass field) is pinned by the output
+Java prints, and is `tools/java-differential/cases/83_construction_order_java`;
+`44_init_order` no longer declares a divergence and matches Java.
+`examples/private_overloads_dispatch.jux` covers the overloads. Four
+examples pinned the old order and now print Java's:
+`construction_and_identity`, `ctor_calls_method`, `static_collection` and
+`field_initializers_use_object`.
+
+**Spec status:** `JUX-LANG-V1.md` §7.3.1, `JUX-SEMANTICS-ADDENDUM.md` §S.1.5
+and §S.4.4 and `JUX-MISSING-DEFS-ADDENDUM.md` §M.1.2 and §M.1.4 are amended
+to Java's order; E21 is superseded, and E139's order and its overloaded
+private method boundary with it. GAPS.md gap 39f is closed.
 
 ---
 When you edit any addendum that touches one of the items above,

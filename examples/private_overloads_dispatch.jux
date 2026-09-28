@@ -1,0 +1,48 @@
+// Overloaded private methods of a class with subclasses, reached through
+// the class's dispatch value (ERRATA E1XX-GAP39f): from an anonymous class
+// written in the class, and from the class's own body through another value
+// of it. Each private overload has a hidden stand-in of its own, and a call
+// picks among them by its arguments as it would among the methods: `int`,
+// `String`, `(int, String)`, `int` against `double`, and a private overload
+// beside a public one of the same name.
+
+interface Listener { void on(int x); }
+
+abstract class Meter {
+    private String log = "";
+    abstract String name();
+    private void add(int n) { log = log + "i" + n + ";"; }
+    private void add(String s) { log = log + "s" + s + ";"; }
+    private void add(int n, String s) { log = log + "p" + n + s + ";"; }
+    private int scale(int n) { return n * 10; }
+    private double scale(double d) { return d / 2.0; }
+    public String show(int n) { return "public" + n; }
+    private String show(String s) { return "private" + s; }
+    String log() { return log; }
+    Listener listener() {
+        return new Listener() {
+            public void on(int x) {
+                add(x);
+                add("v" + x);
+                add(x, name());
+                add(scale(x));
+                add("" + scale(1.0 * x));
+                add(show(x) + show("!"));
+            }
+        };
+    }
+    void copy(Meter other) {
+        other.add(1);
+        other.add("c");
+        other.add(2, "d");
+    }
+}
+class Dial extends Meter { String name() { return "dial"; } }
+void main() {
+    Meter m = new Dial();
+    m.listener().on(3);
+    print(m.log());
+    Meter n = new Dial();
+    m.copy(n);
+    print(n.log());
+}

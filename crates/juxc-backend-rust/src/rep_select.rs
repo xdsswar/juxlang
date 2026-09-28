@@ -139,9 +139,10 @@ impl Index<'_> {
 ///   struct being built (it calls a method on `this`, or hands `this` to a
 ///   lambda), because its stores then go through the handle;
 /// - a class in an `extends` hierarchy whose constructor does more than store
-///   its parameters (ERRATA E21 runs it against the handle);
-/// - a field initializer that uses the object, its own or an ancestor's: it
-///   runs against the handle too (ERRATA E139).
+///   its parameters (it runs against the handle, ERRATA E1XX-GAP39f);
+/// - a field initializer that runs against the handle, its own or an
+///   ancestor's, or an ancestor's construction that reaches the object
+///   (ERRATA E139, E1XX-GAP39f).
 pub(crate) fn compute_cell_classes(
     units: &[juxc_ast::CompilationUnit],
     expr_types: &HashMap<Span, Ty>,
@@ -278,19 +279,19 @@ fn unit_package(unit: &juxc_ast::CompilationUnit) -> String {
 }
 
 /// Whether constructing `fqn` runs a field initializer against the handle
-/// (`juxc_tycheck::field_init::deferred_indices`, its own or an ancestor's).
+/// (`juxc_tycheck::field_init`, its own or an ancestor's), or its ancestors'
+/// construction reaches the object (ERRATA E1XX-GAP39f).
 fn defers_field_inits(fqn: &str, index: &Index<'_>, symbols: &SymbolTable, depth: usize) -> bool {
-    let Some(cd) = index.decls.get(fqn) else { return false };
-    let ancestor = depth < 64 && index.parent.get(fqn).is_some_and(|p| defers_field_inits(p, index, symbols, depth + 1));
-    let is_member = |n: &str| {
-        cd.fields.iter().any(|f| !f.is_static && f.name.text == n)
-            || cd.properties.iter().any(|p| p.name.text == n)
-            || cd.methods.iter().any(|m| m.name.text == n && !m.modifiers.contains(&juxc_ast::FnModifier::Static))
-            || symbols.lookup_field(fqn, n).is_some_and(|(f, _)| !f.is_static)
-            || symbols.lookup_property(fqn, n).is_some_and(|(p, _)| !p.is_static)
-            || symbols.lookup_method(fqn, n).is_some_and(|(m, _)| !m.is_static)
-    };
-    ancestor || !juxc_tycheck::field_init::deferred_indices(&cd.fields, false, &is_member).is_empty()
+    if depth > 64 {
+        return false;
+    }
+    let decl_of = |f: &str| index.decls.get(f).copied();
+    let parent_of = |f: &str| index.parent.get(f).cloned();
+    // An ancestor's initializers run through this object's handle too.
+    let ancestor = index.parent.get(fqn).is_some_and(|p| defers_field_inits(p, index, symbols, depth + 1));
+    ancestor
+        || juxc_tycheck::field_init::ancestor_facts_of(fqn, &decl_of, &parent_of, symbols, 0).observes
+        || !juxc_tycheck::field_init::deferred_of(fqn, &decl_of, &parent_of, symbols).is_empty()
 }
 
 struct Walker<'a, 'b> {

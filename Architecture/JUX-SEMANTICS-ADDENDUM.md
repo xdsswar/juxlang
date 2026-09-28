@@ -86,9 +86,8 @@ For variadic parameters, all variadic arguments are evaluated in source order be
 Inside a class (order per `ERRATA.md` E2 — matches Java):
 
 1. The constructor's explicit or implicit `super(...)` / `this(...)` call resolves first (see §S.4) — the parent's construction completes before any code of this class runs.
-2. Field initializer expressions (`private int x = expr;`) are evaluated **in textual order**.
-3. Then `init { }` blocks run, in textual order — **before** the constructor body.
-4. Then the constructor body runs.
+2. Field initializer expressions (`private int x = expr;`) and `init { }` blocks run **in textual order**, interleaved as written (`ERRATA.md` E1XX-GAP39f).
+3. Then the constructor body runs.
 
 This deterministic order eliminates the Java footgun where field initializer order across multiple constructors becomes confusing. Init blocks run before the body so the body can rely on every field — initializer- or init-block-assigned — being in its final pre-body state; an init block may reference inherited fields because the parent has already constructed.
 
@@ -334,8 +333,8 @@ For `new C(args)`:
 2. **Resolve super-call.** The constructor's first statement is either `this(...)` or `super(...)` (explicit) or implicit `super()` (per JUX-LANG-V1 §A.2.4 / `JUX-GRAMMAR-ADDENDUM.md`).
    - For `super(...)`: recursively initialize the superclass portion. The vtable pointer is set to point at C's vtable (not the superclass's) — so virtual calls to overridden methods from inside the superclass constructor dispatch to **C**'s overrides. Java's rule.
    - For `this(...)`: initialize via the named alternative constructor; that constructor's chain runs to completion, then we return to step 5.
-3. **Field initializers.** Field initializer expressions of class C are evaluated **in textual order** and assigned to their fields. Per JUX-LANG-V1 §7.3.1 and `ERRATA.md` E21, the initializers of the WHOLE hierarchy run before any `init` block or constructor body, base class first: a base constructor that calls an override sees the subclass fields already initialized. An initializer may use the object: `this`, its methods, the fields initialized before it (`ERRATA.md` E139). A field read before its own initializer has run holds its type's default value (§6.5 of JUX-LANG-V1); reading one directly whose type has none is `E0499`.
-4. **Init blocks.** All `init { }` blocks of class C are run, in textual order (per `ERRATA.md` E2 they run **before** the constructor body, after the parent's construction completes — Java's order).
+3. **Field initializers and init blocks.** Class C's field initializer expressions and `init { }` blocks run **in textual order**, interleaved as written, after the superclass portion (step 2) has completed — Java's order (`ERRATA.md` E1XX-GAP39f, superseding E21): a base constructor that calls an override sees the subclass's fields at their default values. An initializer may use the object: `this`, its methods, the fields initialized before it (`ERRATA.md` E139). A field read before its own initializer has run holds its type's default value (§6.5 of JUX-LANG-V1); reading one directly whose type has none is `E0499`, and reading one indirectly (through a method) throws `IllegalStateException`.
+4. **Init blocks** run as part of step 3, before the constructor body (`ERRATA.md` E2).
 5. **Constructor body.** The body of `new(...)` runs.
 6. **Done.** The reference is returned to the caller.
 

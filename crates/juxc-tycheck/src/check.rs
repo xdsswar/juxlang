@@ -852,16 +852,19 @@ impl<'a> Checker<'a> {
     }
 
     /// `E0499`: an instance field initializer reading a field that holds no
-    /// value yet (ERRATA E139). The initializers run in the order they
-    /// are written, before any constructor body (JUX-LANG-V1 §7.3.1), so a
-    /// field declared later, or one only a constructor assigns, is unset when
-    /// the initializer reads it. A type with a default value (§6.5: a number,
+    /// value yet (ERRATA E139, E1XX-GAP39f). A class's initializers run in
+    /// the order they are written, before its constructor body (JUX-LANG-V1
+    /// §7.3.1), so a field of its own declared later, or one only its
+    /// constructor assigns, is unset when the initializer reads it; an
+    /// inherited one is set (the parent's construction has completed). A type with a default value (§6.5: a number,
     /// a string, an optional, an array ...) is read at that value, as Java
     /// reads it; a class, an interface, a function type or a type parameter
     /// has none. What a lambda or an anonymous class in the initializer reads
     /// is read later, when it is called.
     fn check_field_initializer_reads(&mut self, class: &juxc_ast::ClassDecl) {
-        let Some(class_fqn) = self.env.current_class.clone() else { return };
+        if self.env.current_class.is_none() {
+            return;
+        }
         let instance: Vec<&juxc_ast::FieldDecl> = class.fields.iter().filter(|f| !f.is_static).collect();
         for (i, field) in instance.iter().enumerate() {
             let Some(init) = &field.default else { continue };
@@ -888,15 +891,20 @@ impl<'a> Checker<'a> {
                 if later.iter().any(|l| l.file == span.file && l.start <= span.start && span.end <= l.end) {
                     continue;
                 }
-                // Its own field: unset when it comes later or has no
-                // initializer. An inherited one: unset when only a
-                // constructor assigns it.
+                // Its own field: unset when it comes later, or has no
+                // initializer and no `init` block before this one assigns it.
+                // An inherited one is set: the parent's constructor has run
+                // (ERRATA E1XX-GAP39f).
                 let (unset, tref) = match instance.iter().position(|g| g.name.text == name) {
-                    Some(j) => (j >= i || instance[j].default.is_none(), instance[j].ty.clone()),
-                    None => match self.symbols.lookup_field(&class_fqn, &name) {
-                        Some((f, _)) if !f.is_static => (f.default.is_none(), Some(f.ty.clone())),
-                        _ => continue,
-                    },
+                    Some(j) => {
+                        let assigned_before = class.init_blocks.iter().any(|b| {
+                            b.span.file == field.span.file
+                                && b.span.start < field.span.start
+                                && block_assigns_field(b, &name)
+                        });
+                        (j >= i || (instance[j].default.is_none() && !assigned_before), instance[j].ty.clone())
+                    }
+                    None => continue,
                 };
                 let Some(tref) = tref else { continue };
                 if !unset || tref.nullable {
@@ -909,7 +917,7 @@ impl<'a> Checker<'a> {
                 let why = if instance.iter().position(|g| g.name.text == name).is_some_and(|j| j >= i) {
                     "its initializer runs later"
                 } else {
-                    "only a constructor assigns it (constructors run after every field initializer)"
+                    "only a constructor assigns it (the constructor body runs after the field initializers)"
                 };
                 self.diagnostics.push(
                     Diagnostic::error(
@@ -16607,6 +16615,21 @@ fn match_null_test(cond: &Expr, want_eq: bool) -> Option<&str> {
 }
 
 /// Levenshtein distance between two short ASCII names.
+/// Whether `block` assigns the field `name` (`name = ..` or `this.name = ..`).
+fn block_assigns_field(block: &juxc_ast::Block, name: &str) -> bool {
+    let mut found = false;
+    juxc_ast::visit::for_each_node(block, &mut |n| {
+        if let juxc_ast::visit::Node::Stmt(Stmt::Assign(a)) = n {
+            found |= match &a.target {
+                Expr::Path(qn) => qn.segments.len() == 1 && qn.segments[0].text == name,
+                Expr::Field(f) => matches!(f.object.as_ref(), Expr::This(_)) && f.field.text == name,
+                _ => false,
+            };
+        }
+    });
+    found
+}
+
 fn edit_distance(a: &str, b: &str) -> usize {
     let b: Vec<char> = b.chars().collect();
     let mut prev: Vec<usize> = (0..=b.len()).collect();

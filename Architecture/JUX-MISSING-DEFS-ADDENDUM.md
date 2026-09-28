@@ -72,7 +72,7 @@ public class Connection {
 
 ### M.1.2. Semantics
 
-`init` blocks fit into the construction sequence (per `JUX-SEMANTICS-ADDENDUM.md` §S.4.4) as step 4 — after the superclass construction and field initializers, **before the constructor body** (step 5). This is Java's instance-initializer order (ERRATA E2): an init block observes field-initializer values, never the constructor body's writes, and may not read constructor parameters (it is shared by every constructor).
+`init` blocks fit into the construction sequence (per `JUX-SEMANTICS-ADDENDUM.md` §S.4.4) after the superclass construction, together with the class's field initializers in the order they are written, **before the constructor body**. This is Java's instance-initializer order (ERRATA E2, E1XX-GAP39f): an init block observes the values of the field initializers written above it (a field written below it still holds its default), never the constructor body's writes, and may not read constructor parameters (it is shared by every constructor).
 
 When a class has multiple constructors and multiple `init` blocks, every constructor runs every `init` block, in the textual order they appear in the class body. (Kotlin's rule.) This makes `init` the right place to put validation or one-time setup that must happen on every construction path:
 
@@ -111,13 +111,12 @@ This prevents partially-constructed objects from being observed by other code.
 
 `init` blocks of a superclass run before any `init` blocks of the subclass — they are part of the superclass's construction, which completes before the subclass's body or `init` blocks run. The full order:
 
-1. Field initializers of the whole hierarchy run, superclass first (JUX-LANG-V1 §7.3.1).
-2. Superclass `init` blocks run.
-3. Superclass constructor body runs.
-4. Subclass `init` blocks run.
-5. Subclass constructor body runs.
+1. Superclass field initializers and `init` blocks run, in the order written.
+2. Superclass constructor body runs.
+3. Subclass field initializers and `init` blocks run, in the order written.
+4. Subclass constructor body runs.
 
-`init` blocks run before their own class's constructor body, as §M.1.2 says (`ERRATA.md` E21).
+This is Java's order (JUX-LANG-V1 §7.3.1, `ERRATA.md` E1XX-GAP39f, superseding E21).
 
 This matches the rule for `drop` (`JUX-SEMANTICS-ADDENDUM.md` §S.5.2), but inverted.
 
