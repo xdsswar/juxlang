@@ -1,28 +1,31 @@
-// Polymorphic recursion -- a function calling itself at an ever-larger type
-// argument -- is compiled by erasing the type arguments of the functions and
-// classes on the cycle, and an erased value keeps each of its bounds as that
-// bound's dispatch object (ERRATA E1XX-GAP39g, E142). A bound that
-// names the type parameter itself (`T extends Ranked<T>`) is not one fixed
-// type, so there is no one object to keep (E0438).
-interface Ranked<T> { int rank(T other); }
+// Polymorphic recursion is compiled by erasing the type arguments of the
+// functions and classes on the cycle; an erased value keeps each bound as a
+// dispatch object, through an adapter when the bound names the parameter
+// (`T extends Ranked<T>`), converting the erased value at each position
+// (ERRATA E1XX-GAP39g .. E1XX-GAP39i). A position holding a Rust collection
+// of the parameter (`Rel<Vec<T>>`) has no conversion that keeps the list
+// shared, so that bound is refused (E0438).
+import rust.std.Vec;
 
-class Level implements Ranked<Level> {
-    int n;
-    Level(int n) { this.n = n; }
-    public int rank(Level other) { return n - other.n; }
+interface Rel<L> { int weigh(L list); }
+
+class Item implements Rel<Vec<Item>> {
+    int w;
+    Item(int w) { this.w = w; }
+    public int weigh(Vec<Item> list) { return w + (int) list.len(); }
 }
 
-class Up<T extends Ranked<T>> implements Ranked<Up<T>> {
+class Crate<T extends Rel<Vec<T>>> implements Rel<Vec<Crate<T>>> {
     T inner;
-    Up(T inner) { this.inner = inner; }
-    public int rank(Up<T> other) { return inner.rank(other.inner); }
+    Crate(T inner) { this.inner = inner; }
+    public int weigh(Vec<Crate<T>> list) { return 1 + (int) list.len(); }
 }
 
-<T extends Ranked<T>> int climb(T a, T b, int n) {
-    if (n == 0) { return a.rank(b); }
-    return climb<Up<T>>(new Up<T>(a), new Up<T>(b), n - 1);
+<T extends Rel<Vec<T>>> int pack(T x, int n) {
+    if (n == 0) { return x.weigh(new Vec<T>()); }
+    return pack<Crate<T>>(new Crate<T>(x), n - 1);
 }
 
 public void main() {
-    print(climb<Level>(new Level(3), new Level(1), 3));
+    print(pack<Item>(new Item(4), 3));
 }

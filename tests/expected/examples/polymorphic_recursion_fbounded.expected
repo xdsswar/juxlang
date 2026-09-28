@@ -1,0 +1,4 @@
+3: 8 cmp -5 again 5 | 2: <8> cmp -5 again 5 | 1: <<8>> cmp -5 again 5 | 0: <<<8>>> cmp -5 again 5
+w(w(w(at0:a/b)))
+poly9->poly10 true | [poly9]->[poly10] true | [[poly9]]->[[poly10]] true | [[[poly9]]]->[[[poly10]]] true
+(((a+b@a)))

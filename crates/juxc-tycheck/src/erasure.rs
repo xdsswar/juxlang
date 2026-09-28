@@ -88,9 +88,19 @@ pub fn plan(symbols: &SymbolTable) -> Erasure {
         return Erasure::default();
     }
     // The class hierarchy around each erased class: generic ancestors and
-    // descendants (a `Nested<T>` seen as its `Nest<T>` is one erased type).
+    // descendants (a `Nested<T>` seen as its `Nest<T>` is one erased type),
+    // and the classes an erased parameter's bound names at its parameters
+    // (`Rel<Pair<T, T>>`: a `Pair<T, T>` is one erased type too). An
+    // interface that is a bound keeps its own instantiations: the erased
+    // value reaches it through an adapter (ERRATA E1XX-GAP39i).
     loop {
+        let bound_heads = bound_heads(symbols, &classes, &fns);
         let mut grew = false;
+        for c in bound_arg_classes(symbols, &classes, &fns) {
+            if classes.insert(c) {
+                grew = true;
+            }
+        }
         let current: Vec<String> = classes.iter().cloned().collect();
         for c in &current {
             if let Some(sig) = symbols.classes.get(c) {
@@ -103,6 +113,9 @@ pub fn plan(symbols: &SymbolTable) -> Erasure {
                         .cloned()
                 }));
                 for s in supers {
+                    if bound_heads.contains(&s) {
+                        continue;
+                    }
                     if generic_params_of(symbols, &s).is_some_and(|p| !p.is_empty()) && classes.insert(s) {
                         grew = true;
                     }
@@ -161,36 +174,131 @@ pub fn plan(symbols: &SymbolTable) -> Erasure {
     Erasure { classes, fns, refused: Vec::new() }
 }
 
-/// Whether a type parameter can be erased: not a `const` one, and every
-/// bound a fixed Jux type (an interface or a class) that names none of the
-/// declaration's type parameters.
-fn erasable(p: &juxc_ast::TypeParam, params: &[juxc_ast::TypeParam], symbols: &SymbolTable) -> bool {
-    if p.is_const() {
-        return false;
+/// Whether `t` names one of `params`, anywhere in it.
+fn names_param(t: &juxc_ast::TypeRef, params: &[juxc_ast::TypeParam]) -> bool {
+    (t.name.segments.len() == 1 && params.iter().any(|q| q.name.text == t.name.segments[0].text))
+        || t.generic_args.iter().filter_map(|a| a.as_type()).any(|x| names_param(x, params))
+}
+
+fn user_interface(symbols: &SymbolTable, bare: &str) -> Option<String> {
+    symbols
+        .interfaces
+        .iter()
+        .find(|(k, i)| !i.is_external && k.rsplit('.').next() == Some(bare))
+        .map(|(k, _)| k.clone())
+}
+
+fn user_class(symbols: &SymbolTable, bare: &str) -> Option<String> {
+    symbols
+        .classes
+        .iter()
+        .find(|(k, c)| !c.is_external && k.rsplit('.').next() == Some(bare))
+        .map(|(k, _)| k.clone())
+        .or_else(|| symbols.records.keys().find(|k| k.rsplit('.').next() == Some(bare)).cloned())
+}
+
+/// Every type parameter of the family, with the declaration's parameters.
+fn family_params(
+    symbols: &SymbolTable,
+    classes: &BTreeSet<String>,
+    fns: &BTreeSet<String>,
+) -> Vec<(juxc_ast::TypeParam, Vec<juxc_ast::TypeParam>)> {
+    let mut out = Vec::new();
+    for c in classes {
+        let ps = generic_params_of(symbols, c).unwrap_or_default();
+        for p in &ps {
+            out.push((p.clone(), ps.clone()));
+        }
     }
-    p.bounds.iter().all(|b| {
-        let names_param = |t: &juxc_ast::TypeRef| {
-            let mut found = false;
-            fn walk(t: &juxc_ast::TypeRef, params: &[juxc_ast::TypeParam], found: &mut bool) {
-                if t.name.segments.len() == 1 && params.iter().any(|q| q.name.text == t.name.segments[0].text) {
-                    *found = true;
-                }
-                for a in &t.generic_args {
-                    if let Some(x) = a.as_type() {
-                        walk(x, params, found);
-                    }
+    for k in fns {
+        let own = key_generic_params(symbols, k);
+        let mut all = own.clone();
+        if let Some((class, _)) = k.strip_prefix("method:").and_then(|m| m.rsplit_once('.')) {
+            all.extend(generic_params_of(symbols, class).unwrap_or_default());
+        }
+        for p in own {
+            out.push((p, all.clone()));
+        }
+    }
+    out
+}
+
+/// The interfaces the family's parameters are bounded by at their own
+/// parameters (`T extends Ranked<T>`).
+fn bound_heads(symbols: &SymbolTable, classes: &BTreeSet<String>, fns: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (p, params) in family_params(symbols, classes, fns) {
+        for b in &p.bounds {
+            if names_param(b, &params) {
+                if let Some(i) = b
+                    .name
+                    .segments
+                    .last()
+                    .and_then(|s| user_interface(symbols, &s.text).or_else(|| user_class(symbols, &s.text)))
+                {
+                    out.insert(i);
                 }
             }
-            walk(t, params, &mut found);
-            found
-        };
+        }
+    }
+    out
+}
+
+/// The generic classes a bound of the family names at the family's
+/// parameters (`Pair` in `T extends Rel<Pair<T, T>>`).
+fn bound_arg_classes(symbols: &SymbolTable, classes: &BTreeSet<String>, fns: &BTreeSet<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for (p, params) in family_params(symbols, classes, fns) {
+        for b in &p.bounds {
+            for a in b.generic_args.iter().filter_map(|a| a.as_type()) {
+                collect_classes_naming(a, &params, symbols, &mut out);
+            }
+        }
+    }
+    out
+}
+
+fn collect_classes_naming(
+    t: &juxc_ast::TypeRef,
+    params: &[juxc_ast::TypeParam],
+    symbols: &SymbolTable,
+    out: &mut Vec<String>,
+) {
+    if !t.generic_args.is_empty() && names_param(t, params) {
+        if let Some(c) = t.name.segments.last().and_then(|s| user_class(symbols, &s.text)) {
+            out.push(c);
+        }
+    }
+    for a in t.generic_args.iter().filter_map(|a| a.as_type()) {
+        collect_classes_naming(a, params, symbols, out);
+    }
+}
+
+/// Whether a type parameter can be erased. A `const` parameter is kept as
+/// it is: it never grows, so each value it takes is one instantiation. A
+/// bound is kept as a dispatch object when it is a fixed Jux type, and
+/// through an adapter when it is a Jux interface at the declaration's
+/// parameters (`T extends Ranked<T>`), each argument a parameter, a type
+/// with none, or a Jux class or record (erased with the family); a bound
+/// that is another parameter is the identity (ERRATA E1XX-GAP39i).
+fn erasable(p: &juxc_ast::TypeParam, params: &[juxc_ast::TypeParam], symbols: &SymbolTable) -> bool {
+    if p.is_const() {
+        return true;
+    }
+    p.bounds.iter().all(|b| {
         let bare = b.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
-        let jux_type = symbols
-            .interfaces
-            .iter()
-            .any(|(k, i)| !i.is_external && k.rsplit('.').next() == Some(bare))
-            || symbols.classes.iter().any(|(k, c)| !c.is_external && k.rsplit('.').next() == Some(bare));
-        jux_type && !names_param(b)
+        if b.generic_args.is_empty() && b.name.segments.len() == 1 && params.iter().any(|q| q.name.text == bare) {
+            return true;
+        }
+        if !names_param(b, params) {
+            return user_interface(symbols, bare).is_some() || user_class(symbols, bare).is_some();
+        }
+        (user_interface(symbols, bare).is_some() || user_class(symbols, bare).is_some())
+            && b.generic_args.iter().filter_map(|a| a.as_type()).all(|a| {
+                !names_param(a, params)
+                    || (a.generic_args.is_empty() && a.name.segments.len() == 1)
+                    || a.name.segments.last().is_some_and(|s| user_class(symbols, &s.text).is_some())
+            })
     })
 }
 
@@ -214,11 +322,10 @@ pub fn refused_diagnostics(symbols: &SymbolTable) -> Vec<(usize, juxc_diagnostic
             .map(crate::symbol_table::render_type_ref)
             .collect::<Vec<_>>()
             .join(" & ");
-        let what = if param.is_const() {
-            "a `const` parameter".to_string()
-        } else {
-            format!("bounded by `{bound}`, which is not one fixed type")
-        };
+        let what = format!(
+            "bounded by `{bound}`, which holds the parameter inside a type that is not a Jux class (a Rust \
+             collection or foreign type), where an erased value has no conversion that keeps it shared"
+        );
         out.push((
             unit,
             juxc_diagnostics::Diagnostic::error(
@@ -226,13 +333,13 @@ pub fn refused_diagnostics(symbols: &SymbolTable) -> Vec<(usize, juxc_diagnostic
                 format!(
                     "`{grower}` calls itself at an ever-larger type argument (polymorphic recursion), which is \
                      compiled by erasing the type arguments of every function and class on that cycle -- but \
-                     `{}` of `{name}` is {what}, so an erased value cannot carry it",
+                     `{}` of `{name}` is {what}",
                     param.name.text,
                 ),
             )
             .with_span(param.span)
             .with_help(format!(
-                "bound `{}` by a fixed interface or class, or keep `{grower}` from calling itself at a larger type argument",
+                "bound `{}` by the parameter itself or a Jux class holding it, or keep `{grower}` from calling itself at a larger type argument",
                 param.name.text
             )),
         ));
