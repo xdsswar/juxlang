@@ -29,7 +29,7 @@ pub const TUPLE_SENTINEL: &str = "__tuple";
 pub const TASK_SENTINEL: &str = "__jux_task";
 
 /// The prefix of a class the compiler lifted out of an anonymous class
-/// (`new Shape() { ... }`, ERRATA E1XX-GAP39c): `__JuxAnon_Shape_2_0` is the
+/// (`new Shape() { ... }`, ERRATA E137): `__JuxAnon_Shape_2_0` is the
 /// first anonymous `Shape` of source 2. Lifting makes it a class like any
 /// other, so it takes part in dynamic dispatch by its name.
 pub const ANON_CLASS_PREFIX: &str = "__JuxAnon_";

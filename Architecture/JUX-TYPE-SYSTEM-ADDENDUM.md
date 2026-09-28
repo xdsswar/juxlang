@@ -416,7 +416,7 @@ Rules:
    U> extends Tree<T>`), found at every argument the program builds it with.
    That set is finite in every program but one that builds the subtype at
    ever-larger arguments by polymorphic recursion, which is **`E0438`**
-   (`ERRATA.md` E136, E1XX-GAP39c). An override may bound its type parameter
+   (`ERRATA.md` E136, E137). An override may bound its type parameter
    by the type its supertype fixes (`<V extends Pet>` for `<V extends K>` in a
    `Store<Pet>`).
 
@@ -499,7 +499,7 @@ Rust allows it, with three rewrites where it does not:
   `V: Into<Pet>` (with a `__jux_via_` twin generic over `K` for the
   dispatch); an anonymous class is lifted to a named class before lowering;
   a subtype's unfixed parameter gets one dispatch branch per instantiation of
-  the program's closed set (`ERRATA.md` E1XX-GAP39c).
+  the program's closed set (`ERRATA.md` E137).
 - **PECS wildcards** are use-site only. In parameter position a `? extends B`
   producer and a `? super B` consumer lift to a fresh generic, except a wildcard
   whose bound names an in-scope type param substitutes that param directly

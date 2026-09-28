@@ -5115,7 +5115,7 @@ expectations; `tests/ui/generic_method_dispatch_limits` for the two E0438
 shapes (it replaces `tests/ui/generic_method_on_generic_base`, whose program
 now builds).
 
-**Known boundary.** Resolved by E1XX-GAP39c: ~~None of the three items remains open. The two E0438
+**Known boundary.** Resolved by E137: ~~None of the three items remains open. The two E0438
 shapes above are refusals with their reason, not gaps: a value that does not
 carry its own type arguments cannot be asked for them. Found on the way and
 not closed here: a class that fixes an interface's parameter to a class and
@@ -5132,7 +5132,7 @@ E0435 and E0438 rows say what they now mean. E135's "Still a limitation" and
 "Known boundary" paragraphs are resolved here. GAPS.md gap 39's open items are
 closed.
 
-## E1XX-GAP39c. What E136 still refused: an override bounded by a fixed type, an anonymous subtype, a subtype with a parameter its supertype does not fix
+## E137. What E136 still refused: an override bounded by a fixed type, an anonymous subtype, a subtype with a parameter its supertype does not fix
 
 **Conflict.** E136 left three shapes refused or broken, and the rule is that
 none may stay that way:

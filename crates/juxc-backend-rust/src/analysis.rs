@@ -5137,7 +5137,7 @@ impl crate::RustEmitter {
             return None;
         }
         // A method parameter whose bound is lowered to `Into<C>` flowing into
-        // a slot typed by C (ERRATA E1XX-GAP39c).
+        // a slot typed by C (ERRATA E137).
         if self
             .into_params
             .iter()
@@ -5638,7 +5638,7 @@ impl crate::RustEmitter {
             IfaceCoercion::ParamInto { param } => {
                 // In a `__jux_via_` twin the parameter converts into the
                 // supertype's parameter, which is the slot's type there
-                // (ERRATA E1XX-GAP39c).
+                // (ERRATA E137).
                 if let Some((_, k)) = self.into_via.iter().find(|(n, _)| *n == param).cloned() {
                     self.w.push_str(&format!("crate::__jux_seen_as::<{k}, _>(std::convert::Into::<{k}>::into(("));
                     self.emit_expr(expr);

@@ -1,5 +1,5 @@
 // A method with type parameters of its own, called on a supertype value,
-// finds the concrete type behind the value (ERRATA E136, E1XX-GAP39c). A
+// finds the concrete type behind the value (ERRATA E136, E137). A
 // subtype with a type parameter the supertype does not fix is found at every
 // argument the program builds it with -- a set that is finite in every
 // program but one that builds ever-larger types by calling itself (E0438).

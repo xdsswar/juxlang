@@ -110,7 +110,7 @@ impl RustEmitter {
             // A parameter the supertype does not fix (`U` in `Weird<T, U>
             // extends Tree<T>`) is filled with each argument the program
             // builds the subtype with (`juxc_tycheck::instantiations`,
-            // ERRATA E1XX-GAP39c): one branch per distinct one.
+            // ERRATA E137): one branch per distinct one.
             let fills: Vec<Vec<Option<String>>> = if inverse.iter().any(|x| x.is_none()) {
                 let insts = self.symbols.instantiations.classes.get(sub).cloned().unwrap_or_default();
                 let mut out: Vec<Vec<Option<String>>> = Vec::new();
@@ -210,7 +210,7 @@ impl RustEmitter {
                 // method whose type parameter the subtype bounds by the type
                 // it fixes (`<V extends Pet>` for `<V extends K>`) is reached
                 // through its `__jux_via_` twin, which states the bound as
-                // `Into<K>` in the trait's terms (ERRATA E1XX-GAP39c).
+                // `Into<K>` in the trait's terms (ERRATA E137).
                 let via = self.via_bound_names(base_fqn, sub, method);
                 let name = if via.is_empty() {
                     to_rust_ident(method)
@@ -285,7 +285,7 @@ impl RustEmitter {
     /// with the bound at every position
     /// [`juxc_tycheck::generic_dispatch::overridden_into_positions`] names
     /// rewritten to `Into<bound>`, and the original bound of each rewritten
-    /// parameter (ERRATA E1XX-GAP39c). A supertype's `<V extends K>` is
+    /// parameter (ERRATA E137). A supertype's `<V extends K>` is
     /// `V: Into<K>` on its trait; the override's `<V extends Pet>` becomes
     /// `V: Into<Pet>`, the trait's bound at `K = Pet`, so the impl asks
     /// exactly what the trait does. Inside the body a `V` is converted to its
@@ -342,7 +342,7 @@ impl RustEmitter {
 
     /// The own type parameters of a class `Kind` trait member, as the trait,
     /// its impls and the handle's forwarding all state them (ERRATA
-    /// E1XX-GAP39c): a bound naming a parameter of the declaring class
+    /// E137): a bound naming a parameter of the declaring class
     /// (`<V extends K>` in `class Shelf<K>`) is `V: Into<K>`, as on an
     /// interface; a subclass's impl reads it through its `K` (`Into<Pet>`),
     /// which is what the subclass's own override states.
@@ -374,7 +374,7 @@ impl RustEmitter {
 
     /// `impl From<C> for Rc<dyn I>` for every concrete non-generic class that
     /// implements the non-generic interface `iface_bare`: the conversion a
-    /// `V: Into<I>` bound asks of a `V` (ERRATA E1XX-GAP39c).
+    /// `V: Into<I>` bound asks of a `V` (ERRATA E137).
     pub(crate) fn emit_iface_from_impls(&mut self, iface_bare: &str, iface_generic: bool) {
         if iface_generic {
             return;
@@ -437,7 +437,7 @@ impl RustEmitter {
     /// `Into<__JuxK0>`, and converting a `V` to `C` by way of it (the two are
     /// the same type whenever the twin is called). The dispatch through a
     /// supertype that fixes `K` calls this, since there `V: Into<Pet>` cannot
-    /// be shown, only `V: Into<K>` (ERRATA E1XX-GAP39c).
+    /// be shown, only `V: Into<K>` (ERRATA E137).
     pub(crate) fn via_twin(method: &juxc_ast::FnDecl, originals: &[(String, juxc_ast::TypeRef)]) -> (juxc_ast::FnDecl, Vec<(String, String)>) {
         let mut m = method.clone();
         m.name.text = format!("__jux_via_{}", method.name.text);
@@ -481,7 +481,7 @@ impl RustEmitter {
     /// The spans, in `body`, of every expression that is the receiver of a
     /// member access (`v.name()`, `v.legs`) and has the type of one of the
     /// `into` parameters, with the bound it converts to: that is the type
-    /// that carries the member (ERRATA E1XX-GAP39c).
+    /// that carries the member (ERRATA E137).
     pub(crate) fn collect_into_receiver_spans(
         &self,
         body: &juxc_ast::Block,

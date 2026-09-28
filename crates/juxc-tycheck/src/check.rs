@@ -400,7 +400,7 @@ pub(crate) struct Checker<'a> {
     /// Record-destructuring reads resolved to component names, keyed by the
     /// field identifier's span (see `juxc_ast::record_destructure_temp`).
     pub(crate) component_names: HashMap<Span, String>,
-    /// Anonymous classes to lift to named ones (ERRATA E1XX-GAP39c).
+    /// Anonymous classes to lift to named ones (ERRATA E137).
     pub(crate) anon_lifts: Vec<crate::anon_lift::AnonLift>,
     /// The instantiation facts `crate::instantiations` closes over.
     pub(crate) inst_facts: Vec<crate::instantiations::Fact>,
@@ -7570,7 +7570,7 @@ impl<'a> Checker<'a> {
             Expr::NewObject(n) => {
                 self.check_new_object(n);
                 // Which instantiation this builds, for dispatch through a
-                // supertype that does not fix all of it (ERRATA E1XX-GAP39c).
+                // supertype that does not fix all of it (ERRATA E137).
                 if let Ty::User { name, generic_args } = infer_expr(expr, &self.env, self.symbols) {
                     if !generic_args.is_empty() && self.symbols.classes.contains_key(&name) {
                         self.record_inst(crate::instantiations::FactKind::New(name), generic_args);
@@ -9013,7 +9013,7 @@ impl<'a> Checker<'a> {
     }
 
     /// Record an instantiation fact, in the context being checked
-    /// (`crate::instantiations`, ERRATA E1XX-GAP39c).
+    /// (`crate::instantiations`, ERRATA E137).
     pub(crate) fn record_inst(&mut self, kind: crate::instantiations::FactKind, args: Vec<Ty>) {
         if args.is_empty() {
             return;
@@ -13657,7 +13657,7 @@ impl<'a> Checker<'a> {
             // type implemented here, dispatches by naming the concrete type
             // behind the value (ERRATA E136), and an anonymous class
             // has no name to be found by.
-            // It is lifted to a named class instead (ERRATA E1XX-GAP39c),
+            // It is lifted to a named class instead (ERRATA E137),
             // when it has to be found by name: it extends a class (it
             // implements that class's dispatch trait like any subclass), or
             // its interface has such a method.
@@ -19053,7 +19053,7 @@ public void main() { }");
     /// A generic virtual method on a polymorphic base dispatches on the
     /// object's type (ERRATA E136), and a subclass with a type parameter the
     /// base does not fix is dispatched at each instantiation the program
-    /// builds (E1XX-GAP39c): both accepted.
+    /// builds (E137): both accepted.
     #[test]
     fn generic_virtual_method_on_base_is_accepted() {
         let d = run(r#"

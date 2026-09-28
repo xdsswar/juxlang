@@ -262,7 +262,7 @@ pub fn args_as_param_types(
 /// parameter lowers to `V: Into<K>` on the supertype's trait, so the class's
 /// override has to lower its own bound at that position the same way
 /// (`<V extends Pet>` to `V: Into<Pet>`), or its impl would ask more than the
-/// trait (ERRATA E1XX-GAP39c).
+/// trait (ERRATA E137).
 pub fn overridden_into_positions(symbols: &SymbolTable, class_fqn: &str, method: &str) -> Vec<usize> {
     let mut out: Vec<usize> = Vec::new();
     let owners = symbols
@@ -294,7 +294,7 @@ pub fn overridden_into_positions(symbols: &SymbolTable, class_fqn: &str, method:
 }
 
 /// **E0438**, only where dispatch through a supertype cannot be closed
-/// (ERRATA E1XX-GAP39c). A subtype with a type parameter its supertype does
+/// (ERRATA E137). A subtype with a type parameter its supertype does
 /// not fix (`class Weird<T, U> extends Tree<T>`) is dispatched once per
 /// instantiation the program builds (`crate::instantiations`); that set is
 /// finite in every program but one that builds ever-larger types by

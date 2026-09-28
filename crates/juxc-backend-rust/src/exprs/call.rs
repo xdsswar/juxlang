@@ -3772,7 +3772,7 @@ impl RustEmitter {
         // (`<A, B> Tree<A> wrap(A a, B b)` called `wrap("x", 7)`): the checker
         // binds `B = int`, and Rust, left to itself, would pick `i32` for the
         // literal, building a different type than the program asked for
-        // (ERRATA E1XX-GAP39c: the dispatch looks for a `Weird<T, int>`).
+        // (ERRATA E137: the dispatch looks for a `Weird<T, int>`).
         // An explicit `<..>` already pins the parameter, and another argument
         // in a slot of the same parameter decides it for the literal.
         if call.explicit_generic_args.is_empty() {

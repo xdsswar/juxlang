@@ -1,6 +1,6 @@
 // A subtype with a type parameter its supertype does not fix
 // (`Weird<T, U> extends Tree<T>`), behind a `Tree<T>` value whose method has
-// type parameters of its own (ERRATA E1XX-GAP39c). The program is compiled
+// type parameters of its own (ERRATA E137). The program is compiled
 // whole, so every `U` it builds a `Weird` with is known: written out, bound
 // by a generic function's call, or by a generic method of a generic class.
 // The call is dispatched to each of them.

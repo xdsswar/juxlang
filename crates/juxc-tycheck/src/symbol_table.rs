@@ -152,7 +152,7 @@ pub struct SymbolTable {
     /// checker's `E0457` reads the same one.
     pub clone_needs: crate::clone_needs::CloneNeeds,
     /// Every concrete instantiation of each generic class the program
-    /// builds (`crate::instantiations`, ERRATA E1XX-GAP39c).
+    /// builds (`crate::instantiations`, ERRATA E137).
     pub instantiations: crate::instantiations::Closure,
 }
 
@@ -2257,7 +2257,7 @@ pub fn build_workspace(
     check_diamond_default_conflicts(&table, diagnostics);
     check_interface_on_exception_class(&table, diagnostics);
     // E0438 is decided after the check, over the closed instantiations
-    // (`generic_dispatch::unclosable_diagnostics`, ERRATA E1XX-GAP39c).
+    // (`generic_dispatch::unclosable_diagnostics`, ERRATA E137).
     check_method_modifier_combinations(&table, diagnostics);
     check_constructor_overloads(&table, diagnostics);
     check_method_overloads(&table, diagnostics);

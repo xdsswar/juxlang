@@ -1351,7 +1351,7 @@ struct RustEmitter {
     pub(crate) param_into_marks: Option<Vec<(String, String, usize)>>,
     /// The method type parameters of the method being emitted whose bound is
     /// lowered to `Into<bound>` to match the supertype's trait, with that
-    /// bound (ERRATA E1XX-GAP39c, `decls::generic_dispatch`).
+    /// bound (ERRATA E137, `decls::generic_dispatch`).
     pub(crate) into_params: Vec<(String, juxc_ast::TypeRef)>,
     /// Receivers of a member access typed by one of [`Self::into_params`],
     /// by span: each is emitted converted to the bound it names.

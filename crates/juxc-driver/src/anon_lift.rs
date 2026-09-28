@@ -1,4 +1,4 @@
-//! Lifting anonymous classes to named ones (ERRATA E1XX-GAP39c; the plan is
+//! Lifting anonymous classes to named ones (ERRATA E137; the plan is
 //! `juxc_tycheck::anon_lift`).
 //!
 //! For each anonymous class the checker planned, a named class is declared in

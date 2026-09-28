@@ -72,7 +72,7 @@ pub struct AnonSite {
 
 /// Rewrite every `new T(..) { body }` whose span has a site in `sites` to
 /// construct the lifted class instead, and hand back each body, by span, for
-/// the lifted class to take (ERRATA E1XX-GAP39c).
+/// the lifted class to take (ERRATA E137).
 pub fn lift_anonymous_classes(
     units: &mut [CompilationUnit],
     sites: HashMap<Span, AnonSite>,

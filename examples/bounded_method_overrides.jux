@@ -1,5 +1,5 @@
 // An override that bounds its type parameter by the type its supertype's
-// parameter is fixed to (ERRATA E1XX-GAP39c): `<V extends K>` declared in
+// parameter is fixed to (ERRATA E137): `<V extends K>` declared in
 // `interface Store<K>` (or `abstract class Shelf<K>`) and overridden as
 // `<V extends Pet>` in a class that fixes `K = Pet`. Both lower to the same
 // bound, so the override is reached directly and through the supertype.

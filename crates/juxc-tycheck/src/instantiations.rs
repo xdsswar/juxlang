@@ -1,4 +1,4 @@
-//! The instantiations a whole program builds (ERRATA E1XX-GAP39c).
+//! The instantiations a whole program builds (ERRATA E137).
 //!
 //! A method with type parameters of its own, called through a supertype, is
 //! dispatched on the concrete type behind the value (`generic_dispatch`). A

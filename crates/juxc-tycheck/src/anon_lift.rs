@@ -1,4 +1,4 @@
-//! Anonymous classes lifted to named ones (ERRATA E1XX-GAP39c).
+//! Anonymous classes lifted to named ones (ERRATA E137).
 //!
 //! An anonymous class is a Rust item local to the expression that builds it,
 //! so nothing outside that expression can name it. Two things need to: the

@@ -1,4 +1,4 @@
-// Anonymous classes as subtypes like any other (ERRATA E1XX-GAP39c): an
+// Anonymous classes as subtypes like any other (ERRATA E137): an
 // anonymous visitor, an anonymous implementer of an interface whose method
 // has type parameters of its own (reached by dispatch on the object's type),
 // an anonymous subclass of an extended abstract class, one that captures

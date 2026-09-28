@@ -6177,7 +6177,7 @@ impl RustEmitter {
     pub(crate) fn emit_method(&mut self, method: &FnDecl) {
         // An override of a supertype method whose type parameter is bounded
         // by the supertype's own parameter lowers its bound as the trait does
-        // (ERRATA E1XX-GAP39c).
+        // (ERRATA E137).
         if let Some(class) = self.enclosing_class.clone() {
             let (lowered, originals) = self.lowered_method_generics(&class, &method.name.text, &method.generic_params);
             if !originals.is_empty() {

@@ -364,7 +364,7 @@ impl RustEmitter {
         self.w.indent_inc();
         self.w.emit_indent();
         // A class lifted from an anonymous class prints as one, `Shape$anon@..`
-        // (ERRATA E1XX-GAP39c).
+        // (ERRATA E137).
         let shown = juxc_ast::anon_class_display(class_name);
         if wrapper {
             self.w.push_str("write!(f, \"");

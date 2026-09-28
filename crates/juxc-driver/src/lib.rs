@@ -499,7 +499,7 @@ where
     // own diagnostics with the matching unit/source index.
     let mut typed = juxc_tycheck::typecheck_workspace(&units);
     // Anonymous classes that have to be found by name are lifted to named
-    // ones, and the program is checked again (ERRATA E1XX-GAP39c).
+    // ones, and the program is checked again (ERRATA E137).
     let clean = anon_lift::no_user_errors(&typed.diagnostics, &units);
     if clean && anon_lift::apply(&mut units, &typed.anon_lifts) {
         typed = juxc_tycheck::typecheck_workspace(&units);
@@ -602,7 +602,7 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     diagnostics.extend(package_check::check_public_type_file_names(&units, &sources));
     let mut typed = juxc_tycheck::typecheck_workspace(&units);
     // Anonymous classes that have to be found by name are lifted to named
-    // ones, and the program is checked again (ERRATA E1XX-GAP39c).
+    // ones, and the program is checked again (ERRATA E137).
     let clean = anon_lift::no_user_errors(&typed.diagnostics, &units);
     if clean && anon_lift::apply(&mut units, &typed.anon_lifts) {
         typed = juxc_tycheck::typecheck_workspace(&units);
@@ -767,7 +767,7 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     // matching unit/source index.
     let mut typed = juxc_tycheck::typecheck_workspace(&units);
     // Anonymous classes that have to be found by name are lifted to named
-    // ones, and the program is checked again (ERRATA E1XX-GAP39c).
+    // ones, and the program is checked again (ERRATA E137).
     let clean = anon_lift::no_user_errors(&typed.diagnostics, &units);
     if clean && anon_lift::apply(&mut units, &typed.anon_lifts) {
         typed = juxc_tycheck::typecheck_workspace(&units);

@@ -227,7 +227,7 @@ pub struct TypeCheckResult {
     /// [`expand::apply_component_names`] before the backend runs.
     pub component_names: HashMap<Span, String>,
     /// Anonymous classes the driver lifts to named ones and checks again
-    /// (`anon_lift`, ERRATA E1XX-GAP39c).
+    /// (`anon_lift`, ERRATA E137).
     pub anon_lifts: Vec<anon_lift::AnonLift>,
 }
 
@@ -390,7 +390,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     // from the result and `E0457` checks every use against the same table.
     symbols.clone_needs = clone_needs::compute(units, &symbols, &all_expr_types);
     // The instantiations the program builds, closed over its generic calls
-    // (ERRATA E1XX-GAP39c), and a dispatch that cannot close is `E0438`.
+    // (ERRATA E137), and a dispatch that cannot close is `E0438`.
     let seeds: Vec<ty::Ty> = all_expr_types.values().cloned().collect();
     symbols.instantiations = instantiations::close(&symbols, &all_inst_facts, &seeds);
     for (idx, d) in generic_dispatch::unclosable_diagnostics(&symbols) {

@@ -1352,7 +1352,7 @@ impl RustEmitter {
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
         // The receiver of a member access on a value whose type parameter
-        // is bounded `Into<C>` (ERRATA E1XX-GAP39c): the member is C's.
+        // is bounded `Into<C>` (ERRATA E137): the member is C's.
         if !self.into_receivers.is_empty() {
             let span = expr_span_of(expr);
             if let Some(bound) = self.into_receivers.remove(&span) {
