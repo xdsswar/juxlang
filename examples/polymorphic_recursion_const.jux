@@ -1,0 +1,40 @@
+// A class with a `const` parameter on a polymorphic-recursion cycle (ERRATA
+// E1XX-GAP39i). `stack<T>` calls itself at `Chunk<T, 3>`, so `Chunk`'s type
+// parameter is erased with the cycle; its `const` parameter never grows (a
+// `const` argument is a constant, not a type that can nest), so it is kept
+// as it is: `N` stays a compile-time value, and `int[N]` a fixed array.
+
+class Chunk<T, int N> {
+    T first;
+    int[N] marks = new int[N];
+    Chunk(T first) {
+        this.first = first;
+        for (int i = 0; i < N; i++) {
+            marks[i] = i * N;
+        }
+    }
+    int capacity() { return N; }
+    public String operator string() {
+        String s = first + "[";
+        for (int i = 0; i < N; i++) {
+            s = s + (i > 0 ? "," : "") + marks[i];
+        }
+        return s + "]";
+    }
+}
+
+<T> String stack(T x, int n) {
+    Chunk<T, 3> c = new Chunk<T, 3>(x);
+    String here = n + ": cap " + c.capacity() + " " + c;
+    if (n == 0) {
+        return here;
+    }
+    return here + "\n" + stack<Chunk<T, 3>>(c, n - 1);
+}
+
+public void main() {
+    print(stack<int>(7, 2));
+    // The same class, off the cycle, at another size.
+    Chunk<String, 2> direct = new Chunk<String, 2>("d");
+    print("" + direct + " " + direct.first + " " + direct.capacity());
+}

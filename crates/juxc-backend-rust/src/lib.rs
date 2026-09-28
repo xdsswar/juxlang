@@ -760,6 +760,11 @@ pub struct JuxErased {
 }
 pub type JuxErasedBin = fn(&dyn std::any::Any, &dyn std::any::Any) -> std::rc::Rc<dyn std::any::Any>;
 pub type JuxErasedUn = fn(&dyn std::any::Any) -> std::rc::Rc<dyn std::any::Any>;
+/// Builds a kept dispatch object: from the value, the value's own table
+/// (an adapter reboxes what it hands back with it) and the object's type.
+pub type JuxErasedViews = std::rc::Rc<
+    dyn Fn(&dyn std::any::Any, &std::rc::Rc<JuxErasedVtable>, std::any::TypeId) -> Option<std::rc::Rc<dyn std::any::Any>>,
+>;
 pub struct JuxErasedVtable {
     pub type_id: std::any::TypeId,
     pub show: std::rc::Rc<dyn Fn(&dyn std::any::Any) -> String>,
@@ -770,7 +775,7 @@ pub struct JuxErasedVtable {
     pub bin: [Option<JuxErasedBin>; 10],
     pub neg: Option<JuxErasedUn>,
     pub not: Option<JuxErasedUn>,
-    pub views: std::rc::Rc<dyn Fn(&dyn std::any::Any, std::any::TypeId) -> Option<std::rc::Rc<dyn std::any::Any>>>,
+    pub views: JuxErasedViews,
 }
 impl JuxErased {
     pub fn wrap<X: 'static>(v: X, vt: JuxErasedVtable) -> JuxErased {
@@ -791,7 +796,7 @@ impl JuxErased {
         }
     }
     pub fn jux_view<V: Clone + 'static>(&self) -> V {
-        match (self.vt.views)(&*self.value, std::any::TypeId::of::<V>()) {
+        match (self.vt.views)(&*self.value, &self.vt, std::any::TypeId::of::<V>()) {
             Some(view) => match view.downcast_ref::<V>() {
                 Some(v) => v.clone(),
                 None => jux_erased_mismatch(std::any::type_name::<V>()),
@@ -992,6 +997,9 @@ impl JuxIdentity for JuxErased {
 #[macro_export]
 macro_rules! __jux_erase {
     (@wrap $ev:ident; $($view:ty),*) => {{
+        $crate::__jux_erase!(@wrap2 $ev; [$($view),*]; [])
+    }};
+    (@wrap2 $ev:ident; [$($view:ty),*]; [$($aview:ty => $actor:path),*]) => {{
         #[allow(unused_imports)]
         use $crate::{
             JuxErasedEqVia as _, JuxErasedEqNone as _, JuxErasedHashVia as _, JuxErasedHashNone as _,
@@ -1022,12 +1030,20 @@ macro_rules! __jux_erase {
             ],
             neg: __jux_p.jux_neg_fn(),
             not: __jux_p.jux_not_fn(),
-            views: std::rc::Rc::new(move |a: &dyn std::any::Any, want: std::any::TypeId| {
+            views: std::rc::Rc::new(move |a: &dyn std::any::Any, vt: &std::rc::Rc<$crate::JuxErasedVtable>, want: std::any::TypeId| {
                 #[allow(unused_variables)]
                 let x = $crate::jux_erased_cast(__jux_ep, a);
+                #[allow(unused_variables)]
+                let vt = vt;
                 $(
                     if want == std::any::TypeId::of::<$view>() {
                         let v: $view = std::rc::Rc::new(::std::clone::Clone::clone(x));
+                        Some(std::rc::Rc::new(v) as std::rc::Rc<dyn std::any::Any>)
+                    } else
+                )*
+                $(
+                    if want == std::any::TypeId::of::<$aview>() {
+                        let v: $aview = std::rc::Rc::new($actor(::std::clone::Clone::clone(x), std::marker::PhantomData, vt.clone()));
                         Some(std::rc::Rc::new(v) as std::rc::Rc<dyn std::any::Any>)
                     } else
                 )*
@@ -1035,6 +1051,10 @@ macro_rules! __jux_erase {
             }),
         };
         $crate::JuxErased::wrap($ev, __jux_etab)
+    }};
+    ($v:expr, $t:ty; [$($view:ty),*]; [$($aview:ty => $actor:path),*]) => {{
+        let __jux_ev: $t = ::std::clone::Clone::clone(&$v);
+        $crate::__jux_erase!(@wrap2 __jux_ev; [$($view),*]; [$($aview => $actor),*])
     }};
     ($v:expr, $t:ty; $($view:ty),*) => {{
         let __jux_ev: $t = ::std::clone::Clone::clone(&$v);
@@ -1048,6 +1068,16 @@ macro_rules! __jux_erase {
         let __jux_ev = ::std::clone::Clone::clone(&$v);
         $crate::__jux_erase!(@wrap __jux_ev;)
     }};
+}
+/// A value an adapter hands back at an erased position: boxed with the table
+/// of the value it came from when it is of that type (so it keeps its
+/// bounds), else on its own.
+pub fn jux_erased_rebox<R: Clone + 'static>(r: R, vt: &std::rc::Rc<JuxErasedVtable>) -> JuxErased {
+    if std::any::TypeId::of::<R>() == vt.type_id {
+        JuxErased { value: std::rc::Rc::new(r), vt: vt.clone() }
+    } else {
+        crate::__jux_erase!(r)
+    }
 }
 pub fn jux_erased_type_id<X: 'static>(_: &X) -> std::any::TypeId {
     std::any::TypeId::of::<X>()

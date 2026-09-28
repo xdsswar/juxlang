@@ -516,6 +516,17 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `T extends Sized2` passed where `Named` is expected (`Sized2 extends Named`), no recursion | E0900 | works |
 | `climb<T extends Ranked<T>>` calling `climb<Up<T>>` | `E0438` | `E0438` (the bound names `T`) |
 
+**39i. CLOSED 2026-09-28 (ERRATA E1XX-GAP39i).** ~~A bound naming the parameter (`T extends Ranked<T>`) or a `const` parameter on a polymorphic-recursion cycle was `E0438`.~~ Such a bound is reached through a generated adapter that unboxes erased arguments to the value's own type and reboxes results with the value's own table (interfaces from their declaration, classes from their dispatch trait); `const` parameters are kept as they are (they never grow). `E0438` is left for one case: a bound holding the parameter inside a Rust type (`T extends Rel<Vec<T>>`), whose only conversion is a copy that would break the list's sharing. Tests: `examples/polymorphic_recursion_fbounded.jux` (checked against Java: differential case 87), `examples/polymorphic_recursion_const.jux`, `tests/ui/generic_method_dispatch_limits`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `best<T extends Ord2<T>>` calling `best<Box<T>>`, `a.pick(b)` then `p.cmp(a)` on the result | `E0438` | works, matches Java |
+| `deep<T extends Tagged<T, String>>` calling `deep<Wrap<T>>` | `E0438` | works, matches Java |
+| `climb<T extends Shape<T>>` over an abstract class, calling `climb<Framed<T>>` | `E0438` | works, matches Java |
+| `weave<T extends Joins<Pair<T>>>` calling `weave<Shell<T>>` | `E0438` | works, matches Java |
+| `Chunk<T, int N>` built as `Chunk<T, 3>` on a cycle, `int[N]` field | `E0438` | works |
+| `pack<T extends Rel<Vec<T>>>` calling `pack<Crate<T>>` | `E0438` | `E0438` (a copy would break the list's sharing) |
+
 ---
 
 ## 4. Three streams stopped mid-flight

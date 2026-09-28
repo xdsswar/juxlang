@@ -29,6 +29,10 @@ use crate::RustEmitter;
 pub(crate) struct EraseMark {
     pub(crate) written: Option<TypeRef>,
     pub(crate) bounds: Vec<TypeRef>,
+    /// The declaration's type parameters, and the one the slot is, for a
+    /// bound at them (`T extends Ranked<T>`, ERRATA E1XX-GAP39i).
+    pub(crate) decl_params: Vec<String>,
+    pub(crate) param: String,
 }
 
 /// The key an expression is marked by for boxing: its span, or, for one
@@ -97,6 +101,19 @@ impl RustEmitter {
         ps.map(|ps| ps.iter().filter(|p| !p.is_const()).map(|p| p.name.text.clone()).collect()).unwrap_or_default()
     }
 
+    /// Every parameter of the class, record or interface `fqn`, and whether it
+    /// is a `const` one (kept as it is, ERRATA E1XX-GAP39i).
+    fn erased_class_all_params(&self, fqn: &str) -> Vec<(String, bool)> {
+        let ps = self
+            .symbols
+            .classes
+            .get(fqn)
+            .map(|c| &c.generic_params)
+            .or_else(|| self.symbols.records.get(fqn).map(|r| &r.generic_params))
+            .or_else(|| self.symbols.interfaces.get(fqn).map(|i| &i.generic_params));
+        ps.map(|ps| ps.iter().map(|p| (p.name.text.clone(), p.is_const())).collect()).unwrap_or_default()
+    }
+
     /// Whether `args` name the erased class `fqn` at its own parameters inside
     /// its own body: the generic code, not a use of it.
     fn in_own_generic_body(&self, fqn: &str, args: &[TypeRef]) -> bool {
@@ -105,7 +122,7 @@ impl RustEmitter {
         if enclosing != Some(bare) {
             return false;
         }
-        let params = self.erased_class_params(fqn);
+        let params: Vec<String> = self.erased_class_all_params(fqn).into_iter().map(|(n, _)| n).collect();
         params.len() == args.len()
             && params.iter().zip(args).all(|(p, a)| {
                 a.generic_args.is_empty() && a.name.segments.len() == 1 && a.name.segments[0].text == *p && !a.nullable
@@ -127,8 +144,23 @@ impl RustEmitter {
         if self.in_own_generic_body(&key, &args) {
             return None;
         }
+        // A `const` argument is kept: a `const` parameter is not erased.
+        let consts: Vec<bool> = self.erased_class_all_params(&key).into_iter().map(|(_, c)| c).collect();
+        if args.iter().enumerate().all(|(i, a)| consts.get(i).copied().unwrap_or(false) || Self::is_erased_marker(a)) {
+            return None;
+        }
         let mut out = ty.clone();
-        out.generic_args = args.iter().map(|a| GenericArg::Type(Self::marker(a.span))).collect();
+        out.generic_args = args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                if consts.get(i).copied().unwrap_or(false) {
+                    GenericArg::Type(a.clone())
+                } else {
+                    GenericArg::Type(Self::marker(a.span))
+                }
+            })
+            .collect();
         Some(out)
     }
 
@@ -262,7 +294,9 @@ impl RustEmitter {
                 None
             };
             let bounds = callee.bounds.get(&t.name.segments[0].text).cloned().unwrap_or_default();
-            self.erase_on_emit.insert(Self::erase_key(arg), EraseMark { written, bounds });
+            let decl_params: Vec<String> = callee.bounds.keys().cloned().collect();
+            let param = t.name.segments[0].text.clone();
+            self.erase_on_emit.insert(Self::erase_key(arg), EraseMark { written, bounds, decl_params, param });
         }
     }
 
@@ -304,14 +338,16 @@ impl RustEmitter {
                 .position(|p| *p == t.name.segments[0].text)
                 .and_then(|k| n.generic_args.get(k).cloned());
             let bounds = self.erased_class_param_bounds(&key, &t.name.segments[0].text);
-            self.erase_on_emit.insert(Self::erase_key(arg), EraseMark { written, bounds });
+            let param = t.name.segments[0].text.clone();
+            self.erase_on_emit
+                .insert(Self::erase_key(arg), EraseMark { written, bounds, decl_params: params.clone(), param });
         }
     }
 
     /// Emit the boxing of `expr` into an erased slot (`at` is the type the
     /// value is taken at). An optional value keeps its `null`: the value
     /// inside is boxed.
-    pub(crate) fn emit_erased_box(&mut self, expr: &Expr, at: Option<TypeRef>, bounds: &[TypeRef]) {
+    pub(crate) fn emit_erased_box(&mut self, expr: &Expr, at: Option<TypeRef>, mark: &EraseMark) {
         if matches!(expr, Expr::Literal(juxc_ast::Literal::Null)) {
             self.emit_expr(expr);
             return;
@@ -329,7 +365,7 @@ impl RustEmitter {
                 t.nullable = false;
                 self.w.push_str(", ");
                 self.emit_value_type_as_rust(&t);
-                self.emit_erased_views(bounds);
+                self.emit_erased_views(mark, Some(&t));
             }
             self.w.push_str("))");
             return;
@@ -340,11 +376,11 @@ impl RustEmitter {
             Some(t) => {
                 self.w.push_str(", ");
                 self.emit_value_type_as_rust(&t);
-                self.emit_erased_views(bounds);
+                self.emit_erased_views(mark, Some(&t));
             }
-            None if !bounds.is_empty() => {
+            None if !mark.bounds.is_empty() => {
                 self.w.push_str(", _");
-                self.emit_erased_views(bounds);
+                self.emit_erased_views(mark, None);
             }
             None => {}
         }
@@ -353,12 +389,28 @@ impl RustEmitter {
 
     /// `; Rc<dyn B>, ..`: the dispatch objects a bounded erased value keeps,
     /// one per bound and per supertrait of one.
-    fn emit_erased_views(&mut self, bounds: &[TypeRef]) {
-        let views = self.erased_view_traits(bounds);
-        if views.is_empty() {
+    fn emit_erased_views(&mut self, mark: &EraseMark, at: Option<&TypeRef>) {
+        // A bound at the declaration's parameters (`Ranked<T>`) is kept
+        // through an adapter; any other bound is the value itself.
+        let (adapted, plain): (Vec<TypeRef>, Vec<TypeRef>) =
+            mark.bounds.iter().cloned().partition(|b| names_any(b, &mark.decl_params));
+        let views = self.erased_view_traits(&plain);
+        if views.is_empty() && adapted.is_empty() {
             return;
         }
-        self.w.push_str("; ");
+        if adapted.is_empty() {
+            self.w.push_str("; ");
+            for (i, v) in views.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                self.w.push_str("std::rc::Rc<dyn ");
+                self.emit_bound_type(v);
+                self.w.push('>');
+            }
+            return;
+        }
+        self.w.push_str("; [");
         for (i, v) in views.iter().enumerate() {
             if i > 0 {
                 self.w.push_str(", ");
@@ -367,6 +419,231 @@ impl RustEmitter {
             self.emit_bound_type(v);
             self.w.push('>');
         }
+        self.w.push_str("]; [");
+        for (i, b) in adapted.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            let args: Vec<TypeRef> = b.generic_args.iter().filter_map(|a| a.as_type().cloned()).collect();
+            let pattern: Vec<bool> = args.iter().map(|a| is_bare_param(a, &mark.decl_params) && !a.nullable).collect();
+            let erased_bound = erase_params(b, &mark.decl_params);
+            self.w.push_str("std::rc::Rc<dyn ");
+            self.emit_bound_type(&erased_bound);
+            self.w.push_str("> => crate::");
+            let iface = b.name.segments.last().map(|s| s.text.clone()).unwrap_or_default();
+            self.w.push_str(&adapter_name(&iface, &pattern));
+            self.w.push_str("::<_");
+            for (j, a) in args.iter().enumerate() {
+                self.w.push_str(", ");
+                if pattern[j] {
+                    let own = a.name.segments[0].text == mark.param;
+                    match at {
+                        Some(t) if own => self.emit_value_type_as_rust(t),
+                        _ => self.w.push('_'),
+                    }
+                } else {
+                    let e = erase_params(a, &mark.decl_params);
+                    self.emit_value_type_as_rust(&e);
+                }
+            }
+            self.w.push('>');
+        }
+        self.w.push(']');
+    }
+
+    /// The adapter shapes an interface needs: one per way the family's
+    /// bounds name it at their parameters, each position erased (a bare
+    /// parameter) or kept.
+    pub(crate) fn erased_adapter_patterns(&self, iface_bare: &str) -> Vec<Vec<bool>> {
+        let mut out: Vec<Vec<bool>> = Vec::new();
+        if !self.erasure_active() {
+            return out;
+        }
+        let e = &self.symbols.erasure;
+        let mut decls: Vec<Vec<juxc_ast::TypeParam>> = Vec::new();
+        for c in &e.classes {
+            if let Some(ps) = self
+                .symbols
+                .classes
+                .get(c)
+                .map(|x| x.generic_params.clone())
+                .or_else(|| self.symbols.records.get(c).map(|r| r.generic_params.clone()))
+            {
+                decls.push(ps);
+            }
+        }
+        for k in &e.fns {
+            let mut ps = if let Some(f) = k.strip_prefix("fn:") {
+                self.symbols.functions.get(f).map(|s| s.generic_params.clone()).unwrap_or_default()
+            } else if let Some((class, m)) = k.strip_prefix("method:").and_then(|m| m.rsplit_once('.')) {
+                self.symbols.lookup_method(class, m).map(|(s, _)| s.generic_params.clone()).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            if let Some((class, _)) = k.strip_prefix("method:").and_then(|m| m.rsplit_once('.')) {
+                ps.extend(self.symbols.classes.get(class).map(|c| c.generic_params.clone()).unwrap_or_default());
+            }
+            decls.push(ps);
+        }
+        for ps in decls {
+            let names: Vec<String> = ps.iter().map(|p| p.name.text.clone()).collect();
+            for p in &ps {
+                for b in &p.bounds {
+                    if b.name.segments.last().map(|s| s.text.as_str()) != Some(iface_bare) || !names_any(b, &names) {
+                        continue;
+                    }
+                    let pattern: Vec<bool> = b
+                        .generic_args
+                        .iter()
+                        .filter_map(|a| a.as_type())
+                        .map(|a| is_bare_param(a, &names) && !a.nullable)
+                        .collect();
+                    if !out.contains(&pattern) {
+                        out.push(pattern);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The adapters an erased value reaches an interface bound at its own
+    /// parameters through (ERRATA E1XX-GAP39i): `I<JuxErased, ..>`,
+    /// implemented by wrapping the value's own `I<X, ..>`. An erased argument
+    /// is unboxed to `X` on the way in, and a result at an erased position is
+    /// boxed on the way out with the value's own table when it is of the
+    /// value's type, so it keeps its bounds.
+    pub(crate) fn emit_erased_adapters(&mut self, interface: &juxc_ast::InterfaceDecl) {
+        let patterns = self.erased_adapter_patterns(&interface.name.text);
+        for pattern in patterns {
+            self.emit_erased_adapter(interface, &pattern);
+        }
+    }
+
+    /// An adapter's struct, and what every trait an adapter implements asks
+    /// of it: it prints, and is the object, as the value it wraps.
+    fn emit_erased_adapter_struct(&mut self, name: &str, ps: &[String]) {
+        let pgen = ps.join(", ");
+        let phantom = format!("({})", ps.iter().map(|p| format!("{p},")).collect::<String>());
+        self.w.line(&format!(
+            "pub struct {name}<__JuxV, {pgen}>(pub __JuxV, pub std::marker::PhantomData<{phantom}>, pub std::rc::Rc<crate::JuxErasedVtable>);"
+        ));
+        for (tr, body) in [
+            ("std::fmt::Debug", "fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { std::fmt::Debug::fmt(&self.0, f) }"),
+            ("std::fmt::Display", "fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { std::fmt::Display::fmt(&self.0, f) }"),
+            ("crate::JuxIdentity", "fn __jux_identity(&self) -> *const () { crate::JuxIdentity::__jux_identity(&self.0) }"),
+        ] {
+            self.w.line(&format!("impl<__JuxV: {tr}, {pgen}> {tr} for {name}<__JuxV, {pgen}> {{ {body} }}"));
+        }
+    }
+
+    /// The adapters an erased value reaches a class bound at its own
+    /// parameters through (`T extends Shape<T>`, ERRATA E1XX-GAP39i), made
+    /// from the class's `Kind` forwarding implementation (`text`): the same
+    /// members, erased positions unboxed on the way in and reboxed on the
+    /// way out. `None` when a member is not in the one-line forwarding form
+    /// (a method with type parameters of its own).
+    pub(crate) fn erased_kind_adapters(&mut self, class_decl: &juxc_ast::ClassDecl, text: &str) {
+        let patterns = self.erased_adapter_patterns(&class_decl.name.text);
+        let params: Vec<String> = class_decl.generic_params.iter().map(|p| p.name.text.clone()).collect();
+        for pattern in patterns {
+            if pattern.len() != params.len() {
+                continue;
+            }
+            let name = adapter_name(&class_decl.name.text, &pattern);
+            let ps: Vec<String> = (0..pattern.len()).map(|j| format!("__JuxP{j}")).collect();
+            let Some(adapter) = kind_adapter_from_forwarding(text, &params, &pattern, &name, &ps) else { continue };
+            self.emit_erased_adapter_struct(&name, &ps);
+            self.w.push_str(&adapter);
+        }
+    }
+
+    fn emit_erased_adapter(&mut self, interface: &juxc_ast::InterfaceDecl, pattern: &[bool]) {
+        use juxc_lex::to_rust_ident;
+        let iface = to_rust_ident(&interface.name.text);
+        let name = adapter_name(&interface.name.text, pattern);
+        let ps: Vec<String> = (0..pattern.len()).map(|j| format!("__JuxP{j}")).collect();
+        let iface_params: Vec<String> = interface.generic_params.iter().map(|p| p.name.text.clone()).collect();
+        let pgen = ps.join(", ");
+        self.emit_erased_adapter_struct(&name, &ps);
+        let view_args = ps.join(", ");
+        let erased_args: Vec<String> = pattern
+            .iter()
+            .enumerate()
+            .map(|(j, e)| if *e { crate::erasure::ERASED_RUST.to_string() } else { ps[j].clone() })
+            .collect();
+        let pbounds = ps.iter().map(|p| format!("{p}: Clone + std::fmt::Debug + 'static")).collect::<Vec<_>>().join(", ");
+        self.w.line(&format!(
+            "impl<__JuxV: {iface}<{view_args}> + Clone + 'static, {pbounds}> {iface}<{}> for {name}<__JuxV, {pgen}> {{",
+            erased_args.join(", ")
+        ));
+        self.w.indent_inc();
+        // The interface's own parameters read as the adapter's: erased
+        // positions as `JuxErased`, kept ones as themselves.
+        let mut subst: std::collections::HashMap<String, TypeRef> = std::collections::HashMap::new();
+        for (j, p) in iface_params.iter().enumerate() {
+            let t = if pattern.get(j).copied().unwrap_or(false) {
+                Self::marker(interface.name.span)
+            } else {
+                crate::analysis::synth_iface_type_ref(&ps[j], interface.name.span)
+            };
+            subst.insert(p.clone(), t);
+        }
+        let saved = std::mem::replace(&mut self.kind_type_subst, subst);
+        let methods: Vec<juxc_ast::FnDecl> = interface
+            .methods
+            .iter()
+            .filter(|m| !m.modifiers.iter().any(|x| matches!(x, juxc_ast::FnModifier::Static)))
+            .filter(|m| m.generic_params.is_empty() || m.body.is_none())
+            .cloned()
+            .collect();
+        for m in &methods {
+            self.w.emit_indent();
+            self.w.push_str("fn ");
+            self.w.push_str(&to_rust_ident(&m.name.text));
+            if !m.generic_params.is_empty() {
+                let own = crate::decls::classes::bounds_into_outer_params(&m.generic_params, &iface_params);
+                self.emit_method_own_generics(&own);
+            }
+            self.w.push_str("(&self");
+            for p in &m.params {
+                self.w.push_str(", ");
+                self.w.push_str(&to_rust_ident(&p.name.text));
+                self.w.push_str(": ");
+                self.emit_value_type_as_rust(&p.ty);
+            }
+            self.w.push(')');
+            let ret_pos = match &m.return_type {
+                juxc_ast::ReturnType::Type(t) => {
+                    self.w.push_str(" -> ");
+                    self.emit_return_type_as_rust(t);
+                    erased_position(t, &iface_params, pattern)
+                }
+                _ => None,
+            };
+            self.w.push_str(" { ");
+            if ret_pos.is_some() {
+                self.w.push_str("crate::jux_erased_rebox(");
+            }
+            self.w.push_str(&format!("<__JuxV as {iface}<{view_args}>>::"));
+            self.w.push_str(&to_rust_ident(&m.name.text));
+            self.w.push_str("(&self.0");
+            for p in &m.params {
+                self.w.push_str(", ");
+                self.w.push_str(&to_rust_ident(&p.name.text));
+                if let Some(j) = erased_position(&p.ty, &iface_params, pattern) {
+                    self.w.push_str(&format!(".get::<{}>()", ps[j]));
+                }
+            }
+            self.w.push(')');
+            if ret_pos.is_some() {
+                self.w.push_str(", &self.2)");
+            }
+            self.w.push_str(" }\n");
+        }
+        self.kind_type_subst = saved;
+        self.w.indent_dec();
+        self.w.line("}");
     }
 
     /// `bounds` and every Jux supertrait of each (an interface's `extends`, a
@@ -494,9 +771,29 @@ impl RustEmitter {
                 _ => {}
             }
         }
+        // A trait whose parameter is bounded by the trait itself (`Shape<T
+        // extends Shape<T>>`): a generic implementation for the erased type
+        // would ask itself to hold (rustc E0275), so it implements the one
+        // instantiation erasure uses, at the erased type (ERRATA
+        // E1XX-GAP39i).
+        let head_name = sig.split('<').next().unwrap_or(sig).trim().to_string();
+        let rest_parts = split_top(rest);
+        let self_bounded = rest_parts.iter().any(|g| {
+            g.split_once(':').is_some_and(|(_, b)| replace_words(b, std::slice::from_ref(&head_name), &["\u{0}".to_string()]).contains('\u{0}'))
+        });
+        let (sig, rest, body_text) = if self_bounded {
+            let names: Vec<String> = rest_parts
+                .iter()
+                .filter_map(|g| g.split_once(':').map(|(n, _)| n.trim().to_string()))
+                .collect();
+            let erased: Vec<String> = names.iter().map(|_| crate::erasure::ERASED_RUST.to_string()).collect();
+            let body = &text[head_end + " for std::rc::Rc<__JuxH> {".len()..];
+            (replace_words(sig, &names, &erased), String::new(), replace_words(body, &names, &erased))
+        } else {
+            (sig.to_string(), rest.to_string(), text[head_end + " for std::rc::Rc<__JuxH> {".len()..].to_string())
+        };
         let view = format!("*self.jux_view::<std::rc::Rc<dyn {sig}>>()");
-        let body = &text[head_end + " for std::rc::Rc<__JuxH> {".len()..];
-        let body = body.replace("**self", &view).replace("__JuxH", &format!("dyn {sig}"));
+        let body = body_text.replace("**self", &view).replace("__JuxH", &format!("dyn {sig}"));
         let indent = &text[..start];
         let head = if rest.is_empty() {
             format!("{indent}impl {sig} for crate::JuxErased {{")
@@ -559,6 +856,11 @@ impl RustEmitter {
         if !self.erasure_active() || self.emitting_lvalue {
             return None;
         }
+        // Read back from the temporary an operator chain bound it to, which
+        // holds the value already unboxed.
+        if self.operand_substitute(expr).is_some() {
+            return None;
+        }
         let span = crate::exprs::expr_span_of(expr);
         let is_slot = match expr {
             Expr::Call(c) => self
@@ -598,6 +900,213 @@ struct ErasedCallee {
     ret: Option<TypeRef>,
     /// The function or method itself is erased (its own type arguments).
     fn_erased: bool,
+}
+
+/// Whether `t` names one of `params` anywhere in it.
+fn names_any(t: &TypeRef, params: &[String]) -> bool {
+    (t.name.segments.len() == 1 && params.contains(&t.name.segments[0].text))
+        || t.generic_args.iter().filter_map(|a| a.as_type()).any(|a| names_any(a, params))
+}
+
+/// `t` with each of `params` read as the erased type.
+fn erase_params(t: &TypeRef, params: &[String]) -> TypeRef {
+    if t.generic_args.is_empty() && t.name.segments.len() == 1 && params.contains(&t.name.segments[0].text) {
+        let mut m = crate::analysis::synth_iface_type_ref(juxc_tycheck::erasure::ERASED_TYPE, t.span);
+        m.nullable = t.nullable;
+        return m;
+    }
+    let mut out = t.clone();
+    out.generic_args = t
+        .generic_args
+        .iter()
+        .map(|a| match a.as_type() {
+            Some(x) => GenericArg::Type(erase_params(x, params)),
+            None => a.clone(),
+        })
+        .collect();
+    out
+}
+
+/// Replace each whole-word occurrence of `from[i]` in `s` with `to[i]`.
+fn replace_words(s: &str, from: &[String], to: &[String]) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    while i < bytes.len() {
+        if is_word(bytes[i]) && (i == 0 || !is_word(bytes[i - 1])) {
+            let mut j = i;
+            while j < bytes.len() && is_word(bytes[j]) {
+                j += 1;
+            }
+            let word: String = bytes[i..j].iter().collect();
+            match from.iter().position(|f| *f == word) {
+                Some(k) => out.push_str(&to[k]),
+                None => out.push_str(&word),
+            }
+            i = j;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Split `s` at its top-level commas.
+fn split_top(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut cur = String::new();
+    for c in s.chars() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(cur.trim().to_string());
+                cur.clear();
+                continue;
+            }
+            _ => {}
+        }
+        cur.push(c);
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_string());
+    }
+    out
+}
+
+/// See [`RustEmitter::erased_kind_adapters`].
+fn kind_adapter_from_forwarding(
+    text: &str,
+    params: &[String],
+    pattern: &[bool],
+    name: &str,
+    ps: &[String],
+) -> Option<String> {
+    let start = text.find("impl<__JuxH:")?;
+    let head_end = text[start..].find(" for std::rc::Rc<__JuxH> {")? + start;
+    let gen_open = start + "impl".len();
+    let mut depth = 0i32;
+    let mut gen_close = None;
+    for (i, ch) in text[gen_open..head_end].char_indices() {
+        match ch {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    gen_close = Some(gen_open + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let gen_close = gen_close?;
+    let generics = split_top(&text[gen_open + 1..gen_close]);
+    let sig = text[gen_close + 1..head_end].trim().to_string();
+    let erased: Vec<String> = pattern
+        .iter()
+        .enumerate()
+        .map(|(j, e)| if *e { crate::erasure::ERASED_RUST.to_string() } else { ps[j].clone() })
+        .collect();
+    let sig_view = replace_words(&sig, params, ps);
+    let sig_erased = replace_words(&sig, params, &erased);
+    let rest: Vec<String> = generics.iter().skip(1).map(|g| replace_words(g, params, ps)).collect();
+    let mut out = format!(
+        "impl<__JuxV: {sig_view} + Clone + 'static{}{}> {sig_erased} for {name}<__JuxV, {}> {{\n",
+        if rest.is_empty() { "" } else { ", " },
+        rest.join(", "),
+        ps.join(", ")
+    );
+    let body = &text[head_end + " for std::rc::Rc<__JuxH> {".len()..];
+    for line in body.lines() {
+        let l = line.trim();
+        if l.is_empty() {
+            continue;
+        }
+        if l == "}" {
+            break;
+        }
+        if !l.starts_with("fn ") || !l.ends_with('}') {
+            return None;
+        }
+        let split = l.find(" { <__JuxH as ")?;
+        let head = &l[..split];
+        let call = &l[split + 3..l.len() - 1].trim().to_string();
+        // Parameters, from `(&self, a: T, b: U)`.
+        let po = head.find("(&self")?;
+        let mut d = 0i32;
+        let mut pc = None;
+        for (i, ch) in head[po..].char_indices() {
+            match ch {
+                '(' | '<' => d += 1,
+                ')' | '>' => {
+                    d -= 1;
+                    if d == 0 && ch == ')' {
+                        pc = Some(po + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let pc = pc?;
+        let plist = split_top(&head[po + 1..pc]);
+        let mut converted: Vec<(String, usize)> = Vec::new();
+        for p in plist.iter().skip(1) {
+            let (pname, pty) = p.split_once(':')?;
+            if let Some(j) = params.iter().position(|x| x == pty.trim()) {
+                if pattern.get(j).copied().unwrap_or(false) {
+                    converted.push((pname.trim().to_string(), j));
+                }
+            }
+        }
+        let after = &head[pc + 1..];
+        let ret = after.trim_start().strip_prefix("->").map(|r| {
+            let r = r.trim();
+            r.split(" where ").next().unwrap_or(r).trim().to_string()
+        });
+        let ret_erased = ret
+            .as_deref()
+            .and_then(|r| params.iter().position(|x| x == r))
+            .is_some_and(|j| pattern.get(j).copied().unwrap_or(false));
+        let new_head = replace_words(head, params, &erased);
+        let mut new_call = replace_words(call, params, ps).replace("<__JuxH as", "<__JuxV as").replace("&**self", "&self.0");
+        for (pname, j) in &converted {
+            // `, a)` / `, a,` → the unboxed value.
+            for tail in [")", ","] {
+                let from = format!(", {pname}{tail}");
+                let to = format!(", {pname}.get::<{}>(){tail}", ps[*j]);
+                if new_call.contains(&from) {
+                    new_call = new_call.replacen(&from, &to, 1);
+                    break;
+                }
+            }
+        }
+        if ret_erased {
+            new_call = format!("crate::jux_erased_rebox({new_call}, &self.2)");
+        }
+        out.push_str(&format!("    {new_head} {{ {new_call} }}\n"));
+    }
+    out.push_str("}\n");
+    Some(out)
+}
+
+/// The adapter's name for an interface and a shape (`E` erased, `K` kept).
+fn adapter_name(iface: &str, pattern: &[bool]) -> String {
+    let shape: String = pattern.iter().map(|e| if *e { 'E' } else { 'K' }).collect();
+    format!("__JuxAdapt_{iface}_{shape}")
+}
+
+/// The erased position of the interface's parameters `t` is, bare.
+fn erased_position(t: &TypeRef, iface_params: &[String], pattern: &[bool]) -> Option<usize> {
+    if t.nullable || !t.generic_args.is_empty() || t.name.segments.len() != 1 || t.array_shape.is_some() {
+        return None;
+    }
+    let j = iface_params.iter().position(|p| *p == t.name.segments[0].text)?;
+    pattern.get(j).copied().unwrap_or(false).then_some(j)
 }
 
 /// Whether `t` is one of `params`, bare or nullable (`T`, `T?`; not `T[]`,

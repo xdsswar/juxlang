@@ -59,13 +59,15 @@ impl RustEmitter {
         let twin_mark = self.w.mark();
         self.emit_interface_rc_forwarding_impl_inner(interface);
         // An erased bounded value implements the interface through the
-        // dispatch object it keeps (ERRATA E142).
+        // dispatch object it keeps (ERRATA E142), which for a bound at the
+        // declaration's parameters is an adapter (E1XX-GAP39i).
         if self.erased_bound_trait(&interface.name.text) {
             let text = self.w.text_from(twin_mark).to_string();
             if let Some(twin) = Self::erased_twin_of_forwarding_impl(&text) {
                 self.w.push_str(&twin);
             }
         }
+        self.emit_erased_adapters(interface);
     }
 
     fn emit_interface_rc_forwarding_impl_inner(&mut self, interface: &juxc_ast::InterfaceDecl) {

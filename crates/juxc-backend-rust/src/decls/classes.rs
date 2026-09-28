@@ -4304,6 +4304,9 @@ impl RustEmitter {
             if let Some(twin) = Self::erased_twin_of_forwarding_impl(&text) {
                 self.w.push_str(&twin);
             }
+            // A bound at the family's own parameters (`T extends Shape<T>`)
+            // is reached through an adapter (ERRATA E1XX-GAP39i).
+            self.erased_kind_adapters(class_decl, &text);
         }
     }
 

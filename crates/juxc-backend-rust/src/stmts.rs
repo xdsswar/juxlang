@@ -3870,7 +3870,10 @@ impl RustEmitter {
         if let Expr::Field(f) = &a.target {
             if a.op.is_none() && self.erased_field_slot(f) {
                 let bounds = self.erased_field_bounds(f);
-                self.erase_on_emit.insert(Self::erase_key(&a.value), crate::erasure::EraseMark { written: None, bounds });
+                self.erase_on_emit.insert(
+                    Self::erase_key(&a.value),
+                    crate::erasure::EraseMark { written: None, bounds, decl_params: Vec::new(), param: String::new() },
+                );
             }
         }
         // **Bare implicit-`this` instance-field write** (`field = v` inside a

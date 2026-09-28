@@ -5572,6 +5572,58 @@ self-referencing bound.
 `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0438` row are amended; E141's bound
 refusal is superseded. GAPS.md gap 39h is closed.
 
+## E1XX-GAP39i. F-bounded parameters and `const` parameters on a polymorphic-recursion cycle
+
+**Conflict.** E142 left two refusals (`E0438`) on an erased cycle: a bound
+that names a type parameter (`T extends Ranked<T>`, the `Comparable` idiom,
+or `T extends Shape<T>` over a class), which has no single dispatch object
+to keep, and a `const` parameter.
+
+**Resolution.**
+
+1. **A bound at the parameters is reached through an adapter.** At erased
+   `T`, `T extends Ranked<T>` is the trait `Ranked<JuxErased>`, which the
+   value (a `Level`, implementing `Ranked<Level>`) does not implement. The
+   boxing site, which knows the value's type, keeps it as an adapter: a
+   generated `Ranked<JuxErased>` that wraps the value's own `Ranked<Level>`,
+   unboxes an erased argument to `Level` on the way in, and boxes a result
+   at the parameter's position on the way out with the value's own table,
+   so what `pick` returns keeps its bounds too. A position of the bound
+   that is a type with no parameter stays as it is (`Tagged<T, String>`),
+   and so does one holding the parameter inside a Jux class (`Joins<Pair<T>>`),
+   whose class is erased with the cycle and is therefore the same type on
+   both sides. The adapter is generated for an interface from its
+   declaration, and for a class (`Shape<T extends Shape<T>>`) from its
+   dispatch trait's forwarding implementation, accessors included. The
+   erased type implements a trait whose parameter is bounded by the trait
+   itself at the erased instantiation only, where a generic implementation
+   would ask itself to hold. Unboxing to a type the value is not can only
+   come from a call the checker rejects; it would stop with an internal
+   compiler error naming the type, not a Rust panic.
+2. **A `const` parameter is kept.** A `const` argument is a constant, not a
+   type that can nest, so it never grows: an erased class keeps its `const`
+   parameters as they are (`Chunk<JuxErased, 3>`), `N` stays a
+   compile-time value and `int[N]` a fixed array.
+3. **What remains `E0438`**: a bound whose argument holds the parameter
+   inside a Rust type (`T extends Rel<Vec<T>>`). The value's own
+   `Rel<Vec<X>>` takes a `Vec<X>`; the erased code has a `Vec<JuxErased>`,
+   a different list, and the only conversion is a copy, which would break
+   the list's sharing (a write through the bound would be lost). Refusing
+   it is the correct answer, so `E0438` is kept for exactly this case
+   rather than retired.
+
+**Tests.** `examples/polymorphic_recursion_fbounded.jux` (`T extends
+Ord2<T>` with a method returning `T`, `T extends Tagged<T, String>`, the
+class-bounded `T extends Shape<T>`, and `T extends Joins<Pair<T>>`, each at
+depth 3), pinned by the output Java prints and differential case
+`87_polymorphic_recursion_fbounded`; `examples/polymorphic_recursion_const.jux`;
+`tests/ui/generic_method_dispatch_limits` holds the `Rel<Vec<T>>` case.
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10 and
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0438` row are amended; E142's
+remaining refusals are resolved, except the one above. GAPS.md gap 39i is
+closed.
+
 ---
 When you edit any addendum that touches one of the items above,
 either:
