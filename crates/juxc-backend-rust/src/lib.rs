@@ -4398,7 +4398,7 @@ fn jux_dbg_named(c: &[char], at: &mut usize, slot: u8) -> String {
     } else if name == "None" && slot != JUX_DBG_TOP {
         String::from("null")
     } else {
-        name
+        String::from(name.as_str())
     }
 }
 /// A struct's fields after its `{`, laid out as `Name(field: value, ...)`.
@@ -5201,35 +5201,35 @@ fn jux_foreign_exception(
                 None => text,
             };
             if e.kind() == ::std::io::ErrorKind::NotFound {
-                let ancestors = vec![TypeId::of::<x::FileNotFoundException>(), TypeId::of::<x::IOException>(), throwable[0], throwable[1]];
+                let ancestors = Vec::from([TypeId::of::<x::FileNotFoundException>(), TypeId::of::<x::IOException>(), throwable[0], throwable[1]]);
                 ("jux.std.exceptions.FileNotFoundException", text.clone(), ::std::boxed::Box::new(x::FileNotFoundException::new(text)), ancestors)
             } else {
-                let ancestors = vec![TypeId::of::<x::IOException>(), throwable[0], throwable[1]];
+                let ancestors = Vec::from([TypeId::of::<x::IOException>(), throwable[0], throwable[1]]);
                 ("jux.std.exceptions.IOException", text.clone(), ::std::boxed::Box::new(x::IOException::new(text)), ancestors)
             }
         }
         _ if from_std && matches!(short, "ParseIntError" | "ParseFloatError") => {
-            let mut ancestors = vec![TypeId::of::<x::NumberFormatException>(), TypeId::of::<x::IllegalArgumentException>()];
+            let mut ancestors = Vec::from([TypeId::of::<x::NumberFormatException>(), TypeId::of::<x::IllegalArgumentException>()]);
             ancestors.extend(unchecked);
             ("jux.std.exceptions.NumberFormatException", text.clone(), ::std::boxed::Box::new(x::NumberFormatException::new(text)), ancestors)
         }
         _ if from_std && matches!(short, "Utf8Error" | "FromUtf8Error" | "FromUtf16Error") => {
-            let mut ancestors = vec![TypeId::of::<x::EncodingException>()];
+            let mut ancestors = Vec::from([TypeId::of::<x::EncodingException>()]);
             ancestors.extend(unchecked);
             ("jux.std.exceptions.EncodingException", text.clone(), ::std::boxed::Box::new(x::EncodingException::new(text)), ancestors)
         }
         _ if from_std && short == "TryFromIntError" => {
-            let mut ancestors = vec![TypeId::of::<x::ArithmeticException>()];
+            let mut ancestors = Vec::from([TypeId::of::<x::ArithmeticException>()]);
             ancestors.extend(unchecked);
             ("jux.std.exceptions.ArithmeticException", text.clone(), ::std::boxed::Box::new(x::ArithmeticException::new(text)), ancestors)
         }
         _ if from_std && matches!(short, "ParseBoolError" | "ParseCharError" | "AddrParseError") => {
-            let mut ancestors = vec![TypeId::of::<x::IllegalArgumentException>()];
+            let mut ancestors = Vec::from([TypeId::of::<x::IllegalArgumentException>()]);
             ancestors.extend(unchecked);
             ("jux.std.exceptions.IllegalArgumentException", text.clone(), ::std::boxed::Box::new(x::IllegalArgumentException::new(text)), ancestors)
         }
         _ => {
-            let mut ancestors = vec![TypeId::of::<x::LibraryException>()];
+            let mut ancestors = Vec::from([TypeId::of::<x::LibraryException>()]);
             ancestors.extend(unchecked);
             let library = String::from(if from_std { "std" } else { library });
             ("jux.std.exceptions.LibraryException", text.clone(), ::std::boxed::Box::new(x::LibraryException::new(text, library)), ancestors)
@@ -6632,7 +6632,7 @@ mod jux_stack_overflow {
         unsafe {
             let mut current = sys::stack(std::ptr::null_mut(), 0);
             if sigaltstack(std::ptr::null(), &mut current) == 0 && current.flags & sys::SS_DISABLE != 0 {
-                let memory: &'static mut [u8] = Box::leak(vec![0u8; ALT_STACK].into_boxed_slice());
+                let memory: &'static mut [u8] = Box::leak(std::iter::repeat(0u8).take(ALT_STACK).collect::<Vec<u8>>().into_boxed_slice());
                 let alt = sys::stack(memory.as_mut_ptr(), ALT_STACK);
                 sigaltstack(&alt, std::ptr::null_mut());
             }

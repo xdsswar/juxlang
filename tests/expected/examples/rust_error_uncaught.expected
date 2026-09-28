@@ -1,4 +1,4 @@
 before
-Exception in thread "main" ParseFloatError: invalid float literal
+Exception in thread "main" jux.std.exceptions.NumberFormatException: invalid float literal
     at examples/rust_error_uncaught.jux:5:5
 [exit: 101]

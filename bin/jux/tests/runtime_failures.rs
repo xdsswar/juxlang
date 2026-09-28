@@ -79,10 +79,10 @@ fn a_missing_map_key_is_a_jux_panic() {
 #[test]
 fn an_uncaught_library_error_is_a_jux_exception() {
     assert_jux_failure(
-        "runtime_foreign_error_uncaught",
+        "rust_error_uncaught",
         "Exception in thread \"main\" jux.std.exceptions.NumberFormatException: invalid float literal",
     );
-    let (text, _) = run("runtime_foreign_error_uncaught");
+    let (text, _) = run("rust_error_uncaught");
     assert!(!text.contains("ParseFloatError"), "{text}");
 }
 

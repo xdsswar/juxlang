@@ -1,4 +1,0 @@
-parsing
-Exception in thread "main" jux.std.exceptions.NumberFormatException: invalid float literal
-    at examples/runtime_foreign_error_uncaught.jux:7:5
-[exit: 101]

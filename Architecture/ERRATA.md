@@ -4884,7 +4884,7 @@ installed; an uncaught library error is `NumberFormatException` with its line.
 (`foreign_debug_text_is_laid_out_the_jux_way`) compiles the prelude's
 renderer on its own and holds twenty hand-written cases.
 `examples/foreign_debug_text.jux`, `examples/foreign_errors_as_jux_exceptions.jux`
-and `examples/runtime_foreign_error_uncaught.jux` are pinned by the corpus;
+and `examples/rust_error_uncaught.jux` are pinned by the corpus;
 `examples/apps/json_lib` tests `assertThrows<NumberFormatException>`.
 `crates/juxc-lsp/src/crate_doc.rs` holds the doc rewrite to hand-written
 results and runs every doc of the `rust.std` stub (and of any directory in
