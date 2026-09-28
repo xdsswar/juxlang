@@ -669,7 +669,7 @@ constructor body have NOT run yet. A class that declares no constructor gets the
 implicit one, which still runs its parent's constructor chain.
 
 **Spec status:** §S.4.4 and §M.1.4 are corrected to match §7.3.1.
-Superseded by E1XX-GAP39f: construction now runs in Java's order, each class's
+Superseded by E140: construction now runs in Java's order, each class's
 initializers after its `super(..)`, by the user's choice of Java parity.
 
 ---
@@ -5360,10 +5360,10 @@ closed.
    editor never see them. Anywhere the member is not visible it is the
    ordinary private-access refusal, `E0414`. `E0437` is retired; its number
    is not reused. ~~An overloaded private method is not given a stand-in.~~
-   Each overload is given its own since E1XX-GAP39f.
+   Each overload is given its own since E140.
 
 The order in item 1 ("before any `init` block or constructor body") is
-superseded by E1XX-GAP39f: each class's initializers now run after its
+superseded by E140: each class's initializers now run after its
 `super(..)`, in Java's order.
 
 **Tests.** `examples/field_initializers_use_object.jux` and
@@ -5377,7 +5377,7 @@ the shape it held builds.
 retires `E0437` and narrows `E0981`. E138's "Known boundary" is resolved
 here, and E43 is resolved except for observers. GAPS.md gap 39e is closed.
 
-## E1XX-GAP39f. Construction in Java's order; overloaded private methods through a dispatch value
+## E140. Construction in Java's order; overloaded private methods through a dispatch value
 
 **Conflict.** E21 ran every field initializer of a hierarchy before any
 constructor body, a deliberate divergence from Java: a base constructor

@@ -5227,7 +5227,7 @@ impl RustEmitter {
         let writes_back = lends.contains(&MutLend::WriteBack);
         // This call's overload pick, taken now: emitting the receiver and the
         // arguments below emits their own calls, and each re-arms the pick
-        // for itself (ERRATA E1XX-GAP39f).
+        // for itself (ERRATA E140).
         let own_suffix = self.pending_method_suffix.take();
         self.w.push_str("({ let __jux_recv = ");
         // Value position → the wrapper-field read appends `.clone()`, producing

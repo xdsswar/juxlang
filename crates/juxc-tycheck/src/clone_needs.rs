@@ -1719,7 +1719,7 @@ fn collect_thrown(b: &Block, out: &mut HashSet<String>) {
 /// makes no difference WHEN it runs. The backend relies on that: a
 /// constructor of a class in an `extends` hierarchy normally runs its body
 /// again against the finished object, in Java's construction order
-/// (JUX-LANG-V1 §7.3.1, ERRATA E1XX-GAP39f), which copies its parameters
+/// (JUX-LANG-V1 §7.3.1, ERRATA E140), which copies its parameters
 /// (they are used once to build the value and once more by the replay). A
 /// pure constructor is left in the builder, where each parameter is moved
 /// exactly once, so a hierarchy over a type that cannot be copied can still

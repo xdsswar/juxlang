@@ -1667,7 +1667,7 @@ public class Singleton {
 
 **Init blocks.** For initialization logic shared across multiple constructors, see `JUX-MISSING-DEFS-ADDENDUM.md` §M.1 (`init { ... }` blocks).
 
-**Construction order.** Java's (`ERRATA.md` E2, E1XX-GAP39f; `JUX-SEMANTICS-ADDENDUM.md` §S.4.4). `new C(args)` initializes in this order:
+**Construction order.** Java's (`ERRATA.md` E2, E140; `JUX-SEMANTICS-ADDENDUM.md` §S.4.4). `new C(args)` initializes in this order:
 
 1. **`super(args)` resolves first** — the parent's construction (its own `super(..)`, field initializers, init blocks, and constructor body) completes before any code of `C` runs. (`this(...)` delegation instead runs the named sibling constructor's full chain, and `C`'s initializers run once, in the constructor that calls `super`.)
 2. **Field initializers and `init` blocks** of `C` run in textual order, interleaved as they are written. An initializer may use the object being built: call its methods, read the fields initialized before it, hand `this` out (`Worker w = new Worker(this);`), build an anonymous class or a lambda over it. A field read before its initializer has run holds its type's default value; an initializer that reads one directly whose type has no default value (a class, an interface, a function type, a type parameter) is `E0499` (`ERRATA.md` E139).
@@ -1690,7 +1690,7 @@ public class Child extends Base {
 A subclass field whose type has no default value (a class, an interface, a
 type parameter) holds none yet, and reading it throws `IllegalStateException`
 ("field 'v' of Child read before it was initialized") where Java reads `null`
-(`ERRATA.md` E1XX-GAP39f). Calling an overridable method from a constructor is
+(`ERRATA.md` E140). Calling an overridable method from a constructor is
 worth avoiding for exactly this reason.
 
 **Record constructors.** Records get an implicit primary constructor from their declaration plus optional compact-form validation; see §7.6.

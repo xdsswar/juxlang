@@ -24,7 +24,7 @@ public void main() {
     print(h.get());
     // The constructor dispatches to the OVERRIDE, and reads 0, as Java does:
     // `Child`'s field initializers run after `Base`'s constructor (ERRATA
-    // E1XX-GAP39f).
+    // E140).
     var c = new Child();
     c.show();
 }

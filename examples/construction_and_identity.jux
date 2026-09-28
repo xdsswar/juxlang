@@ -1,5 +1,5 @@
 // Construction order, value copies and identity (JUX-LANG-V1 §7.3.1, §7.7.2,
-// OPERATORS §O.4.1, ERRATA E1XX-GAP39f).
+// OPERATORS §O.4.1, ERRATA E140).
 //
 // - Construction is Java's: each class, root first, runs its `super(..)`,
 //   its field initializers and `init` blocks, then its body. A base

@@ -25,7 +25,7 @@ const TYPE_PLACEHOLDER: &str = "__JuxPrivT";
 pub(crate) fn apply(units: &mut [CompilationUnit], accesses: &[PrivateAccess]) -> bool {
     let mut any = false;
     for (k, access) in accesses.iter().enumerate() {
-        // Room for each overload's own source index (ERRATA E1XX-GAP39f).
+        // Room for each overload's own source index (ERRATA E140).
         let index = STAND_IN_INDEX_BASE + (k as u32) * OVERLOAD_SLOTS;
         for unit in units.iter_mut().filter(|u| !u.is_external) {
             let pkg = unit
@@ -90,7 +90,7 @@ fn declare(class: &mut ClassDecl, access: &PrivateAccess, index: u32) -> bool {
     // One stand-in per private overload, in the order they are declared, all
     // under the one hidden name: they are an overload group of their own, and
     // each calls the overload with its own parameter list (ERRATA
-    // E1XX-GAP39f).
+    // E140).
     let originals: Vec<juxc_ast::FnDecl> = class
         .methods
         .iter()

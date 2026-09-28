@@ -1051,7 +1051,7 @@ impl RustEmitter {
         // (`B(String id) { super(id); }`), which have to be bound to the
         // values passed here first; unbound, `id` read the field of that name.
         // A parent with no constructor of its own: its ancestors' part, then
-        // its own initializers and `init` blocks (ERRATA E1XX-GAP39f).
+        // its own initializers and `init` blocks (ERRATA E140).
         if ctor.is_none() {
             self.emit_ancestor_ctor_tails(&parent, &[]);
             let prev_wrapper = std::mem::replace(&mut self.emitting_wrapper_class, true);
@@ -1110,7 +1110,7 @@ impl RustEmitter {
     }
 
     /// What `class_decl`'s ancestors' construction does, as far as it can
-    /// tell (`juxc_tycheck::field_init`, ERRATA E1XX-GAP39f).
+    /// tell (`juxc_tycheck::field_init`, ERRATA E140).
     pub(crate) fn ancestor_facts(&self, class_decl: &juxc_ast::ClassDecl) -> juxc_tycheck::field_init::AncestorFacts {
         let Some(parent) = class_decl
             .extends
@@ -1130,7 +1130,7 @@ impl RustEmitter {
     /// The instance fields (indices into its `fields`) whose initializers run
     /// against the finished handle, at their place in the class's
     /// construction, rather than in the builder (`juxc_tycheck::field_init`,
-    /// ERRATA E139, E1XX-GAP39f).
+    /// ERRATA E139, E140).
     pub(crate) fn deferred_field_inits(&self, class_decl: &juxc_ast::ClassDecl) -> Vec<usize> {
         juxc_tycheck::field_init::deferred_indices(
             &class_decl.fields,
@@ -1159,7 +1159,7 @@ impl RustEmitter {
     /// The part of a class's construction between its `super(..)` and the
     /// rest of its constructor body: its deferred field initializers (each
     /// `this.f = <init>;`) and its `init` blocks, in the order they are
-    /// written (JUX-LANG-V1 §7.3.1, ERRATA E1XX-GAP39f).
+    /// written (JUX-LANG-V1 §7.3.1, ERRATA E140).
     pub(crate) fn initializer_sequence(&self, class_decl: &juxc_ast::ClassDecl) -> Vec<juxc_ast::Stmt> {
         let mut items: Vec<(u32, Vec<juxc_ast::Stmt>)> = Vec::new();
         for i in self.deferred_field_inits(class_decl) {
@@ -1213,7 +1213,7 @@ impl RustEmitter {
         // A class that extends another, or that another extends, runs its
         // `init` blocks and constructor body against the finished handle, root
         // class first, each class after its ancestors' part (JUX-LANG-V1
-        // §7.3.1, ERRATA E1XX-GAP39f). Run inside the inner builder instead, a
+        // §7.3.1, ERRATA E140). Run inside the inner builder instead, a
         // child's body ran before its parent's.
         //
         // A body that only hands its parameters on (`super(p)` and
@@ -1230,7 +1230,7 @@ impl RustEmitter {
         }
         // A field initializer that runs against the handle runs before the
         // body, which then has to as well (ERRATA E139); so does a body
-        // whose ancestors' construction reaches the object (E1XX-GAP39f).
+        // whose ancestors' construction reaches the object (E140).
         if self.chain_defers_field_inits(class_decl) {
             return true;
         }
@@ -1302,7 +1302,7 @@ impl RustEmitter {
         } else {
             let super_args = extract_super_args(ctor).unwrap_or_default();
             self.emit_ancestor_ctor_tails(class_decl, &super_args);
-            // Java's order (ERRATA E1XX-GAP39f): `super(..)`, then this
+            // Java's order (ERRATA E140): `super(..)`, then this
             // class's initializers and `init` blocks, then its body.
             self.emit_initializer_sequence(class_decl);
             let body: Vec<juxc_ast::Stmt> = ctor.body.statements.to_vec();
@@ -1511,7 +1511,7 @@ impl RustEmitter {
                 let prev_wrapper = std::mem::replace(&mut self.emitting_wrapper_class, true);
                 // This class's initializers and `init` blocks, after its
                 // ancestors' part and before its body: once per object, in the
-                // constructor that calls `super` (ERRATA E1XX-GAP39f).
+                // constructor that calls `super` (ERRATA E140).
                 if own_seq {
                     self.emit_initializer_sequence(class_decl);
                 }

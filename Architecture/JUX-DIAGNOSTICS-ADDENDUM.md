@@ -530,7 +530,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0496`  | Variant arguments without an enum constructor, a payload variant in an enum with one, or a generic enum with one | LANG-V1 §7.7.4 / `ERRATA.md` E34 |
 | `E0497`  | A cycle among static-field initializers: no order initializes them | Semantics §S.4.2 / `ERRATA.md` E89 |
 | `E0498`  | A `type` alias that stands for itself, directly or through other aliases (`type A = B; type B = A;`): it names no type | Type system §T.1 / `ERRATA.md` E133 |
-| `E0499`  | An instance field initializer reads a field of its own class that holds no value yet: one declared after it, or one only the constructor body assigns (it runs after the class's initializers), whose type has no default value (a class, an interface, a function type, a type parameter) | LANG-V1 §7.3.1 / `ERRATA.md` E139, E1XX-GAP39f |
+| `E0499`  | An instance field initializer reads a field of its own class that holds no value yet: one declared after it, or one only the constructor body assigns (it runs after the class's initializers), whose type has no default value (a class, an interface, a function type, a type parameter) | LANG-V1 §7.3.1 / `ERRATA.md` E139, E140 |
 | `E0480`  | `s[i]` on a String: pick `bytes()` or `chars()`          | Semantics §S.3.2 |
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |

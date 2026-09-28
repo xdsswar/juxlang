@@ -7,7 +7,7 @@
 // interface and polymorphic-base payloads; a collection is one too.
 //
 // Construction runs in Java's order (JUX-LANG-V1 §7.3.1, ERRATA
-// E1XX-GAP39f): the base class's field initializers and constructor body,
+// E140): the base class's field initializers and constructor body,
 // then the derived class's.
 
 class Log {

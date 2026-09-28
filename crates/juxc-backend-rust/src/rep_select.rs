@@ -139,10 +139,10 @@ impl Index<'_> {
 ///   struct being built (it calls a method on `this`, or hands `this` to a
 ///   lambda), because its stores then go through the handle;
 /// - a class in an `extends` hierarchy whose constructor does more than store
-///   its parameters (it runs against the handle, ERRATA E1XX-GAP39f);
+///   its parameters (it runs against the handle, ERRATA E140);
 /// - a field initializer that runs against the handle, its own or an
 ///   ancestor's, or an ancestor's construction that reaches the object
-///   (ERRATA E139, E1XX-GAP39f).
+///   (ERRATA E139, E140).
 pub(crate) fn compute_cell_classes(
     units: &[juxc_ast::CompilationUnit],
     expr_types: &HashMap<Span, Ty>,
@@ -280,7 +280,7 @@ fn unit_package(unit: &juxc_ast::CompilationUnit) -> String {
 
 /// Whether constructing `fqn` runs a field initializer against the handle
 /// (`juxc_tycheck::field_init`, its own or an ancestor's), or its ancestors'
-/// construction reaches the object (ERRATA E1XX-GAP39f).
+/// construction reaches the object (ERRATA E140).
 fn defers_field_inits(fqn: &str, index: &Index<'_>, symbols: &SymbolTable, depth: usize) -> bool {
     if depth > 64 {
         return false;

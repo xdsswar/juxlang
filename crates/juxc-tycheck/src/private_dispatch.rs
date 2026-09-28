@@ -89,7 +89,7 @@ impl PrivateDispatch<'_> {
             PrivateAccess { class: decl.to_string(), member: member.clone(), is_method: false }
         } else if let Some((method, decl)) = method {
             // An overloaded method: the overload this call picked decides
-            // (ERRATA E1XX-GAP39f). Each private overload has a stand-in of
+            // (ERRATA E140). Each private overload has a stand-in of
             // its own, all under the one hidden name, so the stand-ins are an
             // overload group of their own and the call picks among them as it
             // picked here.

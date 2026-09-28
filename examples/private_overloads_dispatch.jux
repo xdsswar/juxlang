@@ -1,5 +1,5 @@
 // Overloaded private methods of a class with subclasses, reached through
-// the class's dispatch value (ERRATA E1XX-GAP39f): from an anonymous class
+// the class's dispatch value (ERRATA E140): from an anonymous class
 // written in the class, and from the class's own body through another value
 // of it. Each private overload has a hidden stand-in of its own, and a call
 // picks among them by its arguments as it would among the methods: `int`,

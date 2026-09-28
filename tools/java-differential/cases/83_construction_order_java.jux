@@ -1,4 +1,4 @@
-// Construction in Java's order (ERRATA E1XX-GAP39f): for `new C(..)`, each
+// Construction in Java's order (ERRATA E140): for `new C(..)`, each
 // class of the hierarchy, root first, runs its `super(..)`, then its own field
 // initializers and `init` blocks in the order they are written, then the rest
 // of its constructor body. `this(..)` runs the initializers once, in the

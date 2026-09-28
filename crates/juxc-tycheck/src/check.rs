@@ -852,7 +852,7 @@ impl<'a> Checker<'a> {
     }
 
     /// `E0499`: an instance field initializer reading a field that holds no
-    /// value yet (ERRATA E139, E1XX-GAP39f). A class's initializers run in
+    /// value yet (ERRATA E139, E140). A class's initializers run in
     /// the order they are written, before its constructor body (JUX-LANG-V1
     /// §7.3.1), so a field of its own declared later, or one only its
     /// constructor assigns, is unset when the initializer reads it; an
@@ -894,7 +894,7 @@ impl<'a> Checker<'a> {
                 // Its own field: unset when it comes later, or has no
                 // initializer and no `init` block before this one assigns it.
                 // An inherited one is set: the parent's constructor has run
-                // (ERRATA E1XX-GAP39f).
+                // (ERRATA E140).
                 let (unset, tref) = match instance.iter().position(|g| g.name.text == name) {
                     Some(j) => {
                         let assigned_before = class.init_blocks.iter().any(|b| {

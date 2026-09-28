@@ -1,4 +1,4 @@
-//! When each instance field initializer runs (ERRATA E139, E1XX-GAP39f).
+//! When each instance field initializer runs (ERRATA E139, E140).
 //!
 //! Construction follows Java (JUX-LANG-V1 §7.3.1): each class of the
 //! hierarchy, root first, runs its `super(..)`, then its own field
