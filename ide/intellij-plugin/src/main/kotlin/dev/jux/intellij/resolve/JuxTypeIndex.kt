@@ -263,6 +263,16 @@ object JuxTypeIndex {
             if (decl.name == name) return decl
         }
 
+        // An import alias means its target (ERRATA E133): `import a.b.C as D;`
+        // makes `D` the type `a.b.C`, which the index knows by `C`.
+        val imported = JuxImportSupport.importedTarget(file, name)
+        val importedSimple = imported?.substringAfterLast('.')
+        if (imported != null && importedSimple != name && importedSimple != null) {
+            val pkg = imported.substringBeforeLast('.', "")
+            return candidateTypes(context.project, importedSimple)
+                .firstOrNull { JuxAutoImport.packageOf(it) == pkg }
+        }
+
         // §M.16.1: a unit of the library realm resolves against the realm only,
         // so a program's own `class T` is invisible from inside `jux.std`.
         val hereIsLibrary = isLibraryRealmPackage(JuxAutoImport.packageOfFile(file))
@@ -273,8 +283,9 @@ object JuxTypeIndex {
         // Rung 2, second half: an explicit import decides between same-named
         // types. Two `Animal`s in one project is not a mistake, and the file
         // already says which one it means -- reading `import poll.lib.Animal;`
-        // is the difference between a correct answer and a coin toss.
-        val importedPackage = importedPackageFor(file, name)
+        // (or the grouped `import poll.lib.{Animal, Barn};`) is the difference
+        // between a correct answer and a coin toss.
+        val importedPackage = imported?.substringBeforeLast('.', "")?.ifEmpty { null }
         if (importedPackage != null) {
             candidates.firstOrNull { JuxAutoImport.packageOf(it) == importedPackage }
                 ?.let { return it }
@@ -352,24 +363,19 @@ object JuxTypeIndex {
     }
 
     /**
-     * The package an explicit `import <pkg>.<name>;` in [file] binds [name]
-     * to, or null when the file imports it under no package (or not at all).
+     * The type named [name] as seen from [context], with a `type` alias
+     * expanded to the declaration it finally names (ERRATA E133): what every
+     * question about a type's KIND or MEMBERS wants -- `implements Sh` with
+     * `type Sh = Shape;` implements the interface `Shape`, not "a type alias".
      *
-     * Wildcard imports are deliberately not consulted: they bind whatever is
-     * there, so they cannot break a tie between two candidates.
+     * Null when [findType] is, and when an alias names no declared type (an
+     * array, a function type, a cycle): the callers stay silent on those, as
+     * on any name they cannot resolve. Navigation keeps [findType], so
+     * go-to-declaration still lands on the alias the user wrote.
      */
-    private fun importedPackageFor(file: PsiFile, name: String): String? {
-        for (import in JuxImportSupport.collectImports(file)) {
-            if (import.alwaysKeep) continue // a wildcard settles nothing
-            val path = import.text
-                .substringAfter("import")
-                .substringBefore(';')
-                .trim()
-            if (path.substringAfterLast('.') != name) continue
-            val pkg = path.substringBeforeLast('.', "")
-            if (pkg.isNotEmpty()) return pkg
-        }
-        return null
+    fun findTypeThroughAliases(context: PsiElement, name: String): JuxTypeDeclaration? {
+        val found = findType(context, name) ?: return null
+        return JuxTypeEngine.aliasTargetDeclaration(found)
     }
 
     /** Bare names of every declared type in the project (for completion). */

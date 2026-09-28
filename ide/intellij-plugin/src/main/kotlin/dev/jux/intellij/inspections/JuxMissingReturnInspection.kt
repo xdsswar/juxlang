@@ -62,7 +62,7 @@ class JuxMissingReturnInspection : LocalInspectionTool() {
         }
 
     private fun containsYield(body: PsiElement): Boolean =
-        PsiTreeUtil.collectElements(body) { it.elementType === T.YIELD_KW }.isNotEmpty()
+        PsiTreeUtil.collectElements(body) { JuxGenerators.isYieldStatementKeyword(it) }.isNotEmpty()
 
     /** Adds `return <default>;` before the method's closing brace, the value as a template stop. */
     private class AddReturnFix(method: PsiElement) : LocalQuickFixAndIntentionActionOnPsiElement(method) {

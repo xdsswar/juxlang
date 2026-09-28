@@ -96,7 +96,7 @@ class JuxInlayHintsProvider : InlayParameterHintsProvider {
     /** Parameter-name lists of the constructors of `new T(…)` taking [argCount] arguments. */
     private fun constructors(newExpr: PsiElement, argCount: Int): List<List<String>> {
         val typeRef = newExpr.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return emptyList()
-        val type = JuxTypeIndex.findType(newExpr, JuxHierarchy.bareTypeName(typeRef)) ?: return emptyList()
+        val type = JuxTypeIndex.findTypeThroughAliases(newExpr, JuxHierarchy.bareTypeName(typeRef)) ?: return emptyList()
         val ctors = JuxHierarchy.directChildren(type, E.CONSTRUCTOR_DECLARATION)
         if (ctors.isNotEmpty()) {
             return ctors.filter { JuxHierarchy.arity(it) == argCount }.map { paramNames(it) }

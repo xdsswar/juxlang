@@ -42,10 +42,24 @@ object JuxGenerators {
         return null
     }
 
+    /**
+     * Whether [e] is the keyword of a `yield` STATEMENT.
+     *
+     * The lexer makes every `yield` a keyword, but after a dot it is a member
+     * name: `await Task.yield();` calls the built-in that hands the loop back
+     * once (ERRATA E131), and a function calling it is no generator. Only the
+     * keyword that opens a statement yields a value.
+     */
+    fun isYieldStatementKeyword(e: PsiElement): Boolean {
+        if (e.elementType !== T.YIELD_KW) return false
+        val stmt = e.parent ?: return false
+        return stmt.elementType === E.EXPRESSION_STATEMENT && stmt.firstChild === e
+    }
+
     /** The `yield` keywords that belong to [function] itself (not to a nested lambda or class). */
     fun ownYields(function: PsiElement): List<PsiElement> {
         val body = function.node.findChildByType(E.CODE_BLOCK)?.psi ?: return emptyList()
-        return PsiTreeUtil.collectElements(body) { it.elementType === T.YIELD_KW && owner(it) === function }.toList()
+        return PsiTreeUtil.collectElements(body) { isYieldStatementKeyword(it) && owner(it) === function }.toList()
     }
 
     /** Whether [function] is a generator: a named function or method with a `yield` of its own. */

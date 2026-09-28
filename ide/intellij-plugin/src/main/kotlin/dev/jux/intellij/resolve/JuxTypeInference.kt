@@ -41,7 +41,7 @@ object JuxTypeInference {
             val enclosing = PsiTreeUtil.getParentOfType(context, JuxTypeDeclaration::class.java) ?: return null
             if (receiverWord == "super") {
                 val parentName = JuxHierarchy.superTypeNames(enclosing).firstOrNull() ?: return null
-                val parent = JuxTypeIndex.findType(context, parentName) ?: return null
+                val parent = JuxTypeIndex.findTypeThroughAliases(context, parentName) ?: return null
                 return Target(parent, isStatic = false)
             }
             return Target(enclosing, isStatic = false)
@@ -51,12 +51,12 @@ object JuxTypeInference {
         val decl = resolveValueDecl(receiverWord, context)
         if (decl != null) {
             val typeName = declaredTypeName(decl) ?: return null
-            val type = JuxTypeIndex.findType(context, typeName) ?: return null
+            val type = JuxTypeIndex.findTypeThroughAliases(context, typeName) ?: return null
             return Target(type, isStatic = false)
         }
 
         // Otherwise the word may name a TYPE → static-member access.
-        val type = JuxTypeIndex.findType(context, receiverWord) ?: return null
+        val type = JuxTypeIndex.findTypeThroughAliases(context, receiverWord) ?: return null
         return Target(type, isStatic = true)
     }
 
@@ -207,7 +207,7 @@ object JuxTypeInference {
                 else -> memberTypeInfo(info, step, context) ?: return null
             }
         }
-        val decl = JuxTypeIndex.findType(context, info.bare) ?: return null
+        val decl = JuxTypeIndex.findTypeThroughAliases(context, info.bare) ?: return null
         return Target(decl, isStatic = false)
     }
 
@@ -225,7 +225,7 @@ object JuxTypeInference {
 
     /** The written type of [name] as a member of [info] — a field/property type or a return type. */
     private fun memberTypeInfo(info: TypeInfo, name: String, context: PsiElement): TypeInfo? {
-        val owner = JuxTypeIndex.findType(context, info.bare) ?: return null
+        val owner = JuxTypeIndex.findTypeThroughAliases(context, info.bare) ?: return null
         val member = JuxHierarchy.allMembers(owner)
             .firstOrNull { (it as? JuxNamedElement)?.name == name } ?: return null
         // A method's first TYPE_REFERENCE is its return type; a field's or a

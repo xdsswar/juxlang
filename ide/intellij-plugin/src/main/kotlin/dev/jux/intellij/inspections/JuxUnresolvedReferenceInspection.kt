@@ -27,6 +27,7 @@ import dev.jux.intellij.quickfix.JuxCreateVariables
 import dev.jux.intellij.quickfix.JuxMethodCreator
 import dev.jux.intellij.psi.JuxNamedElement
 import dev.jux.intellij.resolve.JuxReference
+import dev.jux.intellij.resolve.JuxTypeEngine
 import dev.jux.intellij.resolve.JuxTypeIndex
 
 /**
@@ -145,7 +146,38 @@ class JuxUnresolvedReferenceInspection : LocalInspectionTool() {
         ) return false
         if (name in definedNames || name in importedNames) return false
         if (isProjectDeclared(name)) return false
+        if (isPackageHead(element, name)) return false
         return !isBlind(element)
+    }
+
+    /**
+     * True when [element] is the first segment of a fully-qualified name
+     * written in an expression: `rust.std.File.open(p)`,
+     * `app.model.Circle.unit()`. The head names a package, not a value, and a
+     * qualified static call behaves exactly as the imported one (gap 6).
+     *
+     * `rust` and `jux` are the library realms (§M.16.1): their stubs depend on
+     * what the machine has built, so the head is accepted without them. Any
+     * other head must spell, up to the first capitalized segment, a package
+     * that declares that type.
+     */
+    private fun isPackageHead(element: PsiElement, name: String): Boolean {
+        val segments = ArrayList<String>()
+        segments.add(name)
+        var cur: PsiElement = element
+        var parent = cur.parent
+        while (parent != null && parent.elementType === E.FIELD_ACCESS_EXPRESSION && parent.firstChild === cur) {
+            val member = parent.lastChild?.takeIf { it.elementType !== JuxTokenTypes.DOT }?.text ?: break
+            segments.add(member)
+            cur = parent
+            parent = cur.parent
+        }
+        if (segments.size < 2) return false
+        if (name == "rust" || name == "jux") return true
+        val typeAt = segments.indexOfFirst { it.firstOrNull()?.isUpperCase() == true }
+        if (typeAt < 1) return false
+        val pkg = segments.subList(0, typeAt).joinToString(".")
+        return JuxTypeEngine.findTypeByFqn(element, pkg, segments[typeAt]) != null
     }
 
     /**

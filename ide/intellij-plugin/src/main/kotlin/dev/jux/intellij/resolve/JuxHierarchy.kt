@@ -107,7 +107,7 @@ object JuxHierarchy {
         for ((ref, _) in supertypeReferences(type)) {
             val args = typeArguments(ref)
             if (args.isEmpty()) continue
-            val superDecl = JuxTypeIndex.findType(ref, bareTypeName(ref)) ?: continue
+            val superDecl = JuxTypeIndex.findTypeThroughAliases(ref, bareTypeName(ref)) ?: continue
             val params = typeParameterNames(superDecl)
             val bound = minOf(params.size, args.size)
             for (i in 0 until bound) {
@@ -319,7 +319,9 @@ object JuxHierarchy {
             val name = queue.removeFirst()
             if (!seen.add(name)) continue
             if (name == ancestor) return true
-            val decl = JuxTypeIndex.findType(type, name) ?: continue
+            val decl = JuxTypeIndex.findTypeThroughAliases(type, name) ?: continue
+            // `implements Sh` with `type Sh = Shape;` inherits from `Shape`.
+            if (decl.name == ancestor) return true
             queue.addAll(superTypeNames(decl))
         }
         return false
@@ -401,7 +403,7 @@ object JuxHierarchy {
         while (queue.isNotEmpty()) {
             val (superName, owner) = queue.removeFirst()
             if (!visited.add(superName)) continue
-            val superDecl = JuxTypeIndex.findType(owner, superName) ?: continue
+            val superDecl = JuxTypeIndex.findTypeThroughAliases(owner, superName) ?: continue
             for (m in directChildren(superDecl, JuxElementTypes.METHOD_DECLARATION)) {
                 val mName = (m as? JuxNamedElement)?.name ?: continue
                 if (mName == name && arity(m) == arity && isOverridable(m)) return m
@@ -448,7 +450,7 @@ object JuxHierarchy {
                 if (seen.add(name)) out.add(c)
             }
             for (sn in superTypeNames(t)) {
-                JuxTypeIndex.findType(t, sn)?.let { queue.add(it) }
+                JuxTypeIndex.findTypeThroughAliases(t, sn)?.let { queue.add(it) }
             }
         }
         return out

@@ -22,9 +22,19 @@ object JuxSubtypes {
     /** supertype simple-name → the project types that directly name it. */
     fun buildIndex(project: Project): Map<String, List<JuxTypeDeclaration>> {
         val m = HashMap<String, MutableList<JuxTypeDeclaration>>()
-        JuxTypeIndex.forEachType(project, GlobalSearchScope.allScope(project)) { t ->
+        val all = ArrayList<JuxTypeDeclaration>()
+        JuxTypeIndex.forEachType(project, GlobalSearchScope.allScope(project)) { all.add(it) }
+        // `class Square implements Sh` with `type Sh = Shape;` is a subtype of
+        // `Shape` (ERRATA E133). Only a name some alias declares is resolved,
+        // so the common case stays a pure name walk.
+        val aliasNames = all.filter { JuxTypeEngine.isTypeAlias(it) }.mapNotNullTo(HashSet()) { it.name }
+        for (t in all) {
             for (sup in JuxHierarchy.superTypeNames(t)) {
                 m.getOrPut(sup) { ArrayList() }.add(t)
+                if (sup in aliasNames) {
+                    val target = JuxTypeIndex.findTypeThroughAliases(t, sup)?.name
+                    if (target != null && target != sup) m.getOrPut(target) { ArrayList() }.add(t)
+                }
             }
         }
         return m

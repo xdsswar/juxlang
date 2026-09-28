@@ -128,7 +128,7 @@ object JuxOverrideMembers {
     ) {
         val own = JuxHierarchy.typeParameterNames(type).toHashSet()
         for ((ref, _) in JuxHierarchy.supertypeReferences(type)) {
-            val decl = JuxTypeIndex.findType(ref, JuxHierarchy.bareTypeName(ref)) ?: continue
+            val decl = JuxTypeIndex.findTypeThroughAliases(ref, JuxHierarchy.bareTypeName(ref)) ?: continue
             val args = JuxHierarchy.typeArguments(ref)
                 .map { JuxHierarchy.substituteTypeParams(it, outerSubst) }
             val params = JuxHierarchy.typeParameterNames(decl)

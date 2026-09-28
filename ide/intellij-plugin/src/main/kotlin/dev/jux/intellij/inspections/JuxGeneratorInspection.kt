@@ -41,7 +41,7 @@ class JuxGeneratorInspection : LocalInspectionTool() {
         object : PsiElementVisitor() {
             override fun visitElement(element: PsiElement) {
                 when (element.elementType) {
-                    T.YIELD_KW -> checkYield(element, holder)
+                    T.YIELD_KW -> if (JuxGenerators.isYieldStatementKeyword(element)) checkYield(element, holder)
                     E.METHOD_DECLARATION -> checkGenerator(element, holder)
                     E.RETURN_STATEMENT -> checkReturn(element, holder)
                 }

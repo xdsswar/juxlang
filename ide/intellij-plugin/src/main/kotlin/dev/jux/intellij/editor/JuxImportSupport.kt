@@ -47,6 +47,12 @@ object JuxImportSupport {
         val wildcard: Boolean,
         /** The members of a grouped import; empty for any other form. */
         val items: List<GroupItem>,
+        /**
+         * Each bound name's target, fully qualified: `D` -> `a.b.C` for
+         * `import a.b.C as D;`, `Z` -> `a.b.Y` for `import a.b.{ Y as Z };`.
+         * Empty for a wildcard, which binds whatever the package holds.
+         */
+        val targets: Map<String, String> = emptyMap(),
     ) {
         /** Kept for the callers that only ask "can this be judged at all?". */
         val alwaysKeep: Boolean get() = wildcard
@@ -318,18 +324,28 @@ object JuxImportSupport {
         val items = if (text.contains('{')) groupItems(text) else emptyList()
         val alias = aliasName(stmt)
 
+        val targets = LinkedHashMap<String, String>()
         when {
             hasWildcard -> Unit
-            items.isNotEmpty() -> items.forEach { bound.add(it.boundName) }
-            alias != null -> bound.add(alias)
-            else -> path.substringAfterLast('.').takeIf { it.isNotEmpty() }?.let { bound.add(it) }
+            items.isNotEmpty() -> items.forEach {
+                bound.add(it.boundName)
+                targets[it.boundName] = "$path." + it.text.substringBefore(" as ").trim()
+            }
+            alias != null -> {
+                bound.add(alias)
+                targets[alias] = path
+            }
+            else -> path.substringAfterLast('.').takeIf { it.isNotEmpty() }?.let {
+                bound.add(it)
+                targets[it] = path
+            }
         }
 
         // Sort key: the path, then the whole text (so aliases of the same path
         // order stably). Dedup key: whitespace-collapsed full text.
         val sortKey = (path + " " + text).lowercase()
         val dedupKey = text.replace(WHITESPACE, " ")
-        return ImportInfo(stmt, text, path.removeSuffix(".*"), sortKey, dedupKey, bound, hasWildcard, items)
+        return ImportInfo(stmt, text, path.removeSuffix(".*"), sortKey, dedupKey, bound, hasWildcard, items, targets)
     }
 
     /** The identifier after a trailing `as` in `import a.b.C as D`, or null. */
@@ -372,6 +388,19 @@ object JuxImportSupport {
             start = end + 1
         }
         return result
+    }
+
+    /**
+     * The fully-qualified type [name] is bound to by an explicit import of
+     * [file] (single, grouped or aliased), or null. `import a.b.C as D;`
+     * answers `a.b.C` for `D`, which is how an import alias means its target
+     * everywhere (ERRATA E133).
+     */
+    fun importedTarget(file: PsiFile, name: String): String? {
+        for (import in collectImports(file)) {
+            import.targets[name]?.let { return it }
+        }
+        return null
     }
 
     val WHITESPACE = Regex("\\s+")
