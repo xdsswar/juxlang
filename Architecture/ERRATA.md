@@ -4342,7 +4342,7 @@ catchable. `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4: `E0905` is raised, and the
 `E0900` row names the leak guard as a third source. GAPS.md gap 33 is closed.
 ---
 
-## E1XX-GAP35. The release-blocker sweep: what a valid program could not do, and what an invalid one was told
+## E131. The release-blocker sweep: what a valid program could not do, and what an invalid one was told
 
 **Conflict.** The 2026-09-24 release-blocker list (FEATURES-TODO) was
 re-probed against the built toolchain on 2026-09-27. Most items had been

@@ -402,7 +402,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0201`  | Expression or type nesting exceeds the depth limit    | Grammar §A.2                   |
 | `E0202`  | Numeric literal out of range for its storage: beyond 64 bits, or not fitting the integer slot it flows into (`byte b = 300;`, `u32 x = -1;`) | Grammar §A.1.4 / Semantics §S.2.6 |
 | `E0203`  | Reserved keyword that this phase does not implement (`move`, `volatile`) | see below |
-| `E0204`  | A Jux keyword written as the name of a parameter or local variable (`int f(int type)`, `int record = 1;`); reported once, and later uses of the name read as the name | Grammar §A.1.3 / `ERRATA.md` E1XX-GAP35 |
+| `E0204`  | A Jux keyword written as the name of a parameter or local variable (`int f(int type)`, `int record = 1;`); reported once, and later uses of the name read as the name | Grammar §A.1.3 / `ERRATA.md` E131 |
 | `E0210`  | `super(...)` or `this(...)` not first statement      | Grammar §A.2.4                 |
 | `E0211`  | Constructor missing required `super(...)` call      | Grammar §A.2.4                 |
 | `E0212`  | Varargs (`T...`) parameter is not the last parameter | Entry Points §E (varargs) |
@@ -435,7 +435,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0324`  | `@entry` cannot select this declaration as the entry point (signature, or not a free function) | Entry Points §E.6 |
 | `E0325`  | `freestanding = true` but no `@entry` function declared *(reserved)* | Entry Points §E.6 |
 | `E0326`  | A class member named `main` with an entry-shaped signature is not `static` | Entry Points §E.1.2.2 |
-| `E0327`  | A program built as a binary has no entry point: no `main`, no class `static main`, no `@entry` function and no top-level statements (an empty file included). Raised by the build, since the same file is a valid library member | Entry Points §E.1 / `ERRATA.md` E1XX-GAP35 |
+| `E0327`  | A program built as a binary has no entry point: no `main`, no class `static main`, no `@entry` function and no top-level statements (an empty file included). Raised by the build, since the same file is a valid library member | Entry Points §E.1 / `ERRATA.md` E131 |
 | `E0305`  | Identifier is a Rust keyword and cannot be lowered    | Bindgen §G.2                   |
 | `E0306`  | Stub declaration collides with a user declaration in the same package *(reserved)* | Bindgen §G.12 |
 
@@ -468,7 +468,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0431`  | Invalid method-modifier combination                  | classes-rules §1.4  |
 | `E0432`  | Invalid visibility on a top-level type (`private` / `protected`) | classes-rules §1.1 / §3.1 |
 | `E0433`  | Override narrows visibility relative to the overridden method | classes-rules §1.4   |
-| `E0434`  | Cyclic `extends` chain: a class that is its own ancestor, or an interface whose `extends` list leads back to itself | classes-rules §1.2 / `ERRATA.md` E1XX-GAP35 |
+| `E0434`  | Cyclic `extends` chain: a class that is its own ancestor, or an interface whose `extends` list leads back to itself | classes-rules §1.2 / `ERRATA.md` E131 |
 | `E0435`  | Interface not usable as a dyn-dispatched value type (generic interface / generic method) | Interface dispatch, stage 1 |
 | `E0436`  | Exception-hierarchy class also `implements` an interface (deferred combination) | Interface dispatch, stage 1 |
 | `E0437`  | Data field accessed through a polymorphic-base reference | Polymorphism, stage 2     |
@@ -597,7 +597,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0523`  | A `ref` return type, deferred in Phase 1 | JUX-MISSING-DEFS §M.13.2 |
 | `E0524`  | A nested `ref` (`ref ref T`) | JUX-MISSING-DEFS §M.13.4 |
 | `E0526`  | A `ref` generic argument (`Vec<ref int>`) | JUX-MISSING-DEFS §M.13.4 |
-| `E0527`  | `@export(convention = ...)` names a convention the compiler cannot give the export: a name that is not a convention, or `"Stdcall"`/`"Fastcall"`/`"Vectorcall"` (every export uses the C convention today) | Layout-ABI §L.4.1 / `ERRATA.md` E1XX-GAP35 |
+| `E0527`  | `@export(convention = ...)` names a convention the compiler cannot give the export: a name that is not a convention, or `"Stdcall"`/`"Fastcall"`/`"Vectorcall"` (every export uses the C convention today) | Layout-ABI §L.4.1 / `ERRATA.md` E131 |
 
 ### Lowering (`E0600–E0699`)
 
@@ -627,7 +627,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0705`  | Async call is never awaited                                 | Async §18.1.2                  |
 | `E0706`  | Async `try` mutates a local captured from outside it        | Async §18.1.6                  |
 | `E0707`  | A task is used after it was consumed: awaited, `blockingGet()`, `map`/`flatMap`, or passed to `Task.all`/`any`/`race`/`allSettled` (a task yields its result once) | Async §18.1.4 / `ERRATA.md` E116 |
-| `E0708`  | `spawn(x)` given the result of a call that is not async: the call has already run, so there is no task to start; `spawn` takes a function or an async call's future | JUX-LANG-V1 §10.1.3 / `ERRATA.md` E1XX-GAP35 |
+| `E0708`  | `spawn(x)` given the result of a call that is not async: the call has already run, so there is no task to start; `spawn` takes a function or an async call's future | JUX-LANG-V1 §10.1.3 / `ERRATA.md` E131 |
 
 ### Const Evaluation (`E0800–E0899`)
 

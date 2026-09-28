@@ -306,7 +306,7 @@ Tests: `bin/juxc/tests/leaker_idioms.rs` and
 
 ### Release-blocker sweep (added 2026-09-27)
 
-**35. CLOSED 2026-09-27 (ERRATA E1XX-GAP35).** ~~Re-measure the 2026-09-24 release-blocker list and fix what still fails.~~ Every item of FEATURES-TODO's "Release blockers measured 2026-09-24" was reproduced against a release build with real Jux syntax. Seventeen had been closed by gaps 1-33 and four only in part; the rest still failed. Everything that failed is fixed at source, each with a regression test (`examples/release_blockers.jux`, `examples/no_entry_point.jux`, seven `tests/ui` cases, `bin/jux/tests/release_blockers.rs`). Also from E129's "not guarded" list: the bound-crate toolchain wording, `juxc explain` (now user-facing, held by a unit test over every code) and the `jux:` lines.
+**35. CLOSED 2026-09-27 (ERRATA E131).** ~~Re-measure the 2026-09-24 release-blocker list and fix what still fails.~~ Every item of FEATURES-TODO's "Release blockers measured 2026-09-24" was reproduced against a release build with real Jux syntax. Seventeen had been closed by gaps 1-33 and four only in part; the rest still failed. Everything that failed is fixed at source, each with a regression test (`examples/release_blockers.jux`, `examples/no_entry_point.jux`, seven `tests/ui` cases, `bin/jux/tests/release_blockers.rs`). Also from E129's "not guarded" list: the bound-crate toolchain wording, `juxc explain` (now user-facing, held by a unit test over every code) and the `jux:` lines.
 
 | # | Blocker (2026-09-24) | Outcome | Fix / test |
 |---|---|---|---|

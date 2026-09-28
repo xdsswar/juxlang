@@ -394,7 +394,7 @@ For C-ABI calls (`@export` and `@extern`), the C calling convention of the targe
 
 `@export(convention = "...")` overrides the default; permitted values are `"C"` (default), `"Stdcall"` (Windows), `"Fastcall"` (Windows), `"Vectorcall"` (Windows). Targets that do not support the requested convention reject the export at compile time.
 
-**Implementation status (ERRATA E1XX-GAP35).** Every export is emitted with the C convention, so today no target supports the three Windows values: each is rejected with `E0527`, as is a value that names no convention. `"C"` is accepted.
+**Implementation status (ERRATA E131).** Every export is emitted with the C convention, so today no target supports the three Windows values: each is rejected with `E0527`, as is a value that names no convention. `"C"` is accepted.
 
 ### L.4.2. Variadic Functions
 
