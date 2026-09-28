@@ -5006,10 +5006,11 @@ a bound promises and how a bound is lowered.
    generic and package-private cases and advises what works (non-generic,
    `private`, or `static` taking the object).
 
-**Still a limitation, now a diagnostic.** A generic method that can be
-overridden, on a class that is extended (the visitor pattern's `<R> R
-accept(Visitor<R> v)`), is E0438 as before: its dispatch goes through a trait
-object, which a method with its own type parameters cannot be part of.
+**Still a limitation, now a diagnostic.** Resolved by E1XX-GAP39b: ~~A
+generic method that can be overridden, on a class that is extended (the
+visitor pattern's `<R> R accept(Visitor<R> v)`), is E0438 as before: its
+dispatch goes through a trait object, which a method with its own type
+parameters cannot be part of.~~
 
 **Tests.** `examples/intersection_bounds.jux`,
 `examples/generic_supertypes.jux`, `examples/dependent_bounds.jux` and
@@ -5019,18 +5020,117 @@ object, which a method with its own type parameters cannot be part of.
 `extends_foreign_type`, `generic_method_on_generic_base` and
 `intersection_bound_one_missing`.
 
-**Known boundary.** A written `Task<T>` type is the `Worker` task of
+**Known boundary.** Resolved by E1XX-GAP39b: ~~A written `Task<T>` type is the `Worker` task of
 `jux.std.concurrent`, not the task `spawn` returns, so `Task<int> t =
 spawn(f())` does not build; `var t = spawn(f())` does. That is the async
 surface's naming, not generics', and is left open. `<R extends K>` at the
 level of a class (`class Chain<K, V extends K>`) converts inside a method
 that is not reached through a trait object; in a method of an extended class
-it would also need the `where` clause on the class's dispatch trait.
+it would also need the `where` clause on the class's dispatch trait.~~
 
 **Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 gains the rules for
 `E0459`, `E0419` and shadowing, and §T.4.8 the `Into` lowering of rule 4;
 `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 lists `E0419` and `E0459`, and `E0443`
 says "at any depth". GAPS.md gap 39 is closed.
+
+## E1XX-GAP39b. The three things E135 left open: a written `Task<T>`, a generic method reached through a supertype, and `V extends K` on an extended class
+
+**Conflict.** E135 closed gap 39 with three items left open, and the rule is
+that none may stay open:
+
+- **A written `Task<T>`** named the `jux.std.concurrent` worker task, a
+  different Rust type from the one `spawn` returns (§18.1.4 gives both the
+  same name), so `Task<int> t = spawn(f())` and `Vec<Task<int>>` were E0900.
+  A task could not be a field, a parameter, a return or an element either,
+  since the handle was neither copyable nor printable.
+- **A generic method reached through a supertype** (the visitor pattern's
+  `<R> R accept(Visitor<R> v)` on an interface or an extended class) was
+  refused: E0435 for an interface used as a value, E0438 for a class. A
+  supertype value is a Rust trait object, and a trait object cannot carry a
+  method with type parameters.
+- **`class C<K, V extends K>` extended and used through its base** reached
+  rustc as "`K: From<V>` is not satisfied": E135's `V: Into<K>` sat on the
+  class's own method and not on its dispatch trait.
+
+**Resolution.**
+
+1. **One task type.** A written `Task<T>` is the handle `spawn` returns
+   (unless the program declares a type named `Task`), and `Worker.spawn`
+   returns the same handle: its work runs on the worker thread, outside any
+   event loop, and its outcome is delivered through the handle, so `await`,
+   `blockingGet()` and `join()` behave as for any task, and a failure on the
+   worker is rethrown where the task is awaited (it used to end the program as
+   "worker task aborted"). A task is a handle (§18.1.4, "a refcounted handle"):
+   copies name the same task, and whichever is awaited first takes the result.
+   `join()` stays, as `blockingGet()`'s other name.
+2. **Dispatch on the object's own type.** A method with type parameters of its
+   own, declared on an interface or on a class that is extended, is declared
+   on the trait `where Self: Sized`, which keeps it off the vtable, so the
+   trait stays usable as a value type and every concrete type still implements
+   it. The trait gains `JuxDynAny` (which the object answers through its
+   vtable), and the handle's own impl (`impl Trait for Rc<H>`) answers the
+   method by asking the object what it is and calling that type's method:
+   one branch per concrete class or record that is the supertype. The program
+   is compiled whole, so that set is closed; the type ARGUMENTS need not be,
+   because each branch is the Rust compiler's monomorphization of that type's
+   method for whatever the call's arguments are, a type parameter of the
+   caller included (`<R> Vec<R> visitAll(Vec<Expr> es, Visitor<R> v)`). A
+   subtype that fixes its supertype's arguments (`class Ints implements
+   Bag<int>` behind a `Bag<T>`) is reached with its arguments and result seen
+   through `__jux_seen_as`, the identity at run time. A default method is
+   dispatched only to the types that write their own and otherwise runs its
+   body on the handle, through the `__jux_default_<m>` twin; runtime types
+   (a generator behind `Iterable<T>`) therefore keep working. An argument
+   that is a class converting to the parameter's interface is cast to the
+   instantiation the class IS of it (`Mirror<String>` to `TreeVisitor<String,
+   Tree<String>>`), and inference reads a subtype argument as that
+   instantiation, so `R` is bound (§T.4.7).
+3. **E0438 says why, and only when it must.** Two shapes cannot be found by
+   the object's type, and each is refused with its reason: a subtype with a
+   type parameter the supertype does not fix (`class Weird<T, U> extends
+   Tree<T>`: a `Tree<int>` that is a `Weird` does not say what `U` is), and an
+   anonymous class (it has no name to be found by). E0435's generic-method
+   case is gone.
+4. **`V: Into<K>` on the dispatch trait.** A member of a class declared
+   `<K, V extends K>` that takes a `V` states `V: Into<K>` on the trait, every
+   impl and the handle's forwarding, in each impl's vocabulary; an ancestor's
+   body copied into a subclass that fixes both (`PetChain extends Chain<Pet,
+   Cat>`) converts between the fixed types.
+5. **On the way.** An override whose parameter nests the ancestor's type
+   parameter (`accept(TreeVisitor<int, R>)` over `accept(TreeVisitor<T, R>)`)
+   is recognised as the override, not an overload (it was emitted as
+   `accept__ov1` and the dispatch recursed); a bare call in an interface
+   default body (`get(s)`) copies an argument read again, as `this.get(s)`
+   did; a class receiver's argument to an inherited interface default is
+   converted to the parameter's type; a program's own `Ord` interface was
+   already fine (E135).
+
+**Tests.** `examples/generic_virtual_methods.jux` (a visitor with `int`,
+`String` and tree results over an interface and over a generic abstract base,
+three and four subclasses, a subtype fixing the argument, a default one
+subclass overrides, a type argument that is the caller's type parameter, a
+generic method inherited and never overridden), `examples/task_type_written.jux`
+and `examples/bounded_params_in_hierarchy.jux`, pinned by hand-written
+expectations; `tests/ui/generic_method_dispatch_limits` for the two E0438
+shapes (it replaces `tests/ui/generic_method_on_generic_base`, whose program
+now builds).
+
+**Known boundary.** None of the three items remains open. The two E0438
+shapes above are refusals with their reason, not gaps: a value that does not
+carry its own type arguments cannot be asked for them. Found on the way and
+not closed here: a class that fixes an interface's parameter to a class and
+overrides a method bounded by it (`<V extends K> int addAll(Vec<V> vs)` in
+`interface Store<K>`, overridden as `<V extends Pet>` in `class PetStore
+implements Store<Pet>`) is E0900: the interface's `V: Into<K>` and the
+class's `V: PetKind` are different Rust bounds, and an impl may not ask more
+than its trait. It predates this entry (E135's lowering of rule 4).
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 gains rule 10 (generic
+methods through a supertype) and §T.4.8 its lowering; `JUX-ASYNC-ADDENDUM-v2.md`
+§18.1.4 and §18.2 say one `Task<T>` type; `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's
+E0435 and E0438 rows say what they now mean. E135's "Still a limitation" and
+"Known boundary" paragraphs are resolved here. GAPS.md gap 39's open items are
+closed.
 
 ---
 When you edit any addendum that touches one of the items above,

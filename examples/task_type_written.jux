@@ -1,0 +1,58 @@
+// A written `Task<T>` (JUX-ASYNC §18.1.4) is the handle `spawn` gives back,
+// and `Worker.spawn` gives back the same one (ERRATA E1XX-GAP39b). It used
+// to name a different, worker-only type, so `Task<int> t = spawn(f())` did
+// not build. A task is a handle: it goes in fields, parameters, returns and
+// collections like any other value.
+
+import rust.std.Vec;
+
+class Pair<K, V> { public K k; public V v; public Pair(K k, V v) { this.k = k; this.v = v; } }
+
+async int twice(int n) { return n * 2; }
+async Pair<String, Vec<int>> build(int n) {
+    Vec<int> xs = new Vec<int>();
+    for (int i = 0; i < n; i++) { xs.push(i); }
+    return new Pair<String, Vec<int>>("n" + n, xs);
+}
+int square(int n) { return n * n; }
+int boom(int n) { if (n > 0) { throw new IllegalStateException("bad " + n); } return n; }
+
+class Jobs {
+    Task<int> pending;
+    Jobs(Task<int> t) { this.pending = t; }
+    async int finish() { return await pending; }
+}
+
+Task<int> start(int n) { return spawn(twice(n)); }
+async int sumAll(Vec<Task<int>> ts) { int s = 0; for (var t : ts) { s += await t; } return s; }
+
+public async void main() {
+    Task<int> t = spawn(twice(3));
+    print(await t);
+    Task<Pair<String, Vec<int>>> tp = spawn(build(4));
+    var p = await tp;
+    print(p.k + " " + p.v.len());
+
+    Jobs j = new Jobs(start(10));
+    print(await j.finish());
+
+    Vec<Task<int>> ts = new Vec<Task<int>>();
+    ts.push(spawn(twice(1)));
+    ts.push(start(2));
+    ts.push(spawn(() -> 5));
+    ts.push(Worker.spawn(() -> square(3)));
+    print(await sumAll(ts));
+
+    Task<Vec<int>> all = Task.all(spawn(twice(1)), spawn(twice(2)), start(3));
+    Vec<int> got = await all;
+    print(got[0] + got[1] + got[2]);
+
+    Task<int> w = Worker.spawn(() -> 7 * 6);
+    print(await w);
+    Task<String> ws = Worker.spawn(() -> "from a worker");
+    print(await ws);
+
+    // A failure on a worker is rethrown where the task is awaited.
+    Task<int> bad = Worker.spawn(() -> boom(3));
+    try { print(await bad); } catch (IllegalStateException e) { print("caught " + e.getMessage()); }
+}

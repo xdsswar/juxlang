@@ -64,16 +64,32 @@ impl RustEmitter {
             // A `Self: Sized` default runs on the handle itself: the handle is
             // `Sized`, the value behind it may not be, and the default body
             // reaches the value through the forwarded abstract methods.
-            .filter(|m| !default_method_needs_sized_self(m))
+            // A method with type parameters of its own is kept whatever its
+            // body: the handle answers it by dispatch (ERRATA E1XX-GAP39b).
+            .filter(|m| !m.generic_params.is_empty() || !default_method_needs_sized_self(m))
             .cloned()
             .collect();
         let hooks = self.interface_hook_targets(&iface_bare);
+        let iface_fqn = self
+            .lookup_interface_by_bare_or_fqn(&iface_bare)
+            .map(|(k, _)| k.to_string())
+            .unwrap_or_else(|| iface_bare.clone());
+        let iface_params: Vec<String> = Self::names_of(&interface.generic_params);
+        let trait_args_text = {
+            let mark = self.w.mark();
+            self.emit_generic_params_as_args(&interface.generic_params);
+            self.w.split_off_from(mark)
+        };
         self.w.emit_indent();
         // `::core`, not `core`: the emitted crate has a module per Jux
         // package, so a program with a `demo.core` package shadows Rust's
         // own `core` for every path inside `mod demo`. The absolute form
         // cannot be shadowed by anything the user names.
         self.w.push_str("impl<__JuxH: ?::core::marker::Sized + ");
+        // The object answers what it is (`JuxDynAny`), which asks `'static`.
+        if self.declares_generic_virtual(&iface_fqn) {
+            self.w.push_str("'static + ");
+        }
         self.w.push_str(&to_rust_ident(&iface_bare));
         // A GENERIC interface forwards too: it is the supertrait a generic
         // class's `Kind` trait lists, so the handle has to satisfy it.
@@ -93,9 +109,14 @@ impl RustEmitter {
         self.w.push_str(" for std::rc::Rc<__JuxH> {\n");
         self.w.indent_inc();
         for m in &methods {
+            let generic = !m.generic_params.is_empty();
             self.w.emit_indent();
             self.w.push_str("fn ");
             self.w.push_str(&to_rust_ident(&m.name.text));
+            if generic {
+                let params = crate::decls::classes::bounds_into_outer_params(&m.generic_params, &iface_params);
+                self.emit_method_own_generics(&params);
+            }
             self.w.push_str("(&self");
             for p in &m.params {
                 self.w.push_str(", ");
@@ -126,6 +147,25 @@ impl RustEmitter {
             if !bounds.is_empty() {
                 self.w.push_str(" where ");
                 self.w.push_str(&bounds.join(", "));
+            }
+            if generic {
+                // Answered by the concrete type behind the handle.
+                self.w.push(' ');
+                let names: Vec<String> = m.params.iter().map(|p| to_rust_ident(&p.name.text)).collect();
+                let own: Vec<String> = Self::names_of(&m.generic_params);
+                let path = to_rust_ident(&iface_bare);
+                self.emit_generic_dispatch_body(
+                    &iface_fqn,
+                    &path,
+                    &trait_args_text,
+                    &iface_params,
+                    &m.name.text,
+                    &own,
+                    &names,
+                    m.body.is_some(),
+                );
+                self.w.push('\n');
+                continue;
             }
             self.w.push_str(" { (**self).");
             self.w.push_str(&to_rust_ident(&m.name.text));
@@ -297,6 +337,15 @@ impl RustEmitter {
         // `JuxIdentity`: an interface-typed handle still names one object, so
         // `===` and identity hashing reach it through the vtable.
         self.w.push_str(" + crate::JuxIdentity");
+        // A method with type parameters of its own is dispatched on the
+        // object's own type (ERRATA E1XX-GAP39b), which the object tells.
+        let own_fqn = self
+            .lookup_interface_by_bare_or_fqn(&interface.name.text)
+            .map(|(k, _)| k.to_string())
+            .unwrap_or_else(|| interface.name.text.clone());
+        if self.declares_generic_virtual(&own_fqn) {
+            self.w.push_str(" + crate::JuxDynAny");
+        }
         // **Interface `extends` → Rust supertrait bounds.** Jux's
         // `interface Entity<E> extends Id, Named, Comparable<E>` becomes
         // `trait Entity<E>: std::fmt::Debug + Id + Named + Comparable<E>`.
@@ -330,10 +379,14 @@ impl RustEmitter {
             // `I.super.m()` somewhere in the program (§T.8.3): the default body
             // moves to `__jux_default_<m>`, which a class overriding `m` can
             // still call, and `m` itself delegates to it.
+            // A default with type parameters of its own keeps its body in a
+            // twin too: the handle runs it for a value that does not write
+            // its own (ERRATA E1XX-GAP39b).
             let super_called = method.body.is_some()
-                && self
+                && (self
                     .interface_super_calls
-                    .contains(&(interface.name.text.clone(), method.name.text.clone()));
+                    .contains(&(interface.name.text.clone(), method.name.text.clone()))
+                    || (!method.generic_params.is_empty() && !is_static));
             let passes: &[bool] = if super_called { &[true, false] } else { &[false] };
             for &as_default_twin in passes {
             self.w.emit_indent();
@@ -414,6 +467,10 @@ impl RustEmitter {
             let mut bounds: Vec<String> = Vec::new();
             if sized_self {
                 bounds.push("Self: Sized + Clone + 'static".to_string());
+            } else if !method.generic_params.is_empty() {
+                // Kept off the vtable, so the interface stays a value type;
+                // a handle answers it by dispatch (ERRATA E1XX-GAP39b).
+                bounds.push("Self: Sized".to_string());
             }
             bounds.extend(crate::decls::functions::where_bounds(&method.wheres));
             bounds.extend(self.relaxed_where_parts(method.span, None));

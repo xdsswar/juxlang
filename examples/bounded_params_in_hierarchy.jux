@@ -1,0 +1,55 @@
+// A class parameter bounded by another (`class Chain<K, V extends K>`,
+// §T.4.6 rule 4: every `V` is usable wherever a `K` is expected), on a class
+// that is itself extended and used through its base type (ERRATA
+// E1XX-GAP39b). Storing a `V` where a `K` goes reached rustc through the
+// base's dispatch as "the trait bound `K: From<V>` is not satisfied".
+
+import rust.std.Vec;
+
+interface Named { String name(); }
+class Pet implements Named {
+    String n;
+    Pet(String n) { this.n = n; }
+    public String name() { return n; }
+}
+class Cat extends Pet {
+    Cat(String n) { super(n); }
+    @Override public String name() { return "cat " + n; }
+}
+
+class Chain<K, V extends K> {
+    Vec<K> keys = new Vec<K>();
+    void addV(V v) { keys.push(v); }
+    K first() { return keys[0]; }
+    int size() { return (int) keys.len(); }
+}
+
+// Extends it, overriding the method that converts.
+class LoudChain<K, V extends K> extends Chain<K, V> {
+    int adds = 0;
+    @Override void addV(V v) { adds += 1; keys.push(v); }
+}
+
+// Fixes both parameters.
+class PetChain extends Chain<Pet, Cat> {
+    String names() { String s = ""; for (Pet p : keys) { s = s + p.name() + ";"; } return s; }
+}
+
+public void main() {
+    Chain<int, int> base = new LoudChain<int, int>();
+    base.addV(4);
+    base.addV(9);
+    print(base.first() + base.size());
+
+    LoudChain<Pet, Cat> loud = new LoudChain<Pet, Cat>();
+    loud.addV(new Cat("tom"));
+    Chain<Pet, Cat> asBase = loud;
+    asBase.addV(new Cat("kit"));
+    print(asBase.first().name() + " " + asBase.size() + " " + loud.adds);
+
+    PetChain pc = new PetChain();
+    pc.addV(new Cat("a"));
+    Chain<Pet, Cat> pcBase = pc;
+    pcBase.addV(new Cat("b"));
+    print(pc.names());
+}

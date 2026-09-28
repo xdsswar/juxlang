@@ -1,0 +1,23 @@
+// A method with type parameters of its own, called on a supertype value,
+// finds the concrete type behind the value (ERRATA E1XX-GAP39b). Two shapes
+// cannot be found, and each says why (E0438).
+interface Visitor<R> { R visit(int n); }
+abstract class Tree<T> {
+    public abstract <R> R accept(Visitor<R> v);
+}
+class Leaf<T> extends Tree<T> {
+    public <R> R accept(Visitor<R> v) { return v.visit(1); }
+}
+// `U` is not fixed by `Tree<T>`: a `Tree<int>` that is a `Weird` does not say it.
+class Weird<T, U> extends Tree<T> {
+    public <R> R accept(Visitor<R> v) { return v.visit(2); }
+}
+
+interface Shape { <R> R describe(Visitor<R> v); }
+
+public void main() {
+    // An anonymous class has no name to be found by.
+    Shape s = new Shape() {
+        public <R> R describe(Visitor<R> v) { return v.visit(3); }
+    };
+}

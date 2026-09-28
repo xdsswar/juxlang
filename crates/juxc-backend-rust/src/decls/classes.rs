@@ -2978,6 +2978,10 @@ impl RustEmitter {
         let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
         self.w.push_str("fn ");
         self.w.push_str(&to_rust_ident(name));
+        // A method with type parameters of its own keeps them, and stays off
+        // the vtable (`Self: Sized`) so the trait is still a value type; the
+        // handle answers it by dispatch (ERRATA E1XX-GAP39b).
+        self.emit_method_own_generics(&sig.generic_params);
         self.w.push_str("(&self");
         for p in &sig.params {
             self.w.push_str(", ");
@@ -3002,7 +3006,10 @@ impl RustEmitter {
             }
         }
         // Gap 2: the member's `Clone + Debug`, joined over every override.
-        let clause = self.kind_member_where(name, sig);
+        let mut clause = self.kind_member_where(name, sig);
+        if !sig.generic_params.is_empty() {
+            clause = if clause.is_empty() { " where Self: Sized".to_string() } else { format!("{clause}, Self: Sized") };
+        }
         self.w.push_str(&clause);
         self.w.push_str(";\n");
     }
@@ -3026,6 +3033,7 @@ impl RustEmitter {
         let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
         self.w.push_str("fn ");
         self.w.push_str(&to_rust_ident(name));
+        self.emit_method_own_generics(&sig.generic_params);
         self.w.push_str("(&self");
         for p in &sig.params {
             self.w.push_str(", ");
@@ -3886,6 +3894,11 @@ impl RustEmitter {
         } else {
             Vec::new()
         };
+        // A method with type parameters of its own is dispatched on the
+        // object's own type (ERRATA E1XX-GAP39b), which the object tells.
+        if own_methods.iter().any(|(_, s)| !s.generic_params.is_empty()) {
+            self.w.push_str(" + crate::JuxDynAny");
+        }
         // Runtime-type downcast hooks (`__jux_as_<T>`) live on traits that can
         // be a `dyn` value — polymorphic-base Kind traits — for every
         // cast/type-test target reachable from this base.
@@ -4272,6 +4285,10 @@ impl RustEmitter {
         // own `core` for every path inside `mod demo`. The absolute form
         // cannot be shadowed by anything the user names.
         self.w.push_str("impl<__JuxH: ?::core::marker::Sized + ");
+        // The object answers what it is (`JuxDynAny`), which asks `'static`.
+        if own_methods.iter().any(|(_, s)| !s.generic_params.is_empty()) {
+            self.w.push_str("'static + ");
+        }
         self.w.push_str(&to_rust_ident(&class_bare));
         self.w.push_str("Kind");
         let own_args: Vec<juxc_ast::TypeRef> = class_decl
@@ -4376,6 +4393,7 @@ impl RustEmitter {
         let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
         self.w.push_str("fn ");
         self.w.push_str(&to_rust_ident(name));
+        self.emit_method_own_generics(&sig.generic_params);
         self.w.push_str("(&self");
         for p in &sig.params {
             self.w.push_str(", ");
@@ -4401,6 +4419,29 @@ impl RustEmitter {
         }
         let clause = self.kind_member_where(name, sig);
         self.w.push_str(&clause);
+        if !sig.generic_params.is_empty() {
+            // Answered by the concrete type behind the handle (ERRATA
+            // E1XX-GAP39b).
+            self.w.push(' ');
+            let base_fqn = self
+                .resolve_bare_class_fqn(class_bare)
+                .unwrap_or_else(|| class_bare.to_string());
+            let trait_args = {
+                let mark = self.w.mark();
+                self.emit_kind_trait_args(class_bare, own_args);
+                self.w.split_off_from(mark)
+            };
+            let base_params: Vec<String> = own_args
+                .iter()
+                .map(|a| a.name.segments.last().map(|s| s.text.clone()).unwrap_or_default())
+                .collect();
+            let own: Vec<String> = Self::names_of(&sig.generic_params);
+            let names: Vec<String> = sig.params.iter().map(|p| p.name.clone()).collect();
+            let path = format!("{}Kind", to_rust_ident(class_bare));
+            self.emit_generic_dispatch_body(&base_fqn, &path, &trait_args, &base_params, name, &own, &names, false);
+            self.w.push('\n');
+            return;
+        }
         self.w.push_str(" { ");
         self.emit_forwarding_qualifier(class_bare, own_args);
         self.w.push_str(&to_rust_ident(name));
@@ -5001,6 +5042,20 @@ impl RustEmitter {
                 // re-emitting `async`.
                 self.w.push_str("fn ");
                 self.w.push_str(&to_rust_ident(method_name));
+                // A method with type parameters of its own implements them
+                // here too (ERRATA E1XX-GAP39b), read through the
+                // interface-to-class map.
+                if !method.generic_params.is_empty() {
+                    let outer: Vec<String> = type_subst.keys().cloned().collect();
+                    let params: Vec<juxc_ast::TypeParam> = bounds_into_outer_params(&method.generic_params, &outer)
+                        .into_iter()
+                        .map(|mut p| {
+                            p.bounds = p.bounds.iter().map(|b| substitute_type_ref(b, &type_subst)).collect();
+                            p
+                        })
+                        .collect();
+                    self.emit_method_own_generics(&params);
+                }
                 // Match the interface's declared receiver: `&self`
                 // (stage-1 dispatch). The implementer is a forced wrapper
                 // class whose inherent method is also `&self` (mutation via

@@ -403,9 +403,29 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `type Reg<T> = Registry<T, String, Vec<Pair<String, T>>>`, `Table<V>`, `Grid` | worked | works | `generics_deep_nesting.jux` |
 | `Outer<T>.Inner<U>` (static nesting, §M.9) | worked | works | `generics_deep_nesting.jux` |
 | one parameter down `Roster<T> <- Squad<T> <- StudentSquad` under `Base & Named & Aged` | E0900 on `Squad<Person>.add` | works | as above; `generics_deep_nesting.jux` |
-| `Task<Pair<..>> t = spawn(..)` (a written `Task<T>`) | E0900 | **open** | a written `Task<T>` is `jux.std.concurrent`'s `Worker` task, not `spawn`'s; `var t = spawn(..)` works. Async naming, not generics |
+| `Task<Pair<..>> t = spawn(..)` (a written `Task<T>`) | E0900 | works (gap 39b) | one task type for `spawn` and `Worker.spawn`; `examples/task_type_written.jux` |
+| visitor `<R> R accept(Visitor<R> v)` on an interface / an extended class | E0435 / E0438 | works (gap 39b) | dispatch on the object's type; `examples/generic_virtual_methods.jux` |
+| `class Chain<K, V extends K>` extended, storing a `V` as a `K` through the base | E0900 | works (gap 39b) | `V: Into<K>` on the dispatch trait; `examples/bounded_params_in_hierarchy.jux` |
 
-Left open: the written `Task<T>` above; a generic method that can be overridden on an extended class (visitor-style `<R> R accept(Visitor<R>)`) stays `E0438`, as §D.4 has always said, because its dispatch goes through a trait object.
+~~Left open: the written `Task<T>` above; a generic method that can be overridden on an extended class (visitor-style `<R> R accept(Visitor<R>)`) stays `E0438`, as §D.4 has always said, because its dispatch goes through a trait object.~~ All three closed by gap 39b (ERRATA E1XX-GAP39b).
+
+**39b. CLOSED 2026-09-28 (ERRATA E1XX-GAP39b).** ~~The three items gap 39 left open.~~ A written `Task<T>` is the handle `spawn` returns, and `Worker.spawn` returns the same handle (a worker's failure is now rethrown where it is awaited); a task is a copyable handle, so it goes in fields, parameters, returns, collections and `Task.all`. A method with type parameters of its own reached through an interface or an extended class (the visitor pattern) is dispatched on the object's own type: the trait keeps the method `where Self: Sized`, and the handle's impl asks the object what it is (`JuxDynAny`) and calls that type's method, which the Rust compiler monomorphizes for the call's own type arguments, so no set of type arguments has to be closed, only the set of types, which a whole-program compile always has. The two shapes that cannot be found that way (a subtype with a type parameter its supertype does not fix, an anonymous class) are `E0438` with the reason. `class C<K, V extends K>` states `V: Into<K>` on its dispatch trait. Tests: `examples/generic_virtual_methods.jux`, `examples/task_type_written.jux`, `examples/bounded_params_in_hierarchy.jux`, `tests/ui/generic_method_dispatch_limits`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `Task<int> t = spawn(f())`, `Task<Pair<String, Vec<int>>>`, a `Task<int>` field, parameter, return, `Vec<Task<int>>`, `Task<Vec<int>> all = Task.all(..)` | E0900 | works |
+| `Task<int> w = Worker.spawn(..)`; `await`, `blockingGet()`, `join()`; a worker that throws | E0900 / "worker task aborted" | works; the exception is caught where awaited |
+| visitor over an interface: `Visitor<int>`, `Visitor<String>`, `Visitor<Expr>` | E0435 | works |
+| visitor over an abstract generic base `Tree<T>`: `Count`, `Render`, `Mirror` (`R = Tree<T>`), 3 subclasses | E0438 | works |
+| a subclass fixing the base's argument (`Zero extends Tree<int>`, `Ints implements Bag<int>`) | E0438 / E0900 | works |
+| a generic default method one implementer overrides, called through the interface | E0435 | works (override and default each where they belong) |
+| `R` the caller's own type parameter (`<R> Vec<R> visitAll(.., Visitor<R> v)`, `<T, R> R foldAll(Vec<Bag<T>> ..)`) | E0435 | works |
+| a generic method inherited and never overridden (`Tree.fold`) | E0438 | works |
+| `class Weird<T, U> extends Tree<T>` with a generic virtual method | E0900 (after E0438 was lifted) | `E0438` naming `U` |
+| an anonymous class of an interface with a generic method | E0435 | `E0438`: name the class |
+| `LoudChain<K, V extends K> extends Chain<K, V>`, `PetChain extends Chain<Pet, Cat>`, through `Chain<..>` | E0900 | works |
+
+Found on the way and left open (predates gap 39b): `class PetStore implements Store<Pet>` overriding `<V extends K> int addAll(Vec<V>)` as `<V extends Pet>` is E0900, because the interface's `V: Into<K>` and the class's `V: PetKind` are different Rust bounds (ERRATA E1XX-GAP39b, known boundary).
 
 ---
 

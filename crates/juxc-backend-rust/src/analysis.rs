@@ -4638,6 +4638,30 @@ impl crate::RustEmitter {
         selection_span: juxc_source::Span,
         arg_idx: usize,
     ) -> Option<juxc_ast::TypeRef> {
+        // Inside an interface's default method, `this` is the interface: its
+        // own method (or one it extends) is the callee. Without this an
+        // interface-typed argument of `get(s)` was moved into the first of two
+        // calls (ERRATA E1XX-GAP39b).
+        if self.enclosing_class.is_none() {
+            let iface = self.enclosing_interface.as_deref()?;
+            let mut queue = vec![iface.to_string()];
+            let mut seen = std::collections::HashSet::new();
+            while let Some(cur) = queue.pop() {
+                if !seen.insert(cur.clone()) {
+                    continue;
+                }
+                let Some((_, sig)) = self.lookup_interface_by_bare_or_fqn(&cur) else { continue };
+                if let Some(m) = sig.methods.get(name) {
+                    return m.params.get(arg_idx).map(|p| p.ty.clone());
+                }
+                for parent in &sig.extends {
+                    if let Some(s) = parent.name.segments.last() {
+                        queue.push(s.text.clone());
+                    }
+                }
+            }
+            return None;
+        }
         let class = self.enclosing_class.as_deref()?;
         let class_fqn = if self.symbols.classes.contains_key(class) {
             class.to_string()
@@ -4848,6 +4872,64 @@ impl crate::RustEmitter {
                     });
                     depth += 1;
                 }
+                // An INTERFACE receiver: the method its interface (or one it
+                // extends) declares, read through the receiver's arguments.
+                // Without it an argument to `e.accept(this)` on an `Expr`
+                // value was not converted to the `Visitor<R>` it goes to
+                // (ERRATA E1XX-GAP39b).
+                let mut queue: Vec<(String, Vec<juxc_tycheck::Ty>)> = vec![(bare.to_string(), recv_args.clone())];
+                // A CLASS receiver reaches an interface default it inherits
+                // (`f.both(new Twice())`) through the interfaces its chain
+                // implements.
+                let mut cls = self.lookup_class_by_bare_or_fqn(bare);
+                let mut hops = 0;
+                while let Some(c) = cls {
+                    if hops > 64 {
+                        break;
+                    }
+                    hops += 1;
+                    for i in &c.implements {
+                        if let Some(s) = i.name.segments.last() {
+                            let args = i.generic_args.iter().map(|_| juxc_tycheck::Ty::Unknown).collect();
+                            queue.push((s.text.clone(), args));
+                        }
+                    }
+                    cls = c
+                        .extends_fqn
+                        .clone()
+                        .or_else(|| c.extends.as_ref().and_then(|t| t.name.segments.last().map(|s| s.text.clone())))
+                        .and_then(|p| self.lookup_class_by_bare_or_fqn(&p));
+                }
+                let mut seen = std::collections::HashSet::new();
+                while let Some((iname, iargs)) = queue.pop() {
+                    if !seen.insert(iname.clone()) {
+                        continue;
+                    }
+                    let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(&iname) else { continue };
+                    let mut subst: std::collections::HashMap<String, juxc_ast::TypeRef> = std::collections::HashMap::new();
+                    for (param, arg) in iface.generic_params.iter().zip(iargs.iter()) {
+                        if let Some(arg_ref) = ty_to_type_ref(arg) {
+                            subst.insert(param.name.text.clone(), arg_ref);
+                        }
+                    }
+                    if let Some(m) = iface.methods.get(f.field.text.as_str()) {
+                        let pty = m.params.get(arg_idx)?.ty.clone();
+                        let substituted = crate::decls::classes::substitute_type_ref(&pty, &subst);
+                        return Some(collapse_concrete_wildcards(&substituted));
+                    }
+                    for parent in &iface.extends {
+                        let Some(pn) = parent.name.segments.last().map(|s| s.text.clone()) else { continue };
+                        // The parent's arguments, written in this interface's
+                        // params, are dropped to `Unknown` here: only the
+                        // shape of the slot matters to the conversion.
+                        let pargs: Vec<juxc_tycheck::Ty> = parent
+                            .generic_args
+                            .iter()
+                            .map(|_| juxc_tycheck::Ty::Unknown)
+                            .collect();
+                        queue.push((pn, pargs));
+                    }
+                }
             }
         }
         None
@@ -4968,6 +5050,47 @@ impl crate::RustEmitter {
     /// and infers the argument the value actually implements, which is the
     /// right answer without the backend having to redo the call's generic
     /// inference.
+    /// The slot type `ty` (an interface or class, possibly naming the
+    /// callee's type parameters) as the instantiation the value `expr`'s own
+    /// class is of it, when `expr` has a class type that reaches it.
+    fn cast_type_from_value(&self, ty: &TypeRef, expr: &Expr) -> Option<TypeRef> {
+        if ty.generic_args.is_empty() || ty.array_shape.is_some() || ty.fn_shape.is_some() {
+            return None;
+        }
+        let juxc_tycheck::Ty::User { name, generic_args } = self.expr_types.get(&crate::exprs::expr_span_of(expr))? else {
+            return None;
+        };
+        let head = ty.name.segments.last()?.text.clone();
+        let base = self
+            .lookup_interface_by_bare_or_fqn(&head)
+            .map(|(k, _)| k.to_string())
+            .or_else(|| self.resolve_bare_class_fqn(&head))?;
+        let sub = if self.symbols.classes.contains_key(name) || self.symbols.records.contains_key(name) {
+            name.clone()
+        } else {
+            self.resolve_bare_class_fqn(name)?
+        };
+        let args = juxc_tycheck::generic_dispatch::supertype_args(&self.symbols, &sub, &base)?;
+        let sub_params: Vec<String> = self
+            .symbols
+            .classes
+            .get(&sub)
+            .map(|c| &c.generic_params)
+            .or_else(|| self.symbols.records.get(&sub).map(|r| &r.generic_params))
+            .map(|ps| ps.iter().map(|p| p.name.text.clone()).collect())
+            .unwrap_or_default();
+        let mut subst: std::collections::HashMap<String, TypeRef> = std::collections::HashMap::new();
+        for (p, a) in sub_params.iter().zip(generic_args.iter()) {
+            subst.insert(p.clone(), ty_to_type_ref(a)?);
+        }
+        let mut out = ty.clone();
+        out.generic_args = args
+            .iter()
+            .map(|a| juxc_ast::GenericArg::Type(crate::decls::classes::substitute_type_ref(a, &subst)))
+            .collect();
+        (out.generic_args.len() == ty.generic_args.len()).then_some(out)
+    }
+
     fn cast_type_in_caller_scope(&self, ty: &TypeRef) -> TypeRef {
         let mut out = ty.clone();
         for arg in &mut out.generic_args {
@@ -5006,14 +5129,21 @@ impl crate::RustEmitter {
             return None;
         }
         let k = target_ty.name.segments[0].text.as_str();
-        if !self.current_type_params.contains(k) && !self.type_param_bounds.contains_key(k) {
-            return None;
-        }
         let r = match self.expr_types.get(&crate::exprs::expr_span_of(expr))? {
             juxc_tycheck::Ty::Param(r) => r.clone(),
             _ => return None,
         };
         if r == k {
+            return None;
+        }
+        // An ancestor's body copied into a subclass that fixes both
+        // parameters (`PetChain extends Chain<Pet, Cat>`): the checker held
+        // `V extends K` where the body was written, and the conversion is
+        // between the types the subclass gives them (ERRATA E1XX-GAP39b).
+        if self.kind_type_subst.contains_key(k) && self.kind_type_subst.contains_key(&r) {
+            return Some(r);
+        }
+        if !self.current_type_params.contains(k) && !self.type_param_bounds.contains_key(k) {
             return None;
         }
         let mut seen = std::collections::HashSet::new();
@@ -5480,7 +5610,13 @@ impl crate::RustEmitter {
                 if nullable {
                     cast_ty.nullable = false;
                 }
-                let cast_ty = self.cast_type_in_caller_scope(&cast_ty);
+                // The value's own class says which instantiation of the slot's
+                // interface it is (`Mirror<String>` is a `TreeVisitor<String,
+                // Tree<String>>`), which a type parameter of the callee in the
+                // slot (`TreeVisitor<T, R>`) cannot (ERRATA E1XX-GAP39b).
+                let cast_ty = self
+                    .cast_type_from_value(&cast_ty, expr)
+                    .unwrap_or_else(|| self.cast_type_in_caller_scope(&cast_ty));
                 self.emit_value_type_as_rust(&cast_ty);
                 self.w.push(')');
             }

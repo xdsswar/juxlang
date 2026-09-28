@@ -24,6 +24,7 @@ pub(crate) mod clone_bounds;
 pub(crate) mod constructors;
 pub(crate) mod enums;
 pub(crate) mod functions;
+pub(crate) mod generic_dispatch;
 pub(crate) mod hashing;
 pub(crate) mod interfaces;
 pub(crate) mod observers;
