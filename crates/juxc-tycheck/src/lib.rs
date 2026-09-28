@@ -43,6 +43,9 @@ use juxc_source::Span;
 
 pub mod aliases;
 pub mod anon_lift;
+pub mod field_init;
+pub mod late_fields;
+pub mod private_dispatch;
 pub mod check;
 pub mod clone_needs;
 pub(crate) mod clone_uses;
@@ -229,6 +232,9 @@ pub struct TypeCheckResult {
     /// Anonymous classes the driver lifts to named ones and checks again
     /// (`anon_lift`, ERRATA E137).
     pub anon_lifts: Vec<anon_lift::AnonLift>,
+    /// Bare names read as an instance field, by span, with the declaring
+    /// class and the field (`late_fields`, ERRATA E1XX-GAP39e).
+    pub bare_field_refs: HashMap<Span, (String, String)>,
 }
 
 impl TypeCheckResult {
@@ -330,6 +336,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     let mut all_free_operator_calls = std::collections::HashMap::new();
     let mut all_operator_selections = std::collections::HashMap::new();
     let mut all_anon_lifts = Vec::new();
+    let mut all_bare_field_refs = std::collections::HashMap::new();
     let mut all_inst_facts = Vec::new();
     for (idx, unit) in units.iter().enumerate() {
         let before = tc.diagnostics.len();
@@ -347,6 +354,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
             all_anon_lifts.push(lift);
         }
         all_inst_facts.append(&mut checker.inst_facts);
+        all_bare_field_refs.extend(std::mem::take(&mut checker.bare_field_refs));
         let (
             expr_types,
             call_expansions,
@@ -408,6 +416,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         call_expansions: all_call_expansions,
         component_names: all_component_names,
         anon_lifts: all_anon_lifts,
+        bare_field_refs: all_bare_field_refs,
     }
 }
 

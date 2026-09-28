@@ -385,6 +385,10 @@ pub enum Code {
     /// at its concrete type. (Stage-2 polymorphism; auto-generated field
     /// accessors are a planned follow-up.) Field access on `this` and on a
     /// concrete (non-base) receiver is unaffected.
+    ///
+    /// Retired by ERRATA E1XX-GAP39e: a private member reached where it is
+    /// visible has a hidden stand-in on the dispatch trait, and anywhere else
+    /// it is `E0414`. Nothing emits it; the number is not reused.
     E0437_FieldThroughPolymorphicBase,
     /// E0438 — A **polymorphic base class declares a virtual method with its
     /// own generic type parameters** (`<R> R map(...)`). The base lowers to a
@@ -504,11 +508,11 @@ pub enum Code {
     /// or there is no expected type at all. Give the reference a function
     /// type, or write a lambda.
     E0980_AmbiguousMethodRef,
-    /// E0981 — A **field-initializer lambda that uses the object** it belongs
-    /// to (`observer<int> watch = (o, n) -> { count++; }`). Field initializers
-    /// run while the object is being built, before the shared handle a
-    /// capture needs exists, and Phase 1 cannot lower that capture (ERRATA
-    /// E43). Not a rustc leak: the program is told.
+    /// E0981 — An **observer field's initializer lambda uses the object** it
+    /// belongs to (`observer<int> watch = (o, n) -> { count++; }`). An
+    /// observer is attached while the object is being built, before the
+    /// shared handle a capture needs exists (ERRATA E43). Any other field
+    /// initializer may use the object (ERRATA E1XX-GAP39e).
     E0981_FieldLambdaUsesThis,
     /// E0213 — A **single-element tuple** `(e,)`. Grammar §A.4.1 reserves
     /// the form: a tuple has two or more elements (§5.3), and a trailing
@@ -815,6 +819,12 @@ pub enum Code {
     /// other aliases (`type A = B; type B = A;`): it names no type. Expanding
     /// one used to overflow the checker's stack.
     E0498_TypeAliasCycle,
+    /// E0499 -- An instance field initializer reads a field that holds no
+    /// value yet (ERRATA E1XX-GAP39e): one declared after it, or one only a
+    /// constructor assigns (constructors run after every field initializer,
+    /// JUX-LANG-V1 §7.3.1), whose type has no default value to read in the
+    /// meantime (a class, an interface, a function type, a type parameter).
+    E0499_FieldReadBeforeInitialized,
     /// E0479 -- `s.length` on a String (Semantics §S.3.2): a string has two
     /// lengths, and the program has to say which one it means.
     E0479_StringLengthAmbiguous,
@@ -1489,6 +1499,7 @@ impl Code {
             Code::E0496_EnumArgumentsWithoutConstructor => "E0496",
             Code::E0497_StaticInitializerCycle   => "E0497",
             Code::E0498_TypeAliasCycle           => "E0498",
+            Code::E0499_FieldReadBeforeInitialized => "E0499",
             Code::E0479_StringLengthAmbiguous    => "E0479",
             Code::E0480_StringIndexAmbiguous     => "E0480",
             Code::E0477_TestAnnotationMisplaced  => "E0477",

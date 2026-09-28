@@ -1,0 +1,20 @@
+// Field initializers run in the order they are written, before any
+// constructor body (ERRATA E1XX-GAP39e). One that reads a field declared
+// later, or one only a constructor assigns, reads it before it holds a
+// value; a number would be read at its default, but a class has none.
+class Engine {
+    int power;
+    Engine(int power) { this.power = power; }
+}
+
+class Car {
+    int ready = this.wheels + 1;       // fine: an `int` reads as 0 until then
+    int wheels = 4;
+    int boost = engine.power * 2;
+    Engine engine = new Engine(90);
+}
+
+void main() {
+    Car c = new Car();
+    print(c.boost);
+}

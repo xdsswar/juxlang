@@ -380,7 +380,7 @@ impl RustEmitter {
         // BEFORE the constructor body (Java's instance-initializer rule),
         // so an init block must observe the field-initializer values, not
         // the body's writes. The `__self`-builder below gets that order.
-        let simple = if class_decl.init_blocks.is_empty() {
+        let simple = if class_decl.init_blocks.is_empty() && !self.chain_defers_field_inits(class_decl) {
             extract_simple_ctor_inits(ctor, class_decl)
                 .filter(|simple| !self.defer_ctor_body || simple.side_effects.is_empty())
         } else {
@@ -1084,6 +1084,116 @@ impl RustEmitter {
         self.emit_ctor_replay(&parent, &ctor, Some(super_args));
     }
 
+    /// Whether `name` is an instance member (field, property or method) of
+    /// `class_decl`, its own or inherited.
+    fn is_instance_member_of(&self, class_decl: &juxc_ast::ClassDecl, name: &str) -> bool {
+        let fqn = self
+            .resolve_bare_class_fqn(&class_decl.name.text)
+            .unwrap_or_else(|| class_decl.name.text.clone());
+        class_decl.fields.iter().any(|f| !f.is_static && f.name.text == name)
+            || class_decl.properties.iter().any(|p| p.name.text == name)
+            || class_decl.methods.iter().any(|m| {
+                m.name.text == name && !m.modifiers.contains(&juxc_ast::FnModifier::Static)
+            })
+            || self.symbols.lookup_field(&fqn, name).is_some_and(|(f, _)| !f.is_static)
+            || self.symbols.lookup_property(&fqn, name).is_some_and(|(p, _)| !p.is_static)
+            || self.symbols.lookup_method(&fqn, name).is_some_and(|(m, _)| !m.is_static)
+    }
+
+    /// The instance fields (indices into its `fields`) whose initializers run
+    /// against the finished handle rather than in the builder
+    /// (`juxc_tycheck::field_init`, ERRATA E1XX-GAP39e), with its ancestors'
+    /// taken into account.
+    pub(crate) fn deferred_field_inits(&self, class_decl: &juxc_ast::ClassDecl) -> Vec<usize> {
+        let ancestor_defers = self.ancestor_defers_field_inits(class_decl);
+        juxc_tycheck::field_init::deferred_indices(&class_decl.fields, ancestor_defers, &|n| {
+            self.is_instance_member_of(class_decl, n)
+        })
+    }
+
+    /// Whether some ancestor of `class_decl` defers a field initializer.
+    fn ancestor_defers_field_inits(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
+        let Some(parent) = class_decl
+            .extends
+            .as_ref()
+            .and_then(|t| t.name.segments.last())
+            .and_then(|s| self.class_ast_named(&s.text))
+        else {
+            return false;
+        };
+        !self.deferred_field_inits(&parent).is_empty()
+    }
+
+    /// Whether constructing `class_decl` runs any field initializer against
+    /// the handle: its own or an ancestor's.
+    pub(crate) fn chain_defers_field_inits(&self, class_decl: &juxc_ast::ClassDecl) -> bool {
+        !self.deferred_field_inits(class_decl).is_empty() || self.ancestor_defers_field_inits(class_decl)
+    }
+
+    /// The names of `class_decl`'s fields whose initializers are deferred.
+    pub(crate) fn deferred_field_names(&self, class_decl: &juxc_ast::ClassDecl) -> HashSet<String> {
+        self.deferred_field_inits(class_decl)
+            .into_iter()
+            .map(|i| class_decl.fields[i].name.text.clone())
+            .collect()
+    }
+
+    /// Run the deferred field initializers of `class_decl`'s hierarchy
+    /// against `__jux_self`, root class first, each in the order written:
+    /// every field initializer of the hierarchy runs before any `init`
+    /// block or constructor body (JUX-LANG-V1 §7.3.1).
+    fn emit_chain_deferred_field_inits(&mut self, class_decl: &juxc_ast::ClassDecl) {
+        let saved_subst = self.kind_type_subst.clone();
+        if let Some(parent_ty) = &class_decl.extends {
+            if let Some(parent) = parent_ty.name.segments.last().and_then(|seg| self.class_ast_named(&seg.text)) {
+                // The parent's initializers are written in its own type
+                // parameters, read through this class's `extends` arguments.
+                let mut subst = std::collections::HashMap::new();
+                for (param, arg) in parent.generic_params.iter().zip(parent_ty.generic_args.iter()) {
+                    let Some(arg_ty) = arg.as_type() else { continue };
+                    let resolved = match arg_ty.name.segments.as_slice() {
+                        [only] if arg_ty.generic_args.is_empty() => {
+                            saved_subst.get(&only.text).cloned().unwrap_or_else(|| arg_ty.clone())
+                        }
+                        _ => arg_ty.clone(),
+                    };
+                    subst.insert(param.name.text.clone(), resolved);
+                }
+                if !subst.is_empty() {
+                    self.kind_type_subst = subst;
+                }
+                self.emit_chain_deferred_field_inits(&parent);
+                self.kind_type_subst = saved_subst.clone();
+            }
+        }
+        let stmts: Vec<juxc_ast::Stmt> = self
+            .deferred_field_inits(class_decl)
+            .into_iter()
+            .filter_map(|i| {
+                let f = &class_decl.fields[i];
+                let init = f.default.clone()?;
+                let span = crate::exprs::expr_span_of(&init);
+                Some(juxc_ast::Stmt::Assign(juxc_ast::AssignStmt {
+                    target: Expr::Field(juxc_ast::FieldExpr {
+                        object: Box::new(Expr::This(juxc_source::Span::DUMMY)),
+                        field: f.name.clone(),
+                        safe: false,
+                        span: f.name.span,
+                    }),
+                    op: None,
+                    value: init,
+                    span,
+                }))
+            })
+            .collect();
+        if !stmts.is_empty() {
+            let prev_params = std::mem::take(&mut self.current_fn_params);
+            self.emit_ctor_body_stmts(&stmts, &HashSet::new());
+            self.current_fn_params = prev_params;
+        }
+        self.kind_type_subst = saved_subst;
+    }
+
     /// Whether `ctor`'s body has to run against the handle: it calls a method
     /// on `this` itself, or it delegates with `this(...)` to a constructor that
     /// does. A delegating constructor that ran its target's body in the inner
@@ -1110,6 +1220,11 @@ impl RustEmitter {
         if self.class_in_hierarchy(class_decl)
             && !juxc_tycheck::clone_needs::ctor_is_pure_store(ctor, class_decl)
         {
+            return true;
+        }
+        // A field initializer that runs against the handle runs before the
+        // body, which then has to as well (ERRATA E1XX-GAP39e).
+        if self.chain_defers_field_inits(class_decl) {
             return true;
         }
         let mut current = ctor;
@@ -1315,7 +1430,13 @@ impl RustEmitter {
             } else {
                 ("std::rc::Rc::new(", ")")
             };
-        if ctor_binds.is_empty() && ctor_tail.is_empty() && !ancestors_defer && !delegation_defers {
+        let chain_deferred = self.chain_defers_field_inits(class_decl);
+        if ctor_binds.is_empty()
+            && ctor_tail.is_empty()
+            && !ancestors_defer
+            && !delegation_defers
+            && !chain_deferred
+        {
             self.w.push_str("Self(");
             self.w.push_str(wrap_open);
             self.w.push_str("Self::new_inner");
@@ -1350,6 +1471,16 @@ impl RustEmitter {
             self.w.push_str(")");
             self.w.push_str(wrap_close);
             self.w.push_str(");\n");
+            // The field initializers that use the object, the hierarchy's,
+            // root first, before any `init` block or body (ERRATA
+            // E1XX-GAP39e). Once: a `this(...)` chain builds one object.
+            if chain_deferred {
+                let prev_alias = self.this_alias.replace("__jux_self".to_string());
+                let prev_wrapper = std::mem::replace(&mut self.emitting_wrapper_class, true);
+                self.emit_chain_deferred_field_inits(class_decl);
+                self.emitting_wrapper_class = prev_wrapper;
+                self.this_alias = prev_alias;
+            }
             // Run the deferred body against the handle. `this` is now a
             // wrapper, so field access goes back through `.0.borrow_mut()` --
             // which is also what makes a method called here dispatch
@@ -1534,7 +1665,7 @@ impl RustEmitter {
 
         // A class with `init { }` blocks can't use the simple fast path —
         // its init blocks run after construction and mutate `this`.
-        let simple = if class_decl.init_blocks.is_empty() {
+        let simple = if class_decl.init_blocks.is_empty() && !self.chain_defers_field_inits(class_decl) {
             extract_simple_ctor_inits(ctor, class_decl)
                 .filter(|simple| !self.defer_ctor_body || simple.side_effects.is_empty())
         } else {
@@ -1572,7 +1703,30 @@ impl RustEmitter {
             // `Default::default()` to offer a slot whose type has none --
             // which every Jux class is, since a class lowers to this very
             // `Rc<RefCell<_Inner>>` shape.
-            let seeds = self.ctor_prefix_seeds(ctor, class_decl);
+            // A field whose initializer runs later is not seeded: the
+            // initializer would overwrite what the body stored. While any
+            // initializer runs against the handle, no field that has a value
+            // to hold until then is seeded either: the body's store comes
+            // after every initializer, which may read the field (ERRATA
+            // E1XX-GAP39e). A field with none is still seeded; an initializer
+            // cannot read it (`E0499`).
+            let deferred_fields = self.deferred_field_names(class_decl);
+            let chain_deferred = self.chain_defers_field_inits(class_decl);
+            let seeds: Vec<_> = self
+                .ctor_prefix_seeds(ctor, class_decl)
+                .into_iter()
+                .filter(|s| {
+                    let holds_a_value = || {
+                        class_decl.fields.iter().find(|f| f.name.text == s.field).is_some_and(|f| {
+                            f.ty.as_ref().map_or(true, |ty| {
+                                juxc_tycheck::late_fields::has_stand_in(ty, class_decl, &self.symbols)
+                            })
+                        })
+                    };
+                    let keep = !(chain_deferred && holds_a_value());
+                    !deferred_fields.contains(&s.field) && keep
+                })
+                .collect();
             let seeded: std::collections::HashMap<String, String> = seeds
                 .iter()
                 .map(|s| (s.field.clone(), format!("__jux_seed_{}", to_rust_ident(&s.field))))
@@ -1686,6 +1840,9 @@ impl RustEmitter {
                 if let Some(local) = seeded.get(&field.name.text) {
                     // Lifted above: the constructor's own first write here.
                     self.w.push_str(local);
+                } else if deferred_fields.contains(&field.name.text) {
+                    // Its initializer runs against the handle.
+                    self.emit_field_storage_default(field);
                 } else if let Some(default) = &field.default {
                     self.emit_ctor_field_init(field.ty.as_ref(), default);
                 } else {
@@ -1962,7 +2119,9 @@ impl RustEmitter {
         // hierarchy the init blocks run later, against the handle, after the
         // ancestors' constructors (ERRATA E21).
         let in_hierarchy = self.class_in_hierarchy(class_decl);
-        let has_init = !class_decl.init_blocks.is_empty() && !in_hierarchy;
+        let chain_deferred = self.chain_defers_field_inits(class_decl);
+        let deferred_fields = self.deferred_field_names(class_decl);
+        let has_init = !class_decl.init_blocks.is_empty() && !in_hierarchy && !chain_deferred;
         self.w.emit_indent();
         if has_init {
             self.w.push_str("let mut __self = ");
@@ -1998,10 +2157,11 @@ impl RustEmitter {
             if field.is_ref {
                 self.w.push_str("std::rc::Rc::new(crate::JuxCell::new(");
             }
-            if let Some(default) = &field.default {
-                self.emit_ctor_field_init(field.ty.as_ref(), default);
-            } else {
-                self.emit_field_storage_default(field);
+            match &field.default {
+                Some(default) if !deferred_fields.contains(&field.name.text) => {
+                    self.emit_ctor_field_init(field.ty.as_ref(), default);
+                }
+                _ => self.emit_field_storage_default(field),
             }
             if field.is_ref {
                 self.w.push_str("))");
@@ -2072,8 +2232,8 @@ impl RustEmitter {
         } else {
             "Self(std::rc::Rc::new(Self::new_inner()))"
         };
-        let replays = in_hierarchy
-            && (self.ancestor_chain_defers(class_decl) || !class_decl.init_blocks.is_empty());
+        let replays = chain_deferred
+            || (in_hierarchy && (self.ancestor_chain_defers(class_decl) || !class_decl.init_blocks.is_empty()));
         if replays {
             // The implicit constructor still runs the parent's constructor
             // chain (JUX-LANG-V1 §7.3.1), then this class's init blocks, each
@@ -2081,6 +2241,9 @@ impl RustEmitter {
             self.w.line(&format!("let __jux_self = {wrapped};"));
             let prev_alias = self.this_alias.replace("__jux_self".to_string());
             let prev_wrapper = std::mem::replace(&mut self.emitting_wrapper_class, true);
+            if chain_deferred {
+                self.emit_chain_deferred_field_inits(class_decl);
+            }
             self.emit_ancestor_ctor_tails(class_decl, &[]);
             let init: Vec<juxc_ast::Stmt> = class_decl
                 .init_blocks

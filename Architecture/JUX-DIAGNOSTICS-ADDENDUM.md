@@ -471,7 +471,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0434`  | Cyclic `extends` chain: a class that is its own ancestor, or an interface whose `extends` list leads back to itself | classes-rules §1.2 / `ERRATA.md` E131 |
 | `E0435`  | Interface not usable as a dyn-dispatched value type: a generic interface used without its type arguments (a generic METHOD no longer blocks it, `ERRATA.md` E136) | Interface dispatch, stage 1 |
 | `E0436`  | Exception-hierarchy class also `implements` an interface (deferred combination) | Interface dispatch, stage 1 |
-| `E0437`  | Data field accessed through a polymorphic-base reference | Polymorphism, stage 2     |
+| `E0437`  | *(retired by `ERRATA.md` E1XX-GAP39e: a private member reached through a class's dispatch value, where it is visible, has a hidden stand-in; elsewhere it is `E0414`. The number is not reused.)* | Polymorphism, stage 2     |
 | `E0438`  | A method with type parameters of its own, reached through a supertype, would have to find a subtype built at infinitely many type arguments: polymorphic recursion (`grow<A, Vec<B>>` inside `grow<A, B>`) building a subtype with a parameter the supertype does not fix | Type system §T.4.6 / `ERRATA.md` E135, E136, E137 |
 | `E0439`  | Pattern cannot match the scrutinee: wrong number of tuple elements or record components, or a record pattern for a different type | Grammar §A.3 |
 | `E0440`  | Switch is not exhaustive                             | Type system §T.5.5            |
@@ -530,6 +530,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0496`  | Variant arguments without an enum constructor, a payload variant in an enum with one, or a generic enum with one | LANG-V1 §7.7.4 / `ERRATA.md` E34 |
 | `E0497`  | A cycle among static-field initializers: no order initializes them | Semantics §S.4.2 / `ERRATA.md` E89 |
 | `E0498`  | A `type` alias that stands for itself, directly or through other aliases (`type A = B; type B = A;`): it names no type | Type system §T.1 / `ERRATA.md` E133 |
+| `E0499`  | An instance field initializer reads a field that holds no value yet: one declared after it, or one only a constructor assigns (constructors run after every field initializer), whose type has no default value (a class, an interface, a function type, a type parameter) | LANG-V1 §7.3.1 / `ERRATA.md` E1XX-GAP39e |
 | `E0480`  | `s[i]` on a String: pick `bytes()` or `chars()`          | Semantics §S.3.2 |
 | `E0476`  | Comparisons chained (`a < b < c`): the middle result is a `bool` | Grammar §A.4 |
 | `E0477`  | `@Test` / test hook on a method, or on a function with parameters or a non-`void` return | Testing §TS.1 |
@@ -683,7 +684,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 | `E0973`  | Direct assignment to a bound property *(reserved)*          | Properties §P.4.2              |
 | `E0974`  | `bindBidirectional` called with mismatched property types   | Properties §P.4.3              |
 | `E0975`  | `observer<T>` lambda shape does not match any accepted form | Properties §P.2.2              |
-| `E0981`  | A field-initializer lambda uses the object it belongs to (`this` or a bare instance member); not supported in this phase | ERRATA E43 |
+| `E0981`  | An observer field's initializer lambda uses the object it belongs to (`this` or a bare instance member): an observer is attached while the object is built. Any other field initializer may use the object (`ERRATA.md` E1XX-GAP39e) | ERRATA E43 |
 | `E0980`  | Method reference is ambiguous: several overloads (or constructors) and no expected function type picks exactly one | Missing-defs §M.8.3            |
 | `E0991`  | Inner classes not supported *(reserved)*                    | Missing-defs §M.9.2            |
 | `E0992`  | Anonymous classes not supported *(reserved)*                | Missing-defs §M.9.2            |

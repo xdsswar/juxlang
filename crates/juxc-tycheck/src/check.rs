@@ -402,6 +402,11 @@ pub(crate) struct Checker<'a> {
     pub(crate) component_names: HashMap<Span, String>,
     /// Anonymous classes to lift to named ones (ERRATA E137).
     pub(crate) anon_lifts: Vec<crate::anon_lift::AnonLift>,
+    /// Every bare name read as an instance field of the enclosing class
+    /// (`count` for `this.count`), by span, with the class that declares the
+    /// field and its name (ERRATA E1XX-GAP39e: `late_fields` finds the reads
+    /// of a field it gives a nullable slot).
+    pub(crate) bare_field_refs: HashMap<Span, (String, String)>,
     /// Indices into `anon_lifts` of the anonymous classes whose bodies are
     /// being checked, innermost last (ERRATA E138).
     pub(crate) anon_stack: Vec<usize>,
@@ -627,6 +632,7 @@ impl<'a> Checker<'a> {
             call_expansions: HashMap::new(),
             component_names: HashMap::new(),
             anon_lifts: Vec::new(),
+            bare_field_refs: HashMap::new(),
             anon_stack: Vec::new(),
             inst_facts: Vec::new(),
             inst_ctx_method: None,
@@ -843,6 +849,100 @@ impl<'a> Checker<'a> {
             )
             .with_span(span),
         );
+    }
+
+    /// `E0499`: an instance field initializer reading a field that holds no
+    /// value yet (ERRATA E1XX-GAP39e). The initializers run in the order they
+    /// are written, before any constructor body (JUX-LANG-V1 §7.3.1), so a
+    /// field declared later, or one only a constructor assigns, is unset when
+    /// the initializer reads it. A type with a default value (§6.5: a number,
+    /// a string, an optional, an array ...) is read at that value, as Java
+    /// reads it; a class, an interface, a function type or a type parameter
+    /// has none. What a lambda or an anonymous class in the initializer reads
+    /// is read later, when it is called.
+    fn check_field_initializer_reads(&mut self, class: &juxc_ast::ClassDecl) {
+        let Some(class_fqn) = self.env.current_class.clone() else { return };
+        let instance: Vec<&juxc_ast::FieldDecl> = class.fields.iter().filter(|f| !f.is_static).collect();
+        for (i, field) in instance.iter().enumerate() {
+            let Some(init) = &field.default else { continue };
+            let mut later: Vec<Span> = Vec::new();
+            juxc_ast::visit::for_each_expr_in(init, &mut |e| match e {
+                Expr::Lambda(l) => later.push(l.span),
+                Expr::NewObject(n) => {
+                    if let Some(body) = &n.anonymous_body {
+                        later.extend(body.methods.iter().map(|m| m.span));
+                        later.extend(body.init_blocks.iter().map(|b| b.span));
+                    }
+                }
+                _ => {}
+            });
+            let mut reads: Vec<(String, Span)> = Vec::new();
+            juxc_ast::visit::for_each_expr_in(init, &mut |e| match e {
+                Expr::Path(qn) if qn.segments.len() == 1 => reads.push((qn.segments[0].text.clone(), qn.span)),
+                Expr::Field(f) if matches!(f.object.as_ref(), Expr::This(_)) => {
+                    reads.push((f.field.text.clone(), f.span))
+                }
+                _ => {}
+            });
+            for (name, span) in reads {
+                if later.iter().any(|l| l.file == span.file && l.start <= span.start && span.end <= l.end) {
+                    continue;
+                }
+                // Its own field: unset when it comes later or has no
+                // initializer. An inherited one: unset when only a
+                // constructor assigns it.
+                let (unset, tref) = match instance.iter().position(|g| g.name.text == name) {
+                    Some(j) => (j >= i || instance[j].default.is_none(), instance[j].ty.clone()),
+                    None => match self.symbols.lookup_field(&class_fqn, &name) {
+                        Some((f, _)) if !f.is_static => (f.default.is_none(), Some(f.ty.clone())),
+                        _ => continue,
+                    },
+                };
+                let Some(tref) = tref else { continue };
+                if !unset || tref.nullable {
+                    continue;
+                }
+                let ty = ty_from_ref(&tref, &self.env, self.symbols);
+                if self.ty_has_default_value(&ty) {
+                    continue;
+                }
+                let why = if instance.iter().position(|g| g.name.text == name).is_some_and(|j| j >= i) {
+                    "its initializer runs later"
+                } else {
+                    "only a constructor assigns it (constructors run after every field initializer)"
+                };
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0499_FieldReadBeforeInitialized,
+                        format!(
+                            "field `{name}` is read by the initializer of `{}` before it holds a value: {why}, and the type `{ty}` has no default value to read until then",
+                            field.name.text,
+                        ),
+                    )
+                    .with_span(span)
+                    .with_help(format!("declare `{name}` before `{}` with an initializer, or make it `{ty}?`", field.name.text)),
+                );
+            }
+        }
+    }
+
+    /// Whether a slot of type `ty` has a default value (JUX-LANG-V1 §6.5's
+    /// list): a class, an interface, a function type and a type parameter do
+    /// not.
+    fn ty_has_default_value(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Param(_) | Ty::Fn { .. } | Ty::FnPtr { .. } => false,
+            Ty::User { name, .. } => {
+                if let Some(iface) = self.symbols.interfaces.get(name) {
+                    return iface.is_external;
+                }
+                match self.symbols.classes.get(name) {
+                    Some(c) => c.is_struct || c.is_external,
+                    None => true,
+                }
+            }
+            _ => true,
+        }
     }
 
     /// Infer the type of `expr` against the current env, then record it
@@ -3249,11 +3349,13 @@ impl<'a> Checker<'a> {
                         && t.name.segments[0].text == "observer"
                 })
                 .unwrap_or(false);
-            // A field whose initializer is a lambda (an observer, or any
-            // function-typed field) runs before the object exists, so the
-            // lambda cannot reach it yet (E0981, see `lambda_uses_this`).
+            // An observer's lambda is attached while the object is being
+            // built, before it exists, so it cannot reach it yet (E0981, see
+            // `lambda_uses_this`). Any other field's initializer that uses
+            // the object runs against the finished object (ERRATA
+            // E1XX-GAP39e).
             if let Some(juxc_ast::Expr::Lambda(l)) = &field.default {
-                if !field.is_static {
+                if !field.is_static && is_observer {
                     if let Some(span) = lambda_uses_this(l, class) {
                         self.diagnostics.push(
                             Diagnostic::error(
@@ -3293,6 +3395,7 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+        self.check_field_initializer_reads(class);
         for (idx, ctor) in class.constructors.iter().enumerate() {
             self.check_constructor(ctor, &this_ty, idx);
         }
@@ -7463,6 +7566,15 @@ impl<'a> Checker<'a> {
             // Record a bare-name reference so the E0453 "uninferable `new`"
             // flush can tell whether a `var x = new X<>()` is ever used.
             Expr::Path(qn) => {
+                if qn.segments.len() == 1 && self.env.lookup(&qn.segments[0].text).is_none() && !self.in_static {
+                    if let Some(class) = self.env.current_class.as_deref() {
+                        if let Some((f, decl)) = self.symbols.lookup_field(class, &qn.segments[0].text) {
+                            if !f.is_static {
+                                self.bare_field_refs.insert(qn.span, (decl.to_string(), qn.segments[0].text.clone()));
+                            }
+                        }
+                    }
+                }
                 if qn.segments.len() == 1 {
                     self.used_names.insert(qn.segments[0].text.clone());
                 }
@@ -9177,30 +9289,10 @@ impl<'a> Checker<'a> {
                 if !is_member {
                     continue;
                 }
-                // The handle on a polymorphic base is its dispatch trait
-                // object, and a private member has no slot on it: said here,
-                // at the anonymous class, rather than as the lifted class's.
-                let private = field.as_ref().is_some_and(|(f, _)| matches!(f.visibility, juxc_ast::Visibility::Private))
-                    || (field.is_none()
-                        && method.as_ref().is_some_and(|(m, _)| matches!(m.visibility, juxc_ast::Visibility::Private)));
-                let outer_bare = outer.rsplit('.').next().unwrap_or(outer);
-                if private && self.poly_bases.contains(outer_bare) {
-                    let kind = if field.is_some() { "field" } else { "method" };
-                    self.diagnostics.push(
-                        Diagnostic::error(
-                            code::Code::E0437_FieldThroughPolymorphicBase,
-                            format!(
-                                "an anonymous class can't reach private {kind} `{name}` of `{outer_bare}` -- \
-                                 `{outer_bare}` has subclasses, so the anonymous class holds the enclosing \
-                                 object as a `{outer_bare}` (a dynamic-dispatch trait object), and a private \
-                                 member has no slot on it"
-                            ),
-                        )
-                        .with_span(n.span)
-                        .with_help(format!("make `{name}` protected or package-private")),
-                    );
-                    continue;
-                }
+                // A private member of a class with subclasses is reached
+                // through the enclosing object's dispatch value like any other,
+                // by the stand-in `private_dispatch` gives it (ERRATA
+                // E1XX-GAP39e).
                 outer_members.push(name);
             }
         }
@@ -10469,19 +10561,13 @@ impl<'a> Checker<'a> {
                             );
                             return;
                         }
-                        self.diagnostics.push(
-                            Diagnostic::error(
-                                code::Code::E0437_FieldThroughPolymorphicBase,
-                                format!(
-                                    "private field `{field_name}` can't be accessed through a \
-                                     `{recv_bare}` reference -- `{recv_bare}` is a polymorphic base \
-                                     (a dynamic-dispatch trait object), and a private field has no \
-                                     accessor; make it public/protected, add a method, or hold the \
-                                     value at its concrete type",
-                                ),
-                            )
-                            .with_span(f.span),
-                        );
+                        // A private field reached where it is visible (the
+                        // class's own body, an anonymous class in it) goes
+                        // through a hidden accessor on the dispatch trait
+                        // (`private_dispatch`, ERRATA E1XX-GAP39e); anywhere
+                        // else it is the ordinary private-access refusal.
+                        let declaring = declaring_class.to_string();
+                        self.check_visibility(field.visibility, &declaring, field_name, "field", f.span);
                         return;
                     }
                     let vis = field.visibility;
@@ -19094,19 +19180,19 @@ public class S extends C { public int peek(C other) { return other.tag; } }",
         );
     }
 
-    /// Reading a PRIVATE field through a polymorphic-base reference → E0437
-    /// (no accessor is generated for private fields).
+    /// Reading a PRIVATE field through a polymorphic-base reference from
+    /// outside the class is the ordinary private-access refusal (E0414); where
+    /// it is visible it has a hidden accessor (ERRATA E1XX-GAP39e), so E0437
+    /// no longer fires.
     #[test]
-    fn private_field_through_polymorphic_base_emits_e0437() {
+    fn private_field_through_polymorphic_base_outside_the_class_emits_e0414() {
         let d = run(r#"
             public class Animal { private String name; public Animal(String n){ this.name = n; } public String speak(){ return "..."; } }
             public class Dog extends Animal { public Dog(String n){ super(n); } public String speak(){ return "woof"; } }
             public void main() { Animal a = new Dog("Rex"); print(a.speak()); var n = a.name; }
             "#);
-        assert!(
-            has(&d, code::Code::E0437_FieldThroughPolymorphicBase),
-            "expected E0437: {d:?}"
-        );
+        assert!(has(&d, code::Code::E0414_PrivateAccess), "expected E0414: {d:?}");
+        assert!(!has(&d, code::Code::E0437_FieldThroughPolymorphicBase), "E0437 is retired: {d:?}");
     }
 
     /// An `internal` field through a polymorphic base is NOT private: the
