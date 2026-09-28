@@ -4527,7 +4527,7 @@ impl RustEmitter {
                                     (
                                         // Every non-private field has the
                                         // accessors, as for a read (ERRATA
-                                        // E1XX-GAP39d: a default-visibility
+                                        // E138: a default-visibility
                                         // field was written in place).
                                         !matches!(fsig.visibility, juxc_ast::Visibility::Private),
                                         fsig.ty.clone(),
@@ -4858,7 +4858,7 @@ impl RustEmitter {
     pub(crate) fn bare_name_is_instance_member(&self, name: &str) -> bool {
         // `__jux_` names are the backend's temporaries, all but the handle a
         // lifted anonymous class holds on the enclosing object, a field
-        // (ERRATA E1XX-GAP39d).
+        // (ERRATA E138).
         if (name.starts_with("__jux_") && name != juxc_tycheck::anon_lift::OUTER_FIELD)
             || self.current_fn_params.contains(name)
             || self.local_types.iter().any(|scope| scope.contains_key(name))
@@ -5238,7 +5238,7 @@ impl RustEmitter {
         }
         let Some(ty) = self.expr_types.get(&crate::exprs::expr_span_of(target)).cloned() else {
             // Nor for any other value stored into one (`l = new Impl(this)`
-            // replayed in a constructor's `new`, ERRATA E1XX-GAP39d): the
+            // replayed in a constructor's `new`, ERRATA E138): the
             // field's declared type is the slot.
             let fty = self.own_field_type_ref(target)?;
             return (!matches!(self.iface_coercion_to(&fty, value), crate::analysis::IfaceCoercion::None)).then_some(fty);

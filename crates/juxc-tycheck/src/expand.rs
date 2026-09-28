@@ -64,7 +64,7 @@ pub fn apply_component_names(units: &mut [CompilationUnit], components: &HashMap
 /// In a lifted anonymous class's member body, make every bare `names` read,
 /// write and call go through the enclosing object's handle:
 /// `count++` is `__jux_outer.count++`, `refresh()` is
-/// `__jux_outer.refresh()` (ERRATA E1XX-GAP39d). The caller leaves out the
+/// `__jux_outer.refresh()` (ERRATA E138). The caller leaves out the
 /// names the body declares for itself.
 pub fn rewrite_outer_refs(block: &mut juxc_ast::Block, names: &std::collections::HashSet<String>) {
     if names.is_empty() {
@@ -123,7 +123,7 @@ pub(crate) struct Rewrites<'a> {
     #[allow(clippy::type_complexity)]
     anon: Option<&'a std::cell::RefCell<(HashMap<Span, AnonSite>, HashMap<Span, juxc_ast::AnonymousBody>)>>,
     /// Bare names that mean the enclosing object's members, read through
-    /// `__jux_outer` (ERRATA E1XX-GAP39d).
+    /// `__jux_outer` (ERRATA E138).
     outer: Option<&'a std::collections::HashSet<String>>,
 }
 

@@ -4459,7 +4459,7 @@ impl RustEmitter {
         };
         // An element of a collection field (`items[0].accept(v)`) is read
         // through the owner's guard too, and the visitor it is handed may
-        // write the owner (ERRATA E1XX-GAP39d).
+        // write the owner (ERRATA E138).
         if let Expr::Index(ix) = recv {
             let through_owner = match ix.array.as_ref() {
                 Expr::Field(af) => {
@@ -5233,7 +5233,7 @@ impl RustEmitter {
         let recv_mark = self.w.mark();
         self.emit_expr(&callee.object);
         // An element read out of a collection is a place, not a value: the
-        // binding takes its own handle on it (ERRATA E1XX-GAP39d).
+        // binding takes its own handle on it (ERRATA E138).
         if matches!(&*callee.object, Expr::Index(_)) && !self.w.text_from(recv_mark).ends_with(".clone()") {
             self.w.push_str(".clone()");
         }

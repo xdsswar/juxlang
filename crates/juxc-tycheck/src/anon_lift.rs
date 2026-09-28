@@ -41,7 +41,7 @@ pub struct AnonLift {
     pub super_arg_types: Vec<String>,
     /// The enclosing object's members the body reads, writes or calls bare
     /// (`count++`, `total`, `refresh()`), when the class is built inside an
-    /// instance member (ERRATA E1XX-GAP39d). The lifted class holds the
+    /// instance member (ERRATA E138). The lifted class holds the
     /// enclosing object's handle in `__jux_outer` and reaches them through it.
     pub outer_members: Vec<String>,
     /// The enclosing object's type, when the lifted class holds it.
@@ -52,7 +52,7 @@ pub struct AnonLift {
 }
 
 /// The name of the field a lifted anonymous class holds the enclosing object
-/// in (ERRATA E1XX-GAP39d).
+/// in (ERRATA E138).
 pub const OUTER_FIELD: &str = "__jux_outer";
 
 /// Every name `blocks` declare for themselves: locals, loop and catch

@@ -5202,7 +5202,7 @@ none may stay that way:
 `tests/ui/generic_method_dispatch_limits` now holds the polymorphic-recursion
 refusal only (the two shapes it held before build).
 
-**Known boundary.** Resolved by E1XX-GAP39d: ~~A lifted anonymous class captures enclosing locals and
+**Known boundary.** Resolved by E138: ~~A lifted anonymous class captures enclosing locals and
 parameters, as before; the enclosing object's own fields read bare inside an
 anonymous class were not captured before and are not now.~~
 
@@ -5210,7 +5210,7 @@ anonymous class were not captured before and are not now.~~
 amended; `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's E0438 row names the one case
 left. E136's "Known boundary" is resolved here. GAPS.md gap 39c is closed.
 
-## E1XX-GAP39d. An anonymous class reaches the object it was built in
+## E138. An anonymous class reaches the object it was built in
 
 **Conflict.** `JUX-LANG-V1.md` §7 said an anonymous instance "has no
 implicit reference to the enclosing class's `this`", and E137 left the same

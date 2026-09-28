@@ -5319,7 +5319,7 @@ impl crate::RustEmitter {
             let concrete_local = matches!(expr, Expr::Path(qn)
                 if qn.segments.len() == 1 && self.concrete_polybase_locals.contains(&qn.segments[0].text));
             // So is `this`: a method runs on the concrete struct, never on
-            // the trait object (ERRATA E1XX-GAP39d).
+            // the trait object (ERRATA E138).
             if target_is_polybase && (matches!(expr, Expr::NewObject(_) | Expr::This(_)) || concrete_local) {
                 return IfaceCoercion::WrapClass {
                     clone_first: self.wrapper_value_needs_clone(expr),
@@ -5610,7 +5610,7 @@ impl crate::RustEmitter {
                 // `this` in an abstract polymorphic base's own copy of a
                 // method: that struct implements no `Kind` (each concrete
                 // subclass runs its own copy of the body), and the copy never
-                // runs. It still has to type-check (ERRATA E1XX-GAP39d).
+                // runs. It still has to type-check (ERRATA E138).
                 let abstract_self = matches!(expr, Expr::This(_))
                     && !foreign_iface
                     && self.enclosing_class.as_deref().is_some_and(|c| {

@@ -941,7 +941,7 @@ impl RustEmitter {
             }
         }
         // `this` handed out as a value (`r.add(this)`, and the enclosing
-        // object an anonymous class built here holds, ERRATA E1XX-GAP39d) is
+        // object an anonymous class built here holds, ERRATA E138) is
         // the handle too; `this.f` is only the object being built.
         let mut field_this: Vec<juxc_source::Span> = Vec::new();
         let mut all_this: Vec<juxc_source::Span> = Vec::new();

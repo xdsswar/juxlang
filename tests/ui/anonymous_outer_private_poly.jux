@@ -1,5 +1,5 @@
 // An anonymous class reaches the enclosing object's members through the
-// handle it holds on it (ERRATA E1XX-GAP39d). In a class with subclasses
+// handle it holds on it (ERRATA E138). In a class with subclasses
 // that handle is the class's dispatch trait object, where a private member
 // has no slot, so reaching one is refused at the anonymous class.
 interface Listener { void on(int x); }

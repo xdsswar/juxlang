@@ -1,5 +1,5 @@
 // An anonymous class reaching the object it was built in (ERRATA
-// E1XX-GAP39d): the enclosing object's fields read and written bare
+// E138): the enclosing object's fields read and written bare
 // (`count++`, `total += x`), its methods called bare, with every write seen
 // on the object afterwards. The anonymous class's own parameters and locals,
 // the enclosing method's locals it captures, and the members of the type it

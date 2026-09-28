@@ -59,7 +59,7 @@ pub(crate) fn apply(units: &mut [CompilationUnit], lifts: &[AnonLift]) -> bool {
         let mut methods = body.methods;
         let mut inits = body.init_blocks;
         // Bare reads, writes and calls of the enclosing object's members go
-        // through the handle the class holds (ERRATA E1XX-GAP39d); what a
+        // through the handle the class holds (ERRATA E138); what a
         // body declares for itself keeps its own meaning.
         if let Some(lift) = lifts.iter().find(|l| l.span == span) {
             let members: std::collections::HashSet<String> = lift.outer_members.iter().cloned().collect();

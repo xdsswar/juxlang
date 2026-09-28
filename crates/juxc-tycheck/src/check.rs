@@ -403,7 +403,7 @@ pub(crate) struct Checker<'a> {
     /// Anonymous classes to lift to named ones (ERRATA E137).
     pub(crate) anon_lifts: Vec<crate::anon_lift::AnonLift>,
     /// Indices into `anon_lifts` of the anonymous classes whose bodies are
-    /// being checked, innermost last (ERRATA E1XX-GAP39d).
+    /// being checked, innermost last (ERRATA E138).
     pub(crate) anon_stack: Vec<usize>,
     /// The instantiation facts `crate::instantiations` closes over.
     pub(crate) inst_facts: Vec<crate::instantiations::Fact>,
@@ -9123,7 +9123,7 @@ impl<'a> Checker<'a> {
             .collect();
         let target_bare = crate::symbol_table::fqn_bare(class_fqn).to_string();
         // The enclosing object's members read, written or called bare
-        // (ERRATA E1XX-GAP39d). The body's own declarations and the members
+        // (ERRATA E138). The body's own declarations and the members
         // of the type it implements win, as in Java.
         let mut outer_members: Vec<String> = Vec::new();
         let enclosing = self.env.current_class.clone().filter(|_| !self.in_static);
@@ -9954,7 +9954,7 @@ impl<'a> Checker<'a> {
         // A lifted anonymous class's bodies were judged where they were
         // written, with the enclosing class as the accessor (ERRATA E137);
         // the lifted copy reaches what they reached, the enclosing object's
-        // private members among them (ERRATA E1XX-GAP39d).
+        // private members among them (ERRATA E138).
         if accessor.is_some_and(|a| a.rsplit('.').next().unwrap_or(a).starts_with(juxc_ast::ANON_CLASS_PREFIX)) {
             return;
         }
@@ -13822,7 +13822,7 @@ impl<'a> Checker<'a> {
                 self.anon_stack.pop();
                 // An anonymous class inside this one that reaches the
                 // enclosing object reaches it through this one's handle, so
-                // this one holds it too (ERRATA E1XX-GAP39d).
+                // this one holds it too (ERRATA E138).
                 let inner_needs = self.anon_lifts[first_inner..].iter().any(|l| l.outer_type.is_some());
                 if inner_needs && self.anon_lifts[i].outer_type.is_none() {
                     let outer = self.anon_outer_type();
