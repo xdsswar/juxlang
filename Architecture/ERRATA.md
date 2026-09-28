@@ -1023,7 +1023,7 @@ as before. Lifting the restriction needs the object's handle to exist before
 its fields are initialized (a cyclic construction).
 
 **Spec status:** the catalog has E0981; §P.2.3 describes the intended
-behaviour and stands. Resolved by E1XX-GAP39e for every field but an
+behaviour and stands. Resolved by E139 for every field but an
 observer: a field-initializer lambda that uses the object runs against the
 finished object; `E0981` is left for an observer's lambda.
 
@@ -5279,7 +5279,7 @@ constructor, a generic class, an abstract base's method run on a subclass,
 the superclass's own field winning. `tests/ui/anonymous_outer_private_poly`
 holds the `E0437` refusal.
 
-**Known boundary.** Resolved by E1XX-GAP39e, which also makes the private
+**Known boundary.** Resolved by E139, which also makes the private
 members above reachable (item 4's `E0437` is retired): ~~A field initializer that uses the object being built
 (an anonymous class reaching its members there, or `int y = twice(3);`
 calling an instance method) is E0900 whether or not an anonymous class is
@@ -5290,7 +5290,7 @@ That predates this entry.~~
 amended. E137's "Known boundary" is resolved here. GAPS.md gap 39d is
 closed.
 
-## E1XX-GAP39e. Field initializers that use the object; private members through a dispatch value
+## E139. Field initializers that use the object; private members through a dispatch value
 
 **Conflict.** Two things Java programs do every day were left open by E138:
 

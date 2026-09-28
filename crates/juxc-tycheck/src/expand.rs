@@ -62,7 +62,7 @@ pub fn apply_component_names(units: &mut [CompilationUnit], components: &HashMap
 }
 
 /// Assert every read of a field `late_fields` gave a nullable slot:
-/// `w.go()` is `w!!.go()` (ERRATA E1XX-GAP39e). A store into it is left as it
+/// `w.go()` is `w!!.go()` (ERRATA E139). A store into it is left as it
 /// is.
 pub(crate) fn rewrite_late_reads(units: &mut [CompilationUnit], reads: &crate::late_fields::LateReads<'_>) {
     let rewrites = Rewrites {
@@ -82,7 +82,7 @@ pub(crate) fn rewrite_late_reads(units: &mut [CompilationUnit], reads: &crate::l
 }
 
 /// Rename each private member reached through a dispatch value to its hidden
-/// stand-in (`crate::private_dispatch`, ERRATA E1XX-GAP39e).
+/// stand-in (`crate::private_dispatch`, ERRATA E139).
 pub(crate) fn rename_private_dispatch(
     units: &mut [CompilationUnit],
     walk: &crate::private_dispatch::PrivateDispatch<'_>,
@@ -172,10 +172,10 @@ pub(crate) struct Rewrites<'a> {
     /// `__jux_outer` (ERRATA E138).
     outer: Option<&'a std::collections::HashSet<String>>,
     /// Reads of the fields `late_fields` gave a nullable slot, each asserted
-    /// set (ERRATA E1XX-GAP39e).
+    /// set (ERRATA E139).
     late: Option<&'a crate::late_fields::LateReads<'a>>,
     /// Private members reached through a dispatch value, renamed to their
-    /// hidden stand-ins (ERRATA E1XX-GAP39e).
+    /// hidden stand-ins (ERRATA E139).
     private: Option<&'a crate::private_dispatch::PrivateDispatch<'a>>,
 }
 

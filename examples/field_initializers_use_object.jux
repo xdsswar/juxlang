@@ -1,4 +1,4 @@
-// Field initializers that use the object being built (ERRATA E1XX-GAP39e):
+// Field initializers that use the object being built (ERRATA E139):
 // an instance method called from one, an earlier field read bare or through
 // `this`, `this` handed out (`new Worker(this)`, a list built from it), an
 // anonymous class or a lambda that reaches the object's members. They run

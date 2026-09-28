@@ -507,12 +507,12 @@ where
     }
     // A field whose initializer runs against the finished object and whose
     // type has no stand-in value gets a nullable slot, and the program is
-    // checked again (ERRATA E1XX-GAP39e).
+    // checked again (ERRATA E139).
     if anon_lift::no_user_errors(&typed.diagnostics, &units) && juxc_tycheck::late_fields::apply(&mut units, &typed) {
         typed = juxc_tycheck::typecheck_workspace(&units);
     }
     // A private member reached through a class's dispatch value gets a hidden
-    // stand-in there, and the program is checked again (ERRATA E1XX-GAP39e).
+    // stand-in there, and the program is checked again (ERRATA E139).
     if anon_lift::no_user_errors(&typed.diagnostics, &units) {
         let accesses = juxc_tycheck::private_dispatch::rename_accesses(&mut units, &typed);
         if !accesses.is_empty() {
@@ -625,12 +625,12 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     }
     // A field whose initializer runs against the finished object and whose
     // type has no stand-in value gets a nullable slot, and the program is
-    // checked again (ERRATA E1XX-GAP39e).
+    // checked again (ERRATA E139).
     if anon_lift::no_user_errors(&typed.diagnostics, &units) && juxc_tycheck::late_fields::apply(&mut units, &typed) {
         typed = juxc_tycheck::typecheck_workspace(&units);
     }
     // A private member reached through a class's dispatch value gets a hidden
-    // stand-in there, and the program is checked again (ERRATA E1XX-GAP39e).
+    // stand-in there, and the program is checked again (ERRATA E139).
     if anon_lift::no_user_errors(&typed.diagnostics, &units) {
         let accesses = juxc_tycheck::private_dispatch::rename_accesses(&mut units, &typed);
         if !accesses.is_empty() {

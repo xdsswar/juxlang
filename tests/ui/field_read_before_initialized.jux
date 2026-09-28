@@ -1,5 +1,5 @@
 // Field initializers run in the order they are written, before any
-// constructor body (ERRATA E1XX-GAP39e). One that reads a field declared
+// constructor body (ERRATA E139). One that reads a field declared
 // later, or one only a constructor assigns, reads it before it holds a
 // value; a number would be read at its default, but a class has none.
 class Engine {

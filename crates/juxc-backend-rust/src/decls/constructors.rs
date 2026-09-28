@@ -1102,7 +1102,7 @@ impl RustEmitter {
 
     /// The instance fields (indices into its `fields`) whose initializers run
     /// against the finished handle rather than in the builder
-    /// (`juxc_tycheck::field_init`, ERRATA E1XX-GAP39e), with its ancestors'
+    /// (`juxc_tycheck::field_init`, ERRATA E139), with its ancestors'
     /// taken into account.
     pub(crate) fn deferred_field_inits(&self, class_decl: &juxc_ast::ClassDecl) -> Vec<usize> {
         let ancestor_defers = self.ancestor_defers_field_inits(class_decl);
@@ -1223,7 +1223,7 @@ impl RustEmitter {
             return true;
         }
         // A field initializer that runs against the handle runs before the
-        // body, which then has to as well (ERRATA E1XX-GAP39e).
+        // body, which then has to as well (ERRATA E139).
         if self.chain_defers_field_inits(class_decl) {
             return true;
         }
@@ -1473,7 +1473,7 @@ impl RustEmitter {
             self.w.push_str(");\n");
             // The field initializers that use the object, the hierarchy's,
             // root first, before any `init` block or body (ERRATA
-            // E1XX-GAP39e). Once: a `this(...)` chain builds one object.
+            // E139). Once: a `this(...)` chain builds one object.
             if chain_deferred {
                 let prev_alias = self.this_alias.replace("__jux_self".to_string());
                 let prev_wrapper = std::mem::replace(&mut self.emitting_wrapper_class, true);
@@ -1708,7 +1708,7 @@ impl RustEmitter {
             // initializer runs against the handle, no field that has a value
             // to hold until then is seeded either: the body's store comes
             // after every initializer, which may read the field (ERRATA
-            // E1XX-GAP39e). A field with none is still seeded; an initializer
+            // E139). A field with none is still seeded; an initializer
             // cannot read it (`E0499`).
             let deferred_fields = self.deferred_field_names(class_decl);
             let chain_deferred = self.chain_defers_field_inits(class_decl);

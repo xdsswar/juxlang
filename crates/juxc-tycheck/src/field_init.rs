@@ -1,5 +1,5 @@
 //! Instance field initializers that use the object being built (ERRATA
-//! E1XX-GAP39e).
+//! E139).
 //!
 //! `int y = twice(3);`, `Worker w = new Worker(this);` and an anonymous class
 //! reaching the object's members all need the object itself, which does not

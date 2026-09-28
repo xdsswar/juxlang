@@ -5213,7 +5213,7 @@ impl RustEmitter {
             return (!field.is_static).then(|| field.ty.clone());
         }
         // An inherited one: a parent's field initializer run against the
-        // child's handle (ERRATA E1XX-GAP39e).
+        // child's handle (ERRATA E139).
         let fqn = self.resolve_bare_class_fqn(class).unwrap_or_else(|| class.to_string());
         let (field, _) = self.symbols.lookup_field(&fqn, name)?;
         (!field.is_static).then(|| field.ty.clone())

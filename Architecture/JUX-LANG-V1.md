@@ -1670,7 +1670,7 @@ public class Singleton {
 **Construction order.** Per `ERRATA.md` E2 (and `JUX-SEMANTICS-ADDENDUM.md` §S.4.4), `new C(args)` initializes in this order:
 
 1. **`super(args)` resolves first** — the parent's constructor (including its own ancestor chain, init blocks, and constructor body) completes before any code of `C` runs. (`this(...)` delegation instead runs the named sibling constructor's full chain.)
-2. **Field initializers** of `C` are evaluated in textual order. An initializer may use the object being built: call its methods, read the fields initialized before it, hand `this` out (`Worker w = new Worker(this);`), build an anonymous class or a lambda over it. A field read before its initializer has run holds its type's default value; an initializer that reads one directly whose type has no default value (a class, an interface, a function type, a type parameter) is `E0499` (`ERRATA.md` E1XX-GAP39e).
+2. **Field initializers** of `C` are evaluated in textual order. An initializer may use the object being built: call its methods, read the fields initialized before it, hand `this` out (`Worker w = new Worker(this);`), build an anonymous class or a lambda over it. A field read before its initializer has run holds its type's default value; an initializer that reads one directly whose type has no default value (a class, an interface, a function type, a type parameter) is `E0499` (`ERRATA.md` E139).
 3. **`init { }` blocks** of `C` run, in textual order — before the constructor body. An init block may reference inherited fields because the parent has already constructed.
 4. **The constructor body** runs.
 

@@ -1,5 +1,5 @@
 // Private members of a class with subclasses, reached where Java reaches
-// them (ERRATA E1XX-GAP39e): from an anonymous class written in the class,
+// them (ERRATA E139): from an anonymous class written in the class,
 // through the enclosing object it holds, and from the class's own body
 // through another value of the class. Such a value is the class's dispatch
 // value, so each private member used this way gets a hidden slot there, and

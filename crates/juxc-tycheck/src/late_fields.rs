@@ -1,5 +1,5 @@
 //! A nullable slot for a field whose initializer runs against the finished
-//! object and whose type has no stand-in value (ERRATA E1XX-GAP39e).
+//! object and whose type has no stand-in value (ERRATA E139).
 //!
 //! An initializer that uses the object runs after the object is built
 //! ([`crate::field_init`]), so the field needs *some* value in between. A

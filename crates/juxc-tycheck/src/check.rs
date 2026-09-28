@@ -404,7 +404,7 @@ pub(crate) struct Checker<'a> {
     pub(crate) anon_lifts: Vec<crate::anon_lift::AnonLift>,
     /// Every bare name read as an instance field of the enclosing class
     /// (`count` for `this.count`), by span, with the class that declares the
-    /// field and its name (ERRATA E1XX-GAP39e: `late_fields` finds the reads
+    /// field and its name (ERRATA E139: `late_fields` finds the reads
     /// of a field it gives a nullable slot).
     pub(crate) bare_field_refs: HashMap<Span, (String, String)>,
     /// Indices into `anon_lifts` of the anonymous classes whose bodies are
@@ -852,7 +852,7 @@ impl<'a> Checker<'a> {
     }
 
     /// `E0499`: an instance field initializer reading a field that holds no
-    /// value yet (ERRATA E1XX-GAP39e). The initializers run in the order they
+    /// value yet (ERRATA E139). The initializers run in the order they
     /// are written, before any constructor body (JUX-LANG-V1 §7.3.1), so a
     /// field declared later, or one only a constructor assigns, is unset when
     /// the initializer reads it. A type with a default value (§6.5: a number,
@@ -3353,7 +3353,7 @@ impl<'a> Checker<'a> {
             // built, before it exists, so it cannot reach it yet (E0981, see
             // `lambda_uses_this`). Any other field's initializer that uses
             // the object runs against the finished object (ERRATA
-            // E1XX-GAP39e).
+            // E139).
             if let Some(juxc_ast::Expr::Lambda(l)) = &field.default {
                 if !field.is_static && is_observer {
                     if let Some(span) = lambda_uses_this(l, class) {
@@ -9292,7 +9292,7 @@ impl<'a> Checker<'a> {
                 // A private member of a class with subclasses is reached
                 // through the enclosing object's dispatch value like any other,
                 // by the stand-in `private_dispatch` gives it (ERRATA
-                // E1XX-GAP39e).
+                // E139).
                 outer_members.push(name);
             }
         }
@@ -10564,7 +10564,7 @@ impl<'a> Checker<'a> {
                         // A private field reached where it is visible (the
                         // class's own body, an anonymous class in it) goes
                         // through a hidden accessor on the dispatch trait
-                        // (`private_dispatch`, ERRATA E1XX-GAP39e); anywhere
+                        // (`private_dispatch`, ERRATA E139); anywhere
                         // else it is the ordinary private-access refusal.
                         let declaring = declaring_class.to_string();
                         self.check_visibility(field.visibility, &declaring, field_name, "field", f.span);
@@ -19182,7 +19182,7 @@ public class S extends C { public int peek(C other) { return other.tag; } }",
 
     /// Reading a PRIVATE field through a polymorphic-base reference from
     /// outside the class is the ordinary private-access refusal (E0414); where
-    /// it is visible it has a hidden accessor (ERRATA E1XX-GAP39e), so E0437
+    /// it is visible it has a hidden accessor (ERRATA E139), so E0437
     /// no longer fires.
     #[test]
     fn private_field_through_polymorphic_base_outside_the_class_emits_e0414() {

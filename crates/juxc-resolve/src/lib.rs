@@ -1045,7 +1045,7 @@ impl Resolver {
         // backend each do their own lookup on what a given name actually
         // resolves to. An INSTANCE field's initializer runs as part of
         // constructing the object, so `this` is there too (ERRATA
-        // E1XX-GAP39e); a static one has no object.
+        // E139); a static one has no object.
         self.push_scope();
         for name in &member_names {
             self.declare(name);

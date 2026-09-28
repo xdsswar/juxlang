@@ -233,7 +233,7 @@ pub struct TypeCheckResult {
     /// (`anon_lift`, ERRATA E137).
     pub anon_lifts: Vec<anon_lift::AnonLift>,
     /// Bare names read as an instance field, by span, with the declaring
-    /// class and the field (`late_fields`, ERRATA E1XX-GAP39e).
+    /// class and the field (`late_fields`, ERRATA E139).
     pub bare_field_refs: HashMap<Span, (String, String)>,
 }
 

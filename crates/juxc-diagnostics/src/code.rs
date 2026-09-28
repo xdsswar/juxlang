@@ -386,7 +386,7 @@ pub enum Code {
     /// accessors are a planned follow-up.) Field access on `this` and on a
     /// concrete (non-base) receiver is unaffected.
     ///
-    /// Retired by ERRATA E1XX-GAP39e: a private member reached where it is
+    /// Retired by ERRATA E139: a private member reached where it is
     /// visible has a hidden stand-in on the dispatch trait, and anywhere else
     /// it is `E0414`. Nothing emits it; the number is not reused.
     E0437_FieldThroughPolymorphicBase,
@@ -512,7 +512,7 @@ pub enum Code {
     /// belongs to (`observer<int> watch = (o, n) -> { count++; }`). An
     /// observer is attached while the object is being built, before the
     /// shared handle a capture needs exists (ERRATA E43). Any other field
-    /// initializer may use the object (ERRATA E1XX-GAP39e).
+    /// initializer may use the object (ERRATA E139).
     E0981_FieldLambdaUsesThis,
     /// E0213 — A **single-element tuple** `(e,)`. Grammar §A.4.1 reserves
     /// the form: a tuple has two or more elements (§5.3), and a trailing
@@ -820,7 +820,7 @@ pub enum Code {
     /// one used to overflow the checker's stack.
     E0498_TypeAliasCycle,
     /// E0499 -- An instance field initializer reads a field that holds no
-    /// value yet (ERRATA E1XX-GAP39e): one declared after it, or one only a
+    /// value yet (ERRATA E139): one declared after it, or one only a
     /// constructor assigns (constructors run after every field initializer,
     /// JUX-LANG-V1 §7.3.1), whose type has no default value to read in the
     /// meantime (a class, an interface, a function type, a type parameter).

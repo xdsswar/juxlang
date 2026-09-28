@@ -141,7 +141,7 @@ impl Index<'_> {
 /// - a class in an `extends` hierarchy whose constructor does more than store
 ///   its parameters (ERRATA E21 runs it against the handle);
 /// - a field initializer that uses the object, its own or an ancestor's: it
-///   runs against the handle too (ERRATA E1XX-GAP39e).
+///   runs against the handle too (ERRATA E139).
 pub(crate) fn compute_cell_classes(
     units: &[juxc_ast::CompilationUnit],
     expr_types: &HashMap<Span, Ty>,

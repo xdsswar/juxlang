@@ -1,5 +1,5 @@
 //! Private members reached through a class's dispatch value (ERRATA
-//! E1XX-GAP39e).
+//! E139).
 //!
 //! A value typed as a class with subclasses lowers to its dispatch trait
 //! object, which reaches the object's members only through the trait: a

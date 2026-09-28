@@ -1,5 +1,5 @@
 //! Declaring the hidden stand-ins for private members reached through a
-//! dispatch value (ERRATA E1XX-GAP39e; the plan is
+//! dispatch value (ERRATA E139; the plan is
 //! `juxc_tycheck::private_dispatch`).
 //!
 //! For a field, a property over it: `T __jux_priv_C_f { get { return
