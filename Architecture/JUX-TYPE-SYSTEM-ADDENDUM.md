@@ -419,8 +419,11 @@ Rules:
    such set, and is compiled by erasure instead: the functions and classes on
    that cycle run at one erased type argument that carries each value's own
    type, with one dispatch for every depth (`ERRATA.md` E136, E137,
-   E141). A bounded type parameter on such a cycle cannot be erased,
-   which is **`E0438`**. An override may bound its type parameter
+   E141). An erased value keeps each bound of its type parameter (and
+   its operator bounds) as that bound's dispatch object, so a bounded cycle is
+   compiled the same way (E1XX-GAP39h). A bound that names a type parameter
+   (`T extends Ranked<T>`) is not one fixed type and cannot be kept, and
+   neither can a `const` parameter on the cycle: that is **`E0438`**. An override may bound its type parameter
    by the type its supertype fixes (`<V extends Pet>` for `<V extends K>` in a
    `Store<Pet>`).
 

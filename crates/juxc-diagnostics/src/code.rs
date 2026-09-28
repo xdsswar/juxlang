@@ -391,10 +391,12 @@ pub enum Code {
     /// it is `E0414`. Nothing emits it; the number is not reused.
     E0437_FieldThroughPolymorphicBase,
     /// E0438 — **Polymorphic recursion that cannot be erased** (ERRATA
-    /// E141): a function calling itself at an ever-larger type
+    /// E141, E1XX-GAP39h): a function calling itself at an ever-larger type
     /// argument is compiled by erasing the type arguments of every function
-    /// and class on that cycle, and a bounded type parameter on it cannot be
-    /// erased (an erased value has none of the bound's members).
+    /// and class on that cycle, and an erased value keeps each bound of its
+    /// type parameter as one fixed dispatch object; a bound that names a type
+    /// parameter (`T extends Ranked<T>`), or a `const` parameter, cannot be
+    /// kept.
     E0438_GenericVirtualMethod,
     /// E0442 — A **reference cast / type-test between unrelated types**
     /// (`(Dog) someString`, `x as Cat` where `x` can't be a `Cat`,

@@ -22,6 +22,15 @@ use juxc_source::Span;
 
 use crate::RustEmitter;
 
+/// What a value boxed into an erased slot is taken as: the slot's type
+/// where the site wrote it, and the bounds of the slot's type parameter,
+/// each kept as its dispatch object (ERRATA E1XX-GAP39h).
+#[derive(Clone, Default)]
+pub(crate) struct EraseMark {
+    pub(crate) written: Option<TypeRef>,
+    pub(crate) bounds: Vec<TypeRef>,
+}
+
 /// The key an expression is marked by for boxing: its span, or, for one
 /// with no span of its own (a literal), the node itself.
 pub(crate) type EraseKey = (Span, usize);
@@ -147,6 +156,7 @@ impl RustEmitter {
                             _ => None,
                         },
                         fn_erased: true,
+                        bounds: sig.generic_params.iter().map(|p| (p.name.text.clone(), p.bounds.clone())).collect(),
                     });
                 }
                 // A method of the enclosing class, called on `this`.
@@ -165,6 +175,7 @@ impl RustEmitter {
                         _ => None,
                     },
                     fn_erased: true,
+                    bounds: sig.generic_params.iter().map(|p| (p.name.text.clone(), p.bounds.clone())).collect(),
                 })
             }
             Expr::Field(f) => {
@@ -191,6 +202,15 @@ impl RustEmitter {
                         _ => None,
                     },
                     fn_erased: method_erased,
+                    bounds: {
+                        let mut b: std::collections::HashMap<String, Vec<TypeRef>> =
+                            sig.generic_params.iter().map(|p| (p.name.text.clone(), p.bounds.clone())).collect();
+                        if class_erased {
+                            let ps = self.symbols.classes.get(decl).map(|c| c.generic_params.clone()).unwrap_or_default();
+                            b.extend(ps.into_iter().map(|p| (p.name.text.clone(), p.bounds)));
+                        }
+                        b
+                    },
                 })
             }
             _ => None,
@@ -241,7 +261,8 @@ impl RustEmitter {
             } else {
                 None
             };
-            self.erase_on_emit.insert(Self::erase_key(arg), written);
+            let bounds = callee.bounds.get(&t.name.segments[0].text).cloned().unwrap_or_default();
+            self.erase_on_emit.insert(Self::erase_key(arg), EraseMark { written, bounds });
         }
     }
 
@@ -282,14 +303,15 @@ impl RustEmitter {
                 .iter()
                 .position(|p| *p == t.name.segments[0].text)
                 .and_then(|k| n.generic_args.get(k).cloned());
-            self.erase_on_emit.insert(Self::erase_key(arg), written);
+            let bounds = self.erased_class_param_bounds(&key, &t.name.segments[0].text);
+            self.erase_on_emit.insert(Self::erase_key(arg), EraseMark { written, bounds });
         }
     }
 
     /// Emit the boxing of `expr` into an erased slot (`at` is the type the
     /// value is taken at). An optional value keeps its `null`: the value
     /// inside is boxed.
-    pub(crate) fn emit_erased_box(&mut self, expr: &Expr, at: Option<TypeRef>) {
+    pub(crate) fn emit_erased_box(&mut self, expr: &Expr, at: Option<TypeRef>, bounds: &[TypeRef]) {
         if matches!(expr, Expr::Literal(juxc_ast::Literal::Null)) {
             self.emit_expr(expr);
             return;
@@ -307,17 +329,181 @@ impl RustEmitter {
                 t.nullable = false;
                 self.w.push_str(", ");
                 self.emit_value_type_as_rust(&t);
+                self.emit_erased_views(bounds);
             }
             self.w.push_str("))");
             return;
         }
         self.w.push_str("crate::__jux_erase!(");
         self.emit_expr(expr);
-        if let Some(t) = at {
-            self.w.push_str(", ");
-            self.emit_value_type_as_rust(&t);
+        match at {
+            Some(t) => {
+                self.w.push_str(", ");
+                self.emit_value_type_as_rust(&t);
+                self.emit_erased_views(bounds);
+            }
+            None if !bounds.is_empty() => {
+                self.w.push_str(", _");
+                self.emit_erased_views(bounds);
+            }
+            None => {}
         }
         self.w.push(')');
+    }
+
+    /// `; Rc<dyn B>, ..`: the dispatch objects a bounded erased value keeps,
+    /// one per bound and per supertrait of one.
+    fn emit_erased_views(&mut self, bounds: &[TypeRef]) {
+        let views = self.erased_view_traits(bounds);
+        if views.is_empty() {
+            return;
+        }
+        self.w.push_str("; ");
+        for (i, v) in views.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            self.w.push_str("std::rc::Rc<dyn ");
+            self.emit_bound_type(v);
+            self.w.push('>');
+        }
+    }
+
+    /// `bounds` and every Jux supertrait of each (an interface's `extends`, a
+    /// class's ancestors and the interfaces it implements), each once.
+    pub(crate) fn erased_view_traits(&self, bounds: &[TypeRef]) -> Vec<TypeRef> {
+        let mut out: Vec<TypeRef> = Vec::new();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut stack: Vec<TypeRef> = bounds.to_vec();
+        while let Some(b) = stack.pop() {
+            let bare = b.name.segments.last().map(|s| s.text.clone()).unwrap_or_default();
+            if !seen.insert(bare.clone()) {
+                continue;
+            }
+            if let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(&bare) {
+                stack.extend(iface.extends.iter().filter(|t| t.generic_args.is_empty()).cloned());
+            } else if let Some(fqn) = self.resolve_bare_class_fqn(&bare) {
+                if let Some(c) = self.symbols.classes.get(&fqn) {
+                    if let Some(p) = &c.extends_fqn {
+                        let pb = p.rsplit('.').next().unwrap_or(p);
+                        stack.push(crate::analysis::synth_iface_type_ref(pb, b.span));
+                    }
+                    stack.extend(c.implements.iter().filter(|t| t.generic_args.is_empty()).cloned());
+                }
+            }
+            out.push(b);
+        }
+        out
+    }
+
+    /// The bounds of the type parameter `param` of the erased class `key`.
+    fn erased_class_param_bounds(&self, key: &str, param: &str) -> Vec<TypeRef> {
+        self.symbols
+            .classes
+            .get(key)
+            .map(|c| &c.generic_params)
+            .or_else(|| self.symbols.records.get(key).map(|r| &r.generic_params))
+            .and_then(|ps| ps.iter().find(|p| p.name.text == param))
+            .map(|p| p.bounds.clone())
+            .unwrap_or_default()
+    }
+
+    /// The bounds of the type parameter an erased field slot is declared as.
+    pub(crate) fn erased_field_bounds(&self, f: &FieldExpr) -> Vec<TypeRef> {
+        let Some((class, _)) = self.erased_receiver(&f.object) else { return Vec::new() };
+        let Some((field, decl)) = self.symbols.lookup_field(&class, &f.field.text) else { return Vec::new() };
+        let Some(p) = field.ty.name.segments.first().map(|s| s.text.clone()) else { return Vec::new() };
+        let decl = decl.to_string();
+        self.erased_class_param_bounds(&decl, &p)
+    }
+
+    /// Whether the trait named `bare` (an interface, or a class's `Kind`) is
+    /// a bound an erased type parameter has, or a supertrait of one: the
+    /// erased type implements it by dispatching through the object it keeps
+    /// (ERRATA E1XX-GAP39h).
+    pub(crate) fn erased_bound_trait(&self, bare: &str) -> bool {
+        if !self.erasure_active() {
+            return false;
+        }
+        let mut bounds: Vec<TypeRef> = Vec::new();
+        let e = &self.symbols.erasure;
+        for c in &e.classes {
+            let ps = self
+                .symbols
+                .classes
+                .get(c)
+                .map(|x| x.generic_params.clone())
+                .or_else(|| self.symbols.records.get(c).map(|r| r.generic_params.clone()))
+                .or_else(|| self.symbols.interfaces.get(c).map(|i| i.generic_params.clone()))
+                .unwrap_or_default();
+            bounds.extend(ps.into_iter().flat_map(|p| p.bounds));
+        }
+        for k in &e.fns {
+            let ps = if let Some(f) = k.strip_prefix("fn:") {
+                self.symbols.functions.get(f).map(|s| s.generic_params.clone()).unwrap_or_default()
+            } else if let Some((class, m)) = k.strip_prefix("method:").and_then(|m| m.rsplit_once('.')) {
+                self.symbols.lookup_method(class, m).map(|(s, _)| s.generic_params.clone()).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            bounds.extend(ps.into_iter().flat_map(|p| p.bounds));
+        }
+        self.erased_view_traits(&bounds)
+            .iter()
+            .any(|t| t.name.segments.last().is_some_and(|s| s.text == bare))
+    }
+
+    /// The erased type's implementation of a trait, made from the `Rc`
+    /// forwarding implementation of it (`text`): the same members, each
+    /// forwarding to the dispatch object the erased value keeps for the trait
+    /// instead of to the value behind the `Rc`.
+    pub(crate) fn erased_twin_of_forwarding_impl(text: &str) -> Option<String> {
+        let start = text.find("impl<__JuxH:")?;
+        let head_end = text[start..].find(" for std::rc::Rc<__JuxH> {")? + start;
+        // `impl<...>` generics, bracket-matched.
+        let gen_open = start + "impl".len();
+        let mut depth = 0i32;
+        let mut gen_close = None;
+        for (i, ch) in text[gen_open..head_end].char_indices() {
+            match ch {
+                '<' => depth += 1,
+                '>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        gen_close = Some(gen_open + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let gen_close = gen_close?;
+        let generics = &text[gen_open + 1..gen_close];
+        let sig = text[gen_close + 1..head_end].trim();
+        // Drop the first parameter, `__JuxH: ?Sized + ..`.
+        let mut depth = 0i32;
+        let mut rest = "";
+        for (i, ch) in generics.char_indices() {
+            match ch {
+                '<' | '(' => depth += 1,
+                '>' | ')' => depth -= 1,
+                ',' if depth == 0 => {
+                    rest = generics[i + 1..].trim();
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let view = format!("*self.jux_view::<std::rc::Rc<dyn {sig}>>()");
+        let body = &text[head_end + " for std::rc::Rc<__JuxH> {".len()..];
+        let body = body.replace("**self", &view).replace("__JuxH", &format!("dyn {sig}"));
+        let indent = &text[..start];
+        let head = if rest.is_empty() {
+            format!("{indent}impl {sig} for crate::JuxErased {{")
+        } else {
+            format!("{indent}impl<{rest}> {sig} for crate::JuxErased {{")
+        };
+        Some(format!("{head}{body}"))
     }
 
     /// Emit the unboxing of `expr`, read out of an erased slot, as `target`.
@@ -404,6 +590,8 @@ struct ErasedCallee {
     erased: Vec<String>,
     /// The function's or method's own type parameters, in order.
     own: Vec<String>,
+    /// Each erased type parameter's bounds.
+    bounds: std::collections::HashMap<String, Vec<TypeRef>>,
     /// The declared parameter types.
     params: Vec<TypeRef>,
     /// The declared return type.

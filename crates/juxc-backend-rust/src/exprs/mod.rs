@@ -1371,9 +1371,9 @@ impl RustEmitter {
         if self.erasure_active() {
             let span = Self::erase_key(expr);
             if self.erase_on_emit.contains_key(&span) && self.erasing_now.insert((span, true)) {
-                let written = self.erase_on_emit.get(&span).cloned().flatten();
-                let at = self.erased_box_type(expr, written.as_ref());
-                self.emit_erased_box(expr, at);
+                let mark = self.erase_on_emit.get(&span).cloned().unwrap_or_default();
+                let at = self.erased_box_type(expr, mark.written.as_ref());
+                self.emit_erased_box(expr, at, &mark.bounds);
                 self.erasing_now.remove(&(span, true));
                 return;
             }

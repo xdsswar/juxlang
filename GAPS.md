@@ -505,6 +505,17 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `nest<T extends Named>` calling `nest<Wrap<T>>` | E0900 | `E0438` naming the bound |
 | base constructor's override reads an unset `Gear` field | `IllegalStateException` | `NullPointerException` |
 
+**39h. CLOSED 2026-09-28 (ERRATA E1XX-GAP39h).** ~~A bounded type parameter on a polymorphic-recursion cycle was `E0438`.~~ The erased value keeps each bound (and each supertrait of one) as its dispatch object, built where it is boxed, and the erased type implements each bound by forwarding to it; operator bounds are kept the same way as `==` and hash. A generic class's arithmetic operators now implement the Rust operator traits. `E0438` is left for a bound that names a type parameter (`T extends Ranked<T>`) and for a `const` parameter on the cycle. Tests: `examples/polymorphic_recursion_bounded.jux` (checked against Java: differential case 86), `examples/polymorphic_recursion_operators.jux`, `tests/ui/generic_method_dispatch_limits`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `nest<T extends Sized2>` calling `nest<Wrap<T>>`, `x.name()`, `x.size()`, `describe(x)` into `Named` at each of 6 depths | `E0438` | works, matches Java |
+| `corral<A extends Animal>` calling `corral<Pen<A>>`, `a.sound()`, `a.legs()` (overridden) | `E0438` | works, matches Java |
+| `pair<T extends Named & Aged>` calling `pair<Both<T>>` | `E0438` | works, matches Java |
+| `compare<T>` / `sum<T>` with `where T has operator<=>` / `operator+`, recursing at `Box<T>` | E0900 | works |
+| `T extends Sized2` passed where `Named` is expected (`Sized2 extends Named`), no recursion | E0900 | works |
+| `climb<T extends Ranked<T>>` calling `climb<Up<T>>` | `E0438` | `E0438` (the bound names `T`) |
+
 ---
 
 ## 4. Three streams stopped mid-flight

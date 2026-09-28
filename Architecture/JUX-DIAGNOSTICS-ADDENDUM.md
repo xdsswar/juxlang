@@ -472,7 +472,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0435`  | Interface not usable as a dyn-dispatched value type: a generic interface used without its type arguments (a generic METHOD no longer blocks it, `ERRATA.md` E136) | Interface dispatch, stage 1 |
 | `E0436`  | Exception-hierarchy class also `implements` an interface (deferred combination) | Interface dispatch, stage 1 |
 | `E0437`  | *(retired by `ERRATA.md` E139: a private member reached through a class's dispatch value, where it is visible, has a hidden stand-in; elsewhere it is `E0414`. The number is not reused.)* | Polymorphism, stage 2     |
-| `E0438`  | Polymorphic recursion (a function calling itself at an ever-larger type argument, `nest<Wrap<T>>` inside `nest<T>`) whose cycle has a bounded type parameter: the cycle is compiled by erasing its type arguments, and an erased value has none of a bound's members | Type system §T.4.6 / `ERRATA.md` E137, E141 |
+| `E0438`  | Polymorphic recursion (a function calling itself at an ever-larger type argument, `climb<Up<T>>` inside `climb<T>`) whose cycle has a type parameter bounded by a type that names a type parameter (`T extends Ranked<T>`), or a `const` parameter: the cycle is compiled by erasing its type arguments, and an erased value keeps each bound as one fixed dispatch object | Type system §T.4.6 / `ERRATA.md` E137, E141, E1XX-GAP39h |
 | `E0439`  | Pattern cannot match the scrutinee: wrong number of tuple elements or record components, or a record pattern for a different type | Grammar §A.3 |
 | `E0440`  | Switch is not exhaustive                             | Type system §T.5.5            |
 | `E0441`  | Type-test smart-cast binder (`x => T name`) used outside an `if` condition | Polymorphism |
