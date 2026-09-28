@@ -255,3 +255,89 @@ pub fn args_as_param_types(
         })
         .collect()
 }
+
+/// The positions of `method`'s own type parameters that, in some supertype
+/// of `class_fqn` declaring `method`, are bounded by one of THAT supertype's
+/// type parameters (`<V extends K>` in `interface Store<K>`). Such a
+/// parameter lowers to `V: Into<K>` on the supertype's trait, so the class's
+/// override has to lower its own bound at that position the same way
+/// (`<V extends Pet>` to `V: Into<Pet>`), or its impl would ask more than the
+/// trait (ERRATA E1XX-GAP39c).
+pub fn overridden_into_positions(symbols: &SymbolTable, class_fqn: &str, method: &str) -> Vec<usize> {
+    let mut out: Vec<usize> = Vec::new();
+    let owners = symbols
+        .interfaces
+        .iter()
+        .map(|(k, i)| (k, &i.generic_params, i.methods.get(method)))
+        .chain(symbols.classes.iter().map(|(k, c)| (k, &c.generic_params, c.methods.get(method))));
+    for (owner, owner_params, sig) in owners {
+        let Some(sig) = sig else { continue };
+        if owner == class_fqn || sig.generic_params.is_empty() {
+            continue;
+        }
+        if supertype_args(symbols, class_fqn, owner).is_none() {
+            continue;
+        }
+        for (i, p) in sig.generic_params.iter().enumerate() {
+            let names_outer = p.bounds.iter().any(|b| {
+                b.generic_args.is_empty()
+                    && b.name.segments.len() == 1
+                    && owner_params.iter().any(|op| op.name.text == b.name.segments[0].text)
+            });
+            if names_outer && !out.contains(&i) {
+                out.push(i);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// **E0438**, only where dispatch through a supertype cannot be closed
+/// (ERRATA E1XX-GAP39c). A subtype with a type parameter its supertype does
+/// not fix (`class Weird<T, U> extends Tree<T>`) is dispatched once per
+/// instantiation the program builds (`crate::instantiations`); that set is
+/// finite in every program but one that builds ever-larger types by
+/// polymorphic recursion, and that one is refused, naming the function or
+/// method that keeps growing it.
+pub fn unclosable_diagnostics(symbols: &SymbolTable) -> Vec<(usize, juxc_diagnostics::Diagnostic)> {
+    let mut out = Vec::new();
+    let owners = generic_virtual_owners(symbols);
+    let mut keys: Vec<&String> = owners.keys().collect();
+    keys.sort();
+    let mut reported = std::collections::HashSet::new();
+    for owner in keys {
+        let method = &owners[owner][0];
+        for sub in concrete_implementers(symbols, owner) {
+            if &sub == owner || reported.contains(&sub) {
+                continue;
+            }
+            let Some(param) = unpinned_implementer_param(symbols, &sub, owner) else { continue };
+            let Some(grower) = symbols.instantiations.unbounded.get(&sub) else { continue };
+            reported.insert(sub.clone());
+            let span = symbols.classes.get(&sub).map(|c| c.span).unwrap_or(juxc_source::Span::DUMMY);
+            let unit = symbols.decl_unit.get(&sub).copied().unwrap_or(0);
+            let sub_bare = fqn_bare(&sub);
+            let owner_bare = fqn_bare(owner);
+            let grower = grower.rsplit(['.', ':']).next().unwrap_or(grower);
+            out.push((
+                unit,
+                juxc_diagnostics::Diagnostic::error(
+                    juxc_diagnostics::code::Code::E0438_GenericVirtualMethod,
+                    format!(
+                        "`{method}` is called on `{owner_bare}` values by finding out which type each one is, \
+                         and a `{sub_bare}` is only a type once its `{param}` is known -- but `{grower}` \
+                         builds a `{sub_bare}` with a larger `{param}` each time it calls itself, so the \
+                         program has no last one to look for",
+                    ),
+                )
+                .with_span(span)
+                .with_help(format!(
+                    "keep `{grower}` from calling itself at a larger type argument, or give `{sub_bare}` no \
+                     type parameter beyond the ones `{owner_bare}` fixes"
+                )),
+            ));
+        }
+    }
+    out
+}

@@ -28,6 +28,31 @@ pub const TUPLE_SENTINEL: &str = "__tuple";
 /// one of its records was reported as a method a task does not have.
 pub const TASK_SENTINEL: &str = "__jux_task";
 
+/// The prefix of a class the compiler lifted out of an anonymous class
+/// (`new Shape() { ... }`, ERRATA E1XX-GAP39c): `__JuxAnon_Shape_2_0` is the
+/// first anonymous `Shape` of source 2. Lifting makes it a class like any
+/// other, so it takes part in dynamic dispatch by its name.
+pub const ANON_CLASS_PREFIX: &str = "__JuxAnon_";
+
+/// How a lifted anonymous class's name is shown to the program:
+/// `Shape$anon`, what an anonymous object printed before it was lifted.
+/// Any other name is itself.
+pub fn anon_class_display(name: &str) -> String {
+    match name.strip_prefix(ANON_CLASS_PREFIX) {
+        Some(rest) => {
+            // `<Target>_<unit>_<n>`: the target is everything before the
+            // last two `_`-separated numbers.
+            let mut parts: Vec<&str> = rest.rsplitn(3, '_').collect();
+            parts.reverse();
+            match parts.as_slice() {
+                [target, _, _] => format!("{target}$anon"),
+                _ => format!("{rest}$anon"),
+            }
+        }
+        None => name.to_string(),
+    }
+}
+
 /// **Record destructuring** (`var Pt(a, b) = p;`, JUX-LANG-V1 §5.4) is
 /// desugared by the parser into a typed temporary and one read per binder:
 ///

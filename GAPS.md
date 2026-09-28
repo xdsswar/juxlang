@@ -425,7 +425,21 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | an anonymous class of an interface with a generic method | E0435 | `E0438`: name the class |
 | `LoudChain<K, V extends K> extends Chain<K, V>`, `PetChain extends Chain<Pet, Cat>`, through `Chain<..>` | E0900 | works |
 
-Found on the way and left open (predates gap 39b): `class PetStore implements Store<Pet>` overriding `<V extends K> int addAll(Vec<V>)` as `<V extends Pet>` is E0900, because the interface's `V: Into<K>` and the class's `V: PetKind` are different Rust bounds (ERRATA E136, known boundary).
+~~Found on the way and left open (predates gap 39b): `class PetStore implements Store<Pet>` overriding `<V extends K> int addAll(Vec<V>)` as `<V extends Pet>` is E0900, because the interface's `V: Into<K>` and the class's `V: PetKind` are different Rust bounds (ERRATA E136, known boundary).~~ Closed by gap 39c.
+
+**39c. CLOSED 2026-09-28 (ERRATA E1XX-GAP39c).** ~~What gap 39b still refused.~~ An override that bounds its type parameter by the type its supertype fixes (`<V extends Pet>` for `<V extends K>`) lowers the bound as the trait does, `V: Into<Pet>`, and converts a `V` where one of its members is used; the dispatch from the supertype calls a `__jux_via_` twin generic over `K`. Every anonymous class of a Jux type is lifted to a named class (`__JuxAnon_<Target>_<source>_<n>`, printed `Target$anon`) and the program checked again, so an anonymous visitor, an anonymous implementer of an interface with a generic method and an anonymous subclass of an extended class are all ordinary classes. A subtype with a type parameter its supertype does not fix is dispatched once per instantiation the program builds, closed as a fixpoint over `new` sites and generic calls with their contexts. `E0438` is left for polymorphic recursion that builds ever-larger types, the one case with no finite set. Tests: `examples/bounded_method_overrides.jux`, `examples/anonymous_classes_dispatch.jux`, `examples/unfixed_subtype_params.jux`, `tests/ui/generic_method_dispatch_limits`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `interface Store<K> { <V extends K> int addAll(Vec<V>); <V extends K> String describe(V v); }`, `PetStore implements Store<Pet>` overriding with `<V extends Pet>`, through `Store<Pet>` and directly; `AnyStore<K>` beside it | E0900 | works |
+| the same over `abstract class Shelf<K>` with `PetShelf extends Shelf<Pet>` and `NamedShelf extends Shelf<Named>` (an interface bound) | E0900 | works |
+| anonymous `Visitor<int>` / `Visitor<String>` passing `this` on as the visitor | E0900 | works |
+| anonymous implementer of `interface Expr { <R> R accept(Visitor<R>) }` capturing two locals | E0438 | works |
+| anonymous subclass of an extended abstract class (generic method, captured local), in a `Vec<Shape>` with a named subclass | E0438 / E0900 | works |
+| anonymous class in generic code using the caller's `T` (`<T> Box<T> boxOf(T value)`) | worked (inline) | works (lifted), prints `Box$anon@..` |
+| `Weird<T, U> extends Tree<T>` built with `U` written out, bound by `<A, B> wrap(A, B)`, and `Vec<X>` in `Maker<X>.make` | E0438 | works |
+| `wrap("x", 7)`: the literal where `B` is the parameter's type | built a `Weird<String, i32>` | builds `Weird<String, int>` |
+| `grow<A, Vec<B>>` inside `<A, B> grow(..)`, building a `Weird<A, B>` | E0438 (the old rule) | `E0438` naming `grow`: polymorphic recursion has no finite set |
 
 ---
 

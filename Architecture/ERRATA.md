@@ -5115,7 +5115,7 @@ expectations; `tests/ui/generic_method_dispatch_limits` for the two E0438
 shapes (it replaces `tests/ui/generic_method_on_generic_base`, whose program
 now builds).
 
-**Known boundary.** None of the three items remains open. The two E0438
+**Known boundary.** Resolved by E1XX-GAP39c: ~~None of the three items remains open. The two E0438
 shapes above are refusals with their reason, not gaps: a value that does not
 carry its own type arguments cannot be asked for them. Found on the way and
 not closed here: a class that fixes an interface's parameter to a class and
@@ -5123,7 +5123,7 @@ overrides a method bounded by it (`<V extends K> int addAll(Vec<V> vs)` in
 `interface Store<K>`, overridden as `<V extends Pet>` in `class PetStore
 implements Store<Pet>`) is E0900: the interface's `V: Into<K>` and the
 class's `V: PetKind` are different Rust bounds, and an impl may not ask more
-than its trait. It predates this entry (E135's lowering of rule 4).
+than its trait. It predates this entry (E135's lowering of rule 4).~~
 
 **Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 gains rule 10 (generic
 methods through a supertype) and §T.4.8 its lowering; `JUX-ASYNC-ADDENDUM-v2.md`
@@ -5131,6 +5131,84 @@ methods through a supertype) and §T.4.8 its lowering; `JUX-ASYNC-ADDENDUM-v2.md
 E0435 and E0438 rows say what they now mean. E135's "Still a limitation" and
 "Known boundary" paragraphs are resolved here. GAPS.md gap 39's open items are
 closed.
+
+## E1XX-GAP39c. What E136 still refused: an override bounded by a fixed type, an anonymous subtype, a subtype with a parameter its supertype does not fix
+
+**Conflict.** E136 left three shapes refused or broken, and the rule is that
+none may stay that way:
+
+- **`<V extends K>` overridden as `<V extends Pet>`** (`interface Store<K>`,
+  `class PetStore implements Store<Pet>`; the same with `abstract class
+  Shelf<K>`) was E0900. The supertype's trait said `V: Into<K>` and the
+  override's own method `V: PetKind`, and an impl may not ask more than its
+  trait. A class `Kind` trait did not say `Into<K>` at all.
+- **An anonymous class** could not be a subtype in generic dispatch (E0438),
+  and an anonymous subclass of an extended class did not build at all (it
+  implemented none of the class's dispatch trait); an anonymous visitor that
+  passed `this` on as the visitor did not build either.
+- **A subtype with a type parameter its supertype does not fix** (`class
+  Weird<T, U> extends Tree<T>`) was E0438.
+
+**Resolution.**
+
+1. **The override lowers its bound as the trait does.** A method type
+   parameter at a position that some supertype's declaration of the method
+   bounds by the supertype's own parameter (`<V extends K>`) has its bound
+   lowered to `Into<bound>` (`V: Into<Pet>`), which is the trait's `Into<K>`
+   at `K = Pet`, on the method, on the class `Kind` trait (which now states
+   `V: Into<K>` like an interface), on every impl and on the handle's
+   forwarding. In the body, a `V` is converted to its bound where a member of
+   it is used (`v.name()`, `v.legs`) and where it is stored as one. The
+   dispatch from a supertype that fixes `K` (where `V: Into<Pet>` cannot be
+   shown, only `V: Into<K>`) calls a `__jux_via_` twin of the method,
+   generic over the supertype's `K`, which converts a `V` by way of it. A
+   non-generic interface gets `impl From<C> for Rc<dyn I>` for each of its
+   non-generic implementers, the conversion `V: Into<I>` asks for.
+2. **Every anonymous class of a Jux type is lifted to a named class.** The
+   checker records, for each one, the enclosing type parameters it uses, the
+   enclosing locals it captures (with their types), and the types of its
+   superclass constructor's arguments; the driver declares
+   `__JuxAnon_<Target>_<source>_<n>` in the same source (fields for the
+   captures, a constructor that passes the superclass its arguments), moves
+   the anonymous body's methods and initializer blocks into it unchanged
+   (spans included, so a failure names its line), replaces the `new T(..) {
+   .. }` with a construction of it, and checks the program again. It is then
+   a class like any other: dispatched by name, implementing its superclass's
+   dispatch trait, handing `this` out. It prints as `Target$anon@..`, as the
+   anonymous object did.
+3. **A subtype's unfixed parameter is closed over the program.** The checker
+   records every `new C<..>` and every call of a generic function or method
+   with the type arguments it binds, each with its context (the class and the
+   function or method whose body it is in). The set of instantiations of each
+   class is the fixpoint of substituting each context's own instantiations
+   into the facts written in it; a method's context includes calls through a
+   supertype that declares it. The dispatch chain then has one branch per
+   instantiation (`Weird<T, String>`, `Weird<T, bool>`, `Weird<T, Vec<X>>` at
+   each `X` built), the fixed positions spelled by the trait's own parameters.
+   An untyped number literal passed where a callee's own type parameter is
+   the parameter's type is given that type (`wrap("x", 7)` builds a `Weird<T,
+   int>`, not an `i32` one).
+4. **E0438 keeps one case, and it is truly impossible:** polymorphic
+   recursion that builds a subtype at ever-larger arguments (`<A, B> Tree<A>
+   grow(B b, int n)` calling `grow<A, Vec<B>>`). The set of `U` has no last
+   element, so there is no finite chain to write, and a whole-program compiler
+   cannot close it; the message names the method that keeps growing it. (Such
+   a program would not build in the language Jux compiles to either: it
+   monomorphizes `grow` without end.)
+
+**Tests.** `examples/bounded_method_overrides.jux`,
+`examples/anonymous_classes_dispatch.jux` and
+`examples/unfixed_subtype_params.jux`, pinned by hand-written expectations;
+`tests/ui/generic_method_dispatch_limits` now holds the polymorphic-recursion
+refusal only (the two shapes it held before build).
+
+**Known boundary.** A lifted anonymous class captures enclosing locals and
+parameters, as before; the enclosing object's own fields read bare inside an
+anonymous class were not captured before and are not now.
+
+**Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10 and §T.4.8 are
+amended; `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's E0438 row names the one case
+left. E136's "Known boundary" is resolved here. GAPS.md gap 39c is closed.
 
 ---
 When you edit any addendum that touches one of the items above,

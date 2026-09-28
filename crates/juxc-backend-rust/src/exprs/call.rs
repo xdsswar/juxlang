@@ -3768,6 +3768,34 @@ impl RustEmitter {
             }
             _ => return None,
         };
+        // A parameter typed by a bare type parameter of the callee itself
+        // (`<A, B> Tree<A> wrap(A a, B b)` called `wrap("x", 7)`): the checker
+        // binds `B = int`, and Rust, left to itself, would pick `i32` for the
+        // literal, building a different type than the program asked for
+        // (ERRATA E1XX-GAP39c: the dispatch looks for a `Weird<T, int>`).
+        // An explicit `<..>` already pins the parameter, and another argument
+        // in a slot of the same parameter decides it for the literal.
+        if call.explicit_generic_args.is_empty() {
+            if let Some((ptys, gnames)) = self.callee_params_and_generics(&call.callee) {
+                if let Some(pty) = ptys.get(i) {
+                    let bare = |t: &juxc_ast::TypeRef| {
+                        (t.generic_args.is_empty() && t.name.segments.len() == 1 && t.array_shape.is_none() && !t.nullable)
+                            .then(|| t.name.segments[0].text.clone())
+                            .filter(|n| gnames.contains(n))
+                    };
+                    if let Some(p) = bare(pty) {
+                        let decided = ptys.iter().enumerate().any(|(j, q)| {
+                            j != i
+                                && bare(q).as_deref() == Some(p.as_str())
+                                && call.args.get(j).is_some_and(|a| !matches!(a, Expr::Literal(_)))
+                        });
+                        if !decided {
+                            return Some(if is_int { "isize" } else { "f64" });
+                        }
+                    }
+                }
+            }
+        }
         let Expr::Field(f) = call.callee.as_ref() else { return None };
         let Some(juxc_tycheck::Ty::User { name, generic_args }) =
             self.expr_types.get(&crate::exprs::expr_span_of(&f.object))

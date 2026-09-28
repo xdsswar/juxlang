@@ -1,0 +1,84 @@
+// Anonymous classes as subtypes like any other (ERRATA E1XX-GAP39c): an
+// anonymous visitor, an anonymous implementer of an interface whose method
+// has type parameters of its own (reached by dispatch on the object's type),
+// an anonymous subclass of an extended abstract class, one that captures
+// enclosing locals, and one built in generic code. Each is lifted to a named
+// class, and still prints as `Target$anon`.
+
+import rust.std.Vec;
+
+interface Visitor<R> {
+    R visitNum(int n);
+    R visitAdd(Expr a, Expr b);
+}
+
+interface Expr {
+    <R> R accept(Visitor<R> v);
+}
+
+class Num implements Expr {
+    int value;
+    Num(int value) { this.value = value; }
+    public <R> R accept(Visitor<R> v) { return v.visitNum(value); }
+}
+
+// An anonymous implementer of `Expr`, capturing the two operands.
+Expr add(Expr a, Expr b) {
+    return new Expr() {
+        public <R> R accept(Visitor<R> v) { return v.visitAdd(a, b); }
+    };
+}
+
+abstract class Shape {
+    public abstract <R> R measure(Visitor<R> v);
+    public abstract int sides();
+    public String kind() { return "shape"; }
+}
+
+class Square extends Shape {
+    public <R> R measure(Visitor<R> v) { return v.visitNum(4); }
+    public int sides() { return 4; }
+}
+
+// Built in generic code: the anonymous class uses the caller's `T`.
+interface Box<T> { T get(); }
+<T> Box<T> boxOf(T value) {
+    return new Box<T>() {
+        public T get() { return value; }
+    };
+}
+
+void main() {
+    // Anonymous visitors, passing `this` on as the visitor.
+    Visitor<int> eval = new Visitor<int>() {
+        public int visitNum(int n) { return n; }
+        public int visitAdd(Expr a, Expr b) { return a.accept(this) + b.accept(this); }
+    };
+    Visitor<String> show = new Visitor<String>() {
+        public String visitNum(int n) { return "" + n; }
+        public String visitAdd(Expr a, Expr b) { return "(" + a.accept(this) + " + " + b.accept(this) + ")"; }
+    };
+    Expr e = add(new Num(1), add(new Num(2), new Num(3)));
+    print(e.accept(eval));
+    print(e.accept(show));
+
+    // An anonymous subclass of an extended class, next to a named one.
+    int base = 10;
+    Shape tri = new Shape() {
+        public <R> R measure(Visitor<R> v) { return v.visitNum(base + 3); }
+        public int sides() { return 3; }
+    };
+    Vec<Shape> shapes = new Vec<Shape>();
+    shapes.push(tri);
+    shapes.push(new Square());
+    for (Shape s : shapes) {
+        print(s.kind() + " " + s.sides() + " " + s.measure(eval) + " " + s.measure(show));
+    }
+
+    Box<String> b = boxOf("boxed");
+    print(b.get());
+    Box<int> n = boxOf(41);
+    print(n.get() + 1);
+    String shown = "" + b;
+    print(shown.startsWith("Box$anon@"));
+}

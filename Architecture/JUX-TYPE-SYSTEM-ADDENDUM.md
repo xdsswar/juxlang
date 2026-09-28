@@ -410,11 +410,15 @@ Rules:
    supertype** (the visitor pattern: `<R> R accept(Visitor<R> v)` on an
    interface or on a class that is extended, called on a value typed by it),
    for any type arguments the call has, including the caller's own type
-   parameters. The call runs the method of the object's own type. The object
-   has to be able to say what that type is, arguments included, so two
-   subtypes are refused (**`E0438`**, with the reason): one with a type
-   parameter the supertype does not fix (`class Weird<T, U> extends Tree<T>`),
-   and an anonymous class (`ERRATA.md` E136).
+   parameters. The call runs the method of the object's own type, whatever it
+   is: a named class, an anonymous class (lifted to a named one), or a
+   subtype with a type parameter the supertype does not fix (`class Weird<T,
+   U> extends Tree<T>`), found at every argument the program builds it with.
+   That set is finite in every program but one that builds the subtype at
+   ever-larger arguments by polymorphic recursion, which is **`E0438`**
+   (`ERRATA.md` E136, E1XX-GAP39c). An override may bound its type parameter
+   by the type its supertype fixes (`<V extends Pet>` for `<V extends K>` in a
+   `Store<Pet>`).
 
 ### T.4.7. Structural Inference Through Nested Generics
 
@@ -490,7 +494,12 @@ Rust allows it, with three rewrites where it does not:
   arguments and result passed through `__jux_seen_as`; a default method is
   dispatched only to the types that override it and otherwise runs on the
   handle through its `__jux_default_<m>` twin. A class `<K, V extends K>`
-  states `V: Into<K>` on each dispatch-trait member that takes a `V`.
+  states `V: Into<K>` on each dispatch-trait member that takes a `V`. An
+  override's `<V extends Pet>` for a supertype's `<V extends K>` lowers to
+  `V: Into<Pet>` (with a `__jux_via_` twin generic over `K` for the
+  dispatch); an anonymous class is lifted to a named class before lowering;
+  a subtype's unfixed parameter gets one dispatch branch per instantiation of
+  the program's closed set (`ERRATA.md` E1XX-GAP39c).
 - **PECS wildcards** are use-site only. In parameter position a `? extends B`
   producer and a `? super B` consumer lift to a fresh generic, except a wildcard
   whose bound names an in-scope type param substitutes that param directly

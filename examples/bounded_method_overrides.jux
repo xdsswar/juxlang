@@ -1,0 +1,76 @@
+// An override that bounds its type parameter by the type its supertype's
+// parameter is fixed to (ERRATA E1XX-GAP39c): `<V extends K>` declared in
+// `interface Store<K>` (or `abstract class Shelf<K>`) and overridden as
+// `<V extends Pet>` in a class that fixes `K = Pet`. Both lower to the same
+// bound, so the override is reached directly and through the supertype.
+
+import rust.std.Vec;
+
+interface Named { String name(); }
+
+class Pet implements Named {
+    public int legs = 4;
+    String n;
+    Pet(String n) { this.n = n; }
+    public String name() { return n; }
+}
+
+class Cat extends Pet {
+    Cat(String n) { super(n); }
+    @Override public String name() { return "cat " + n; }
+}
+
+interface Store<K> {
+    Vec<K> items();
+    <V extends K> int addAll(Vec<V> vs);
+    <V extends K> String describe(V v);
+}
+
+class PetStore implements Store<Pet> {
+    Vec<Pet> ps = new Vec<Pet>();
+    public Vec<Pet> items() { return ps; }
+    public <V extends Pet> int addAll(Vec<V> vs) { for (V v : vs) { ps.push(v); } return (int) ps.len(); }
+    public <V extends Pet> String describe(V v) { return v.name() + "/" + v.legs; }
+}
+
+class AnyStore<K> implements Store<K> {
+    Vec<K> ks = new Vec<K>();
+    public Vec<K> items() { return ks; }
+    public <V extends K> int addAll(Vec<V> vs) { for (V v : vs) { ks.push(v); } return (int) ks.len() * 10; }
+    public <V extends K> String describe(V v) { return "any"; }
+}
+
+abstract class Shelf<K> {
+    Vec<K> ks = new Vec<K>();
+    public abstract <V extends K> int put(V v);
+    public int size() { return (int) ks.len(); }
+}
+
+class PetShelf extends Shelf<Pet> {
+    public <V extends Pet> int put(V v) { ks.push(v); return v.name().length(); }
+}
+
+class NamedShelf extends Shelf<Named> {
+    public <V extends Named> int put(V v) { ks.push(v); return 100 + v.name().length(); }
+}
+
+void main() {
+    Vec<Cat> cats = new Vec<Cat>();
+    cats.push(new Cat("x"));
+
+    Store<Pet> s = new PetStore();
+    print(s.addAll(cats));
+    print(s.describe(new Cat("y")));
+    PetStore direct = new PetStore();
+    print(direct.describe(new Pet("p")));
+    Store<Pet> any = new AnyStore<Pet>();
+    print(any.addAll(cats));
+    print(any.describe(new Cat("z")));
+
+    Shelf<Pet> shelf = new PetShelf();
+    print(shelf.put(new Cat("tom")));
+    print(shelf.put(new Pet("rex")));
+    print(shelf.size());
+    Shelf<Named> named = new NamedShelf();
+    print(named.put(new Cat("a")));
+}

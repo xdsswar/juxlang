@@ -1,23 +1,25 @@
 // A method with type parameters of its own, called on a supertype value,
-// finds the concrete type behind the value (ERRATA E136). Two shapes
-// cannot be found, and each says why (E0438).
+// finds the concrete type behind the value (ERRATA E136, E1XX-GAP39c). A
+// subtype with a type parameter the supertype does not fix is found at every
+// argument the program builds it with -- a set that is finite in every
+// program but one that builds ever-larger types by calling itself (E0438).
+import rust.std.Vec;
+
 interface Visitor<R> { R visit(int n); }
 abstract class Tree<T> {
     public abstract <R> R accept(Visitor<R> v);
 }
-class Leaf<T> extends Tree<T> {
-    public <R> R accept(Visitor<R> v) { return v.visit(1); }
-}
-// `U` is not fixed by `Tree<T>`: a `Tree<int>` that is a `Weird` does not say it.
 class Weird<T, U> extends Tree<T> {
+    U extra;
+    Weird(U extra) { this.extra = extra; }
     public <R> R accept(Visitor<R> v) { return v.visit(2); }
 }
 
-interface Shape { <R> R describe(Visitor<R> v); }
+<A, B> Tree<A> grow(B b, int n) {
+    if (n == 0) { return new Weird<A, B>(b); }
+    return grow<A, Vec<B>>(new Vec<B>(), n - 1);
+}
 
 public void main() {
-    // An anonymous class has no name to be found by.
-    Shape s = new Shape() {
-        public <R> R describe(Visitor<R> v) { return v.visit(3); }
-    };
+    Tree<int> t = grow<int, int>(1, 3);
 }

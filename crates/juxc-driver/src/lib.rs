@@ -235,6 +235,7 @@ pub fn cargo_profile_args(release: bool) -> (Vec<String>, String) {
 }
 
 pub mod annotations;
+mod anon_lift;
 pub mod big_stack;
 mod borrow_selfcheck;
 pub mod build_failure;
@@ -497,6 +498,12 @@ where
     // walker against each unit using that shared table. tycheck tags its
     // own diagnostics with the matching unit/source index.
     let mut typed = juxc_tycheck::typecheck_workspace(&units);
+    // Anonymous classes that have to be found by name are lifted to named
+    // ones, and the program is checked again (ERRATA E1XX-GAP39c).
+    let clean = anon_lift::no_user_errors(&typed.diagnostics, &units);
+    if clean && anon_lift::apply(&mut units, &typed.anon_lifts) {
+        typed = juxc_tycheck::typecheck_workspace(&units);
+    }
     diagnostics.append(&mut typed.diagnostics);
     // Rewrite named-argument / default-parameter call sugar into plain
     // positional calls (per the checker's recorded plans) so the
@@ -594,6 +601,12 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     // §3.1: one public type per file, named like the file.
     diagnostics.extend(package_check::check_public_type_file_names(&units, &sources));
     let mut typed = juxc_tycheck::typecheck_workspace(&units);
+    // Anonymous classes that have to be found by name are lifted to named
+    // ones, and the program is checked again (ERRATA E1XX-GAP39c).
+    let clean = anon_lift::no_user_errors(&typed.diagnostics, &units);
+    if clean && anon_lift::apply(&mut units, &typed.anon_lifts) {
+        typed = juxc_tycheck::typecheck_workspace(&units);
+    }
     diagnostics.append(&mut typed.diagnostics);
     // Rewrite named-argument / default-parameter call sugar into plain
     // positional calls (per the checker's recorded plans) so the
@@ -753,6 +766,12 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     // re-running the front end. tycheck tags its own diagnostics with the
     // matching unit/source index.
     let mut typed = juxc_tycheck::typecheck_workspace(&units);
+    // Anonymous classes that have to be found by name are lifted to named
+    // ones, and the program is checked again (ERRATA E1XX-GAP39c).
+    let clean = anon_lift::no_user_errors(&typed.diagnostics, &units);
+    if clean && anon_lift::apply(&mut units, &typed.anon_lifts) {
+        typed = juxc_tycheck::typecheck_workspace(&units);
+    }
     diagnostics.append(&mut typed.diagnostics);
     // Rewrite named-argument / default-parameter call sugar into plain
     // positional calls (per the checker's recorded plans) so the

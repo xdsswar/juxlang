@@ -1351,6 +1351,40 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
+        // The receiver of a member access on a value whose type parameter
+        // is bounded `Into<C>` (ERRATA E1XX-GAP39c): the member is C's.
+        if !self.into_receivers.is_empty() {
+            let span = expr_span_of(expr);
+            if let Some(bound) = self.into_receivers.remove(&span) {
+                let via = match self.expr_types.get(&span) {
+                    Some(juxc_tycheck::Ty::Param(p)) => {
+                        self.into_via.iter().find(|(n, _)| n == p).map(|(_, k)| k.clone())
+                    }
+                    _ => None,
+                };
+                match &via {
+                    // In a `__jux_via_` twin: into the supertype's parameter,
+                    // which IS the bound there.
+                    Some(k) => {
+                        self.w.push_str(&format!("crate::__jux_seen_as::<{k}, "));
+                        self.emit_value_type_as_rust(&bound);
+                        self.w.push_str(&format!(">(std::convert::Into::<{k}>::into(("));
+                    }
+                    None => {
+                        self.w.push_str("std::convert::Into::<");
+                        self.emit_value_type_as_rust(&bound);
+                        self.w.push_str(">::into((");
+                    }
+                }
+                self.emit_expr(expr);
+                self.w.push_str(").clone())");
+                if via.is_some() {
+                    self.w.push(')');
+                }
+                self.into_receivers.insert(span, bound);
+                return;
+            }
+        }
         // An operand the pre-hoist already bound (`exprs/operand_hoist.rs`).
         if let Some(name) = self.operand_substitute(expr) {
             let name = name.to_string();

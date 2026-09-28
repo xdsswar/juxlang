@@ -42,6 +42,7 @@ use juxc_diagnostics::{code, Diagnostic};
 use juxc_source::Span;
 
 pub mod aliases;
+pub mod anon_lift;
 pub mod check;
 pub mod clone_needs;
 pub(crate) mod clone_uses;
@@ -56,6 +57,7 @@ pub mod generic_dispatch;
 pub mod hashing;
 pub(crate) mod hash_keys;
 pub mod infer;
+pub mod instantiations;
 pub mod java_habits;
 pub(crate) mod pattern_check;
 pub mod assigned;
@@ -224,6 +226,9 @@ pub struct TypeCheckResult {
     /// the field identifier's span. The driver hands these to
     /// [`expand::apply_component_names`] before the backend runs.
     pub component_names: HashMap<Span, String>,
+    /// Anonymous classes the driver lifts to named ones and checks again
+    /// (`anon_lift`, ERRATA E1XX-GAP39c).
+    pub anon_lifts: Vec<anon_lift::AnonLift>,
 }
 
 impl TypeCheckResult {
@@ -324,6 +329,8 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     let mut all_component_names = std::collections::HashMap::new();
     let mut all_free_operator_calls = std::collections::HashMap::new();
     let mut all_operator_selections = std::collections::HashMap::new();
+    let mut all_anon_lifts = Vec::new();
+    let mut all_inst_facts = Vec::new();
     for (idx, unit) in units.iter().enumerate() {
         let before = tc.diagnostics.len();
         let mut checker = check::Checker::new(&symbols, &mut tc.diagnostics);
@@ -335,6 +342,11 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
             checker.seed_unit_context(&ctx.package, &ctx.unqualified, &ctx.ambiguous);
         }
         checker.check_unit(unit);
+        for mut lift in std::mem::take(&mut checker.anon_lifts) {
+            lift.unit = idx;
+            all_anon_lifts.push(lift);
+        }
+        all_inst_facts.append(&mut checker.inst_facts);
         let (
             expr_types,
             call_expansions,
@@ -377,6 +389,13 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     // recorded, so it runs after it; the backend writes its `where` clauses
     // from the result and `E0457` checks every use against the same table.
     symbols.clone_needs = clone_needs::compute(units, &symbols, &all_expr_types);
+    // The instantiations the program builds, closed over its generic calls
+    // (ERRATA E1XX-GAP39c), and a dispatch that cannot close is `E0438`.
+    let seeds: Vec<ty::Ty> = all_expr_types.values().cloned().collect();
+    symbols.instantiations = instantiations::close(&symbols, &all_inst_facts, &seeds);
+    for (idx, d) in generic_dispatch::unclosable_diagnostics(&symbols) {
+        tc.diagnostics.push(d.with_file(idx));
+    }
     // `E0457`: every use checked against that table, so the checker, not
     // rustc, reports a member used over a type argument that cannot meet it.
     for (idx, d) in clone_uses::check_uses(units, &symbols, &all_expr_types) {
@@ -388,6 +407,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         expr_types: all_expr_types,
         call_expansions: all_call_expansions,
         component_names: all_component_names,
+        anon_lifts: all_anon_lifts,
     }
 }
 

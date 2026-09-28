@@ -400,6 +400,12 @@ pub(crate) struct Checker<'a> {
     /// Record-destructuring reads resolved to component names, keyed by the
     /// field identifier's span (see `juxc_ast::record_destructure_temp`).
     pub(crate) component_names: HashMap<Span, String>,
+    /// Anonymous classes to lift to named ones (ERRATA E1XX-GAP39c).
+    pub(crate) anon_lifts: Vec<crate::anon_lift::AnonLift>,
+    /// The instantiation facts `crate::instantiations` closes over.
+    pub(crate) inst_facts: Vec<crate::instantiations::Fact>,
+    /// The function or method whose body is being checked, as a fact key.
+    pub(crate) inst_ctx_method: Option<String>,
     /// Constructor-overload selections — `new T(...)` / `super(...)` /
     /// `this(...)` call span → index into the class's constructor
     /// list. Absorbed into `SymbolTable::ctor_selections` after the
@@ -617,6 +623,9 @@ impl<'a> Checker<'a> {
             expr_types: HashMap::new(),
             call_expansions: HashMap::new(),
             component_names: HashMap::new(),
+            anon_lifts: Vec::new(),
+            inst_facts: Vec::new(),
+            inst_ctx_method: None,
             ctor_selections: HashMap::new(),
             method_selections: HashMap::new(),
             function_selections: HashMap::new(),
@@ -2546,6 +2555,13 @@ impl<'a> Checker<'a> {
     }
 
     fn check_function(&mut self, fn_decl: &FnDecl) {
+        let key = format!("fn:{}", crate::symbol_table::make_fqn(&self.env.current_package, &fn_decl.name.text));
+        let prev = self.inst_ctx_method.replace(key);
+        self.check_function_inner(fn_decl);
+        self.inst_ctx_method = prev;
+    }
+
+    fn check_function_inner(&mut self, fn_decl: &FnDecl) {
         self.check_export_signature(fn_decl);
         self.check_test_annotation(fn_decl, false);
         let Some(body) = &fn_decl.body else { return };
@@ -3541,6 +3557,13 @@ impl<'a> Checker<'a> {
     /// plus a `this` binding. Abstract methods (body = None) are
     /// skipped.
     fn check_method(&mut self, method: &FnDecl, this_ty: &Ty) {
+        let key = self.env.current_class.as_ref().map(|c| format!("method:{c}.{}", method.name.text));
+        let prev = std::mem::replace(&mut self.inst_ctx_method, key);
+        self.check_method_inner(method, this_ty);
+        self.inst_ctx_method = prev;
+    }
+
+    fn check_method_inner(&mut self, method: &FnDecl, this_ty: &Ty) {
         // `@export` (C linkage, Layout-ABI §L.3.2): a STATIC method is exported
         // like a free function, through a C wrapper that calls `Type::method`,
         // and its signature is held to the same C rules. An instance method
@@ -7544,7 +7567,16 @@ impl<'a> Checker<'a> {
 
             Expr::Call(c) => self.check_call(c),
 
-            Expr::NewObject(n) => self.check_new_object(n),
+            Expr::NewObject(n) => {
+                self.check_new_object(n);
+                // Which instantiation this builds, for dispatch through a
+                // supertype that does not fix all of it (ERRATA E1XX-GAP39c).
+                if let Ty::User { name, generic_args } = infer_expr(expr, &self.env, self.symbols) {
+                    if !generic_args.is_empty() && self.symbols.classes.contains_key(&name) {
+                        self.record_inst(crate::instantiations::FactKind::New(name), generic_args);
+                    }
+                }
+            }
 
             Expr::NewArray(n) => {
                 // Check every dimension's size (outer + inner dims of a
@@ -8978,6 +9010,124 @@ impl<'a> Checker<'a> {
                 );
             }
         }
+    }
+
+    /// Record an instantiation fact, in the context being checked
+    /// (`crate::instantiations`, ERRATA E1XX-GAP39c).
+    pub(crate) fn record_inst(&mut self, kind: crate::instantiations::FactKind, args: Vec<Ty>) {
+        if args.is_empty() {
+            return;
+        }
+        self.inst_facts.push(crate::instantiations::Fact {
+            kind,
+            args,
+            ctx_class: self.env.current_class.clone(),
+            ctx_method: self.inst_ctx_method.clone(),
+        });
+    }
+
+    /// Record what a named class standing in for the anonymous class `n`
+    /// needs (`crate::anon_lift`). Nothing is recorded when a type it would
+    /// have to declare cannot be written, and the class then stays inline.
+    fn plan_anon_lift(&mut self, n: &NewObjectExpr, class_fqn: &str, target_is_class: bool, body: &juxc_ast::AnonymousBody) {
+        let mut target = TypeRef {
+            name: n.class_name.clone(),
+            generic_args: n.generic_args.iter().cloned().map(juxc_ast::GenericArg::Type).collect(),
+            nullable: false,
+            array_shape: None,
+            fn_shape: None,
+            ptr_depth: 0,
+            span: n.span,
+        };
+        target.span = n.span;
+        let target_text = crate::symbol_table::render_type_ref(&target);
+        // Every bare name the body reads that is an enclosing local or
+        // parameter; `this` is the anonymous object itself.
+        let mut names: Vec<String> = Vec::new();
+        let mut blocks: Vec<&juxc_ast::Block> = body.methods.iter().filter_map(|m| m.body.as_ref()).collect();
+        blocks.extend(body.init_blocks.iter());
+        for b in blocks {
+            juxc_ast::visit::for_each_expr(b, &mut |e| {
+                if let Expr::Path(qn) = e {
+                    if qn.segments.len() == 1 && !names.contains(&qn.segments[0].text) {
+                        names.push(qn.segments[0].text.clone());
+                    }
+                }
+            });
+        }
+        let method_params: std::collections::HashSet<&str> = body
+            .methods
+            .iter()
+            .flat_map(|m| m.params.iter().map(|p| p.name.text.as_str()))
+            .collect();
+        let mut captures: Vec<(String, String)> = Vec::new();
+        let mut used_params: Vec<String> = Vec::new();
+        let collect_params = |ty: &Ty, out: &mut Vec<String>| {
+            let text = ty.to_string();
+            for p in self.env.generic_params.iter() {
+                let hit = text.split(|c: char| !c.is_alphanumeric() && c != '_').any(|w| w == p);
+                if hit && !out.contains(p) {
+                    out.push(p.clone());
+                }
+            }
+        };
+        for name in names {
+            if name == "this" || method_params.contains(name.as_str()) {
+                continue;
+            }
+            let Some(ty) = self.env.declared_type_under_refinement(&name).or_else(|| self.env.lookup(&name)).cloned() else {
+                continue;
+            };
+            let text = ty.to_string();
+            if !crate::anon_lift::declarable(&text) {
+                return;
+            }
+            collect_params(&ty, &mut used_params);
+            captures.push((name, text));
+        }
+        let mut super_arg_types = Vec::new();
+        if target_is_class {
+            for a in &n.args {
+                let ty = infer_expr(a, &self.env, self.symbols);
+                let text = ty.to_string();
+                if !crate::anon_lift::declarable(&text) {
+                    return;
+                }
+                collect_params(&ty, &mut used_params);
+                super_arg_types.push(text);
+            }
+        }
+        // The enclosing type parameters the body or the target names.
+        let written = format!("{body:?}{target:?}");
+        for p in self.env.generic_params.iter() {
+            if written.contains(&format!("text: \"{p}\"")) && !used_params.contains(p) {
+                used_params.push(p.clone());
+            }
+        }
+        used_params.sort();
+        let generics: Vec<(String, String)> = used_params
+            .iter()
+            .map(|p| {
+                let bounds = self
+                    .env
+                    .generic_bounds
+                    .get(p)
+                    .map(|bs| bs.iter().map(crate::symbol_table::render_type_ref).collect::<Vec<_>>().join(" & "))
+                    .unwrap_or_default();
+                (p.clone(), bounds)
+            })
+            .collect();
+        let target_bare = crate::symbol_table::fqn_bare(class_fqn).to_string();
+        self.anon_lifts.push(crate::anon_lift::AnonLift {
+            span: n.span,
+            unit: 0,
+            target_is_class,
+            target_text,
+            target_bare,
+            generics,
+            captures,
+            super_arg_types,
+        });
     }
 
     /// Whether interface `name`, or an interface it extends, declares `method`.
@@ -12361,6 +12511,7 @@ impl<'a> Checker<'a> {
                         &format!("function `{name}`"),
                         c.span,
                     );
+                    self.record_inst(crate::instantiations::FactKind::Call(format!("fn:{fqn}")), subst_args.clone());
                     let prev_callee_fn = self.callee_fn_key.replace(fqn.clone());
                     if callee_c_variadic && c.args.len() > params.len() {
                         // C-variadic call with extra args: the fixed prefix gets
@@ -13211,6 +13362,10 @@ impl<'a> Checker<'a> {
                         &mut subst_params,
                         &mut subst_args,
                     );
+                    if !method_generic_params.is_empty() {
+                        let tail = subst_args[subst_args.len().saturating_sub(method_generic_params.len())..].to_vec();
+                        self.record_inst(crate::instantiations::FactKind::Call(format!("method:{owner_name}.{method_name}")), tail);
+                    }
                     // METHOD generic `extends` bounds (E0446) — check
                     // the inferred/explicit method type args against
                     // their declared bounds. The method's params sit
@@ -13286,6 +13441,10 @@ impl<'a> Checker<'a> {
                             &mut subst_params,
                             &mut subst_args,
                         );
+                        if !method_generic_params.is_empty() {
+                            let tail = subst_args[subst_args.len().saturating_sub(method_generic_params.len())..].to_vec();
+                            self.record_inst(crate::instantiations::FactKind::Call(format!("method:{name}.{method_name}")), tail);
+                        }
                         self.check_call_args(
                             method_name,
                             &params,
@@ -13498,29 +13657,17 @@ impl<'a> Checker<'a> {
             // type implemented here, dispatches by naming the concrete type
             // behind the value (ERRATA E136), and an anonymous class
             // has no name to be found by.
-            let owners = crate::generic_dispatch::generic_virtual_owners(self.symbols);
-            let mut hit: Vec<(&String, &Vec<String>)> = owners
-                .iter()
-                .filter(|(o, _)| {
-                    *o == &class_name || crate::generic_dispatch::supertype_args(self.symbols, &class_name, o).is_some()
-                })
-                .collect();
-            hit.sort();
-            if let Some((owner, methods)) = hit.first() {
-                let owner_bare = crate::symbol_table::fqn_bare(owner);
-                let method = &methods[0];
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::Code::E0438_GenericVirtualMethod,
-                        format!(
-                            "an anonymous class cannot be a `{owner_bare}`: `{method}` has type parameters \
-                             of its own, and a call of it on a `{owner_bare}` value finds the method by the \
-                             name of the type behind the value, which an anonymous class does not have",
-                        ),
-                    )
-                    .with_span(n.span)
-                    .with_help(format!("declare the class with a name (`class My{owner_bare} implements {owner_bare} {{ ... }}`)")),
-                );
+            // It is lifted to a named class instead (ERRATA E1XX-GAP39c),
+            // when it has to be found by name: it extends a class (it
+            // implements that class's dispatch trait like any subclass), or
+            // its interface has such a method.
+            // Every anonymous class of a Jux type is lifted: as a named class
+            // it is a value like any other (`this` handed out as the
+            // interface, dispatch through a supertype, a subclass's `Kind`).
+            let target_is_class = self.symbols.classes.get(&class_name).is_some_and(|c| !c.is_external);
+            let target_is_iface = self.symbols.interfaces.get(&class_name).is_some_and(|i| !i.is_external);
+            if target_is_class || target_is_iface {
+                self.plan_anon_lift(n, &class_name, target_is_class, body);
             }
             let this_ty = Ty::User { name: class_name.clone(), generic_args: Vec::new() };
             let saved_return = self.current_return.take();
@@ -18904,10 +19051,11 @@ public void main() { }");
     }
 
     /// A generic virtual method on a polymorphic base dispatches on the
-    /// object's type (ERRATA E136): accepted. E0438 is left for a
-    /// subclass with a type parameter the base does not fix.
+    /// object's type (ERRATA E136), and a subclass with a type parameter the
+    /// base does not fix is dispatched at each instantiation the program
+    /// builds (E1XX-GAP39c): both accepted.
     #[test]
-    fn generic_virtual_method_on_base_is_accepted_unless_a_param_is_unfixed() {
+    fn generic_virtual_method_on_base_is_accepted() {
         let d = run(r#"
             public class Base { public <R> R pick(R x){ return x; } }
             public class Sub extends Base {}
@@ -18917,9 +19065,9 @@ public void main() { }");
         let d = run(r#"
             public class Base<T> { public <R> R pick(R x){ return x; } }
             public class Sub<T, U> extends Base<T> {}
-            public void main() {}
+            public void main() { Base<int> b = new Sub<int, String>(); }
             "#);
-        assert!(has(&d, code::Code::E0438_GenericVirtualMethod), "expected E0438: {d:?}");
+        assert!(!has(&d, code::Code::E0438_GenericVirtualMethod), "unexpected E0438: {d:?}");
     }
 
     /// A cast between two unrelated classes can never succeed → E0442.

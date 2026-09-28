@@ -2981,7 +2981,8 @@ impl RustEmitter {
         // A method with type parameters of its own keeps them, and stays off
         // the vtable (`Self: Sized`) so the trait is still a value type; the
         // handle answers it by dispatch (ERRATA E136).
-        self.emit_method_own_generics(&sig.generic_params);
+        let own_generics = self.kind_member_generics(sig);
+        self.emit_method_own_generics(&own_generics);
         self.w.push_str("(&self");
         for p in &sig.params {
             self.w.push_str(", ");
@@ -3033,7 +3034,8 @@ impl RustEmitter {
         let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
         self.w.push_str("fn ");
         self.w.push_str(&to_rust_ident(name));
-        self.emit_method_own_generics(&sig.generic_params);
+        let own_generics = self.kind_member_generics(sig);
+        self.emit_method_own_generics(&own_generics);
         self.w.push_str("(&self");
         for p in &sig.params {
             self.w.push_str(", ");
@@ -4393,7 +4395,8 @@ impl RustEmitter {
         let is_async = matches!(sig.return_type, ReturnType::AsyncType(_));
         self.w.push_str("fn ");
         self.w.push_str(&to_rust_ident(name));
-        self.emit_method_own_generics(&sig.generic_params);
+        let own_generics = self.kind_member_generics(sig);
+        self.emit_method_own_generics(&own_generics);
         self.w.push_str("(&self");
         for p in &sig.params {
             self.w.push_str(", ");
@@ -6172,6 +6175,36 @@ impl RustEmitter {
     /// for the method's whole signature and body: `T` there is the method's
     /// (ERRATA E135).
     pub(crate) fn emit_method(&mut self, method: &FnDecl) {
+        // An override of a supertype method whose type parameter is bounded
+        // by the supertype's own parameter lowers its bound as the trait does
+        // (ERRATA E1XX-GAP39c).
+        if let Some(class) = self.enclosing_class.clone() {
+            let (lowered, originals) = self.lowered_method_generics(&class, &method.name.text, &method.generic_params);
+            if !originals.is_empty() {
+                let mut m = method.clone();
+                m.generic_params = lowered;
+                let receivers = match &method.body {
+                    Some(b) => self.collect_into_receiver_spans(b, &originals),
+                    None => std::collections::HashMap::new(),
+                };
+                let prev_params = std::mem::replace(&mut self.into_params, originals.clone());
+                let prev_receivers = std::mem::replace(&mut self.into_receivers, receivers.clone());
+                self.emit_method_inner(&m);
+                // The twin a supertype's dispatch calls (`decls::generic_dispatch`).
+                let (twin, via) = Self::via_twin(&m, &originals);
+                let prev_via = std::mem::replace(&mut self.into_via, via);
+                self.into_receivers = receivers;
+                self.emit_method_inner(&twin);
+                self.into_via = prev_via;
+                self.into_params = prev_params;
+                self.into_receivers = prev_receivers;
+                return;
+            }
+        }
+        self.emit_method_inner(method);
+    }
+
+    fn emit_method_inner(&mut self, method: &FnDecl) {
         let shadowing: Vec<&juxc_ast::TypeParam> = method
             .generic_params
             .iter()
@@ -6560,6 +6593,11 @@ impl RustEmitter {
             let prev_type_param_bounds = self.type_param_bounds.clone();
             self.type_param_bounds
                 .extend(crate::collect_type_param_bounds(&method.generic_params));
+            // A bound lowered to `Into<C>` still reaches C's members in the
+            // body, through the converted receiver.
+            for (p, b) in self.into_params.clone() {
+                self.type_param_bounds.insert(p, vec![b]);
+            }
             // `out` params (§M.4): in scope for the body so reads/writes deref.
             let prev_out = std::mem::replace(
                 &mut self.out_params,
