@@ -156,7 +156,7 @@ pub struct SymbolTable {
     pub instantiations: crate::instantiations::Closure,
     /// The functions, methods and classes on a polymorphic-recursion cycle,
     /// lowered with erased type arguments (`crate::erasure`, ERRATA
-    /// E1XX-GAP39g).
+    /// E141).
     pub erasure: crate::erasure::Erasure,
 }
 

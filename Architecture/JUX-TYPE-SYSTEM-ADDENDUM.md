@@ -419,7 +419,7 @@ Rules:
    such set, and is compiled by erasure instead: the functions and classes on
    that cycle run at one erased type argument that carries each value's own
    type, with one dispatch for every depth (`ERRATA.md` E136, E137,
-   E1XX-GAP39g). A bounded type parameter on such a cycle cannot be erased,
+   E141). A bounded type parameter on such a cycle cannot be erased,
    which is **`E0438`**. An override may bound its type parameter
    by the type its supertype fixes (`<V extends Pet>` for `<V extends K>` in a
    `Store<Pet>`).

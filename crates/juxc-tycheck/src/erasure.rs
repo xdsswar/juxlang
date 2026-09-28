@@ -1,5 +1,5 @@
 //! Polymorphic recursion, lowered by erasing type arguments (ERRATA
-//! E1XX-GAP39g).
+//! E141).
 //!
 //! A generic function or method that calls itself at an ever-larger type
 //! argument (`grow<A, B>` calling `grow<A, Vec<B>>`, `build<T>` calling

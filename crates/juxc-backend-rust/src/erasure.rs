@@ -1,4 +1,4 @@
-//! Lowering the erased part of a program (ERRATA E1XX-GAP39g; the plan is
+//! Lowering the erased part of a program (ERRATA E141; the plan is
 //! `juxc_tycheck::erasure`).
 //!
 //! The functions, methods and classes on a polymorphic-recursion cycle are

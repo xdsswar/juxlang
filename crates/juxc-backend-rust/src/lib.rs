@@ -752,7 +752,7 @@ pub(crate) struct PendingSetterObserver {
 /// bare `.unwrap()` stopped the program with Rust's `Option::unwrap()` panic
 /// (gap 33).
 pub(crate) const ARRAY_POP_RAISE: &str = ".unwrap_or_else(|| crate::jux_empty_fail())";
-/// The erased-value support the prelude carries (ERRATA E1XX-GAP39g).
+/// The erased-value support the prelude carries (ERRATA E141).
 pub(crate) const ERASED_PRELUDE: &str = r##"#[derive(Clone)]
 pub struct JuxErased(std::rc::Rc<JuxErasedValue>);
 pub struct JuxErasedValue {
@@ -794,7 +794,7 @@ impl JuxErased {
 }
 pub fn jux_erased_mismatch(want: &str) -> ! {
     std::panic::panic_any(format!(
-        "internal compiler error: an erased value was read as `{}`, which it is not (ERRATA E1XX-GAP39g)",
+        "internal compiler error: an erased value was read as `{}`, which it is not (ERRATA E141)",
         want
     ))
 }
@@ -1509,7 +1509,7 @@ struct RustEmitter {
     /// by span: each is emitted converted to the bound it names.
     pub(crate) into_receivers: std::collections::HashMap<juxc_source::Span, juxc_ast::TypeRef>,
     /// Expressions (by span) that fill a slot declared as an erased type
-    /// parameter, boxed where they are emitted (ERRATA E1XX-GAP39g).
+    /// parameter, boxed where they are emitted (ERRATA E141).
     pub(crate) erase_on_emit: std::collections::HashMap<crate::erasure::EraseKey, Option<juxc_ast::TypeRef>>,
     /// The expressions being boxed or unboxed right now, so the recursive
     /// emission of the value itself does not wrap it again.
@@ -4796,7 +4796,7 @@ fn jux_unescape_debug(inner: &str) -> String {
         w.push_str("        (&&&$crate::JuxShow(&$v)).jux_show()\n");
         w.push_str("    }};\n");
         w.push_str("}\n\n");
-        // An erased type argument's value (ERRATA E1XX-GAP39g): polymorphic
+        // An erased type argument's value (ERRATA E141): polymorphic
         // recursion instantiates its functions and classes at this one type.
         // It holds the value and what the concrete type knows about it, taken
         // where the value was boxed and its type was still known: its text,

@@ -1,6 +1,6 @@
 // Polymorphic recursion -- a function calling itself at an ever-larger type
 // argument -- is compiled by erasing the type arguments of the functions and
-// classes on the cycle (ERRATA E1XX-GAP39g). An erased value carries its
+// classes on the cycle (ERRATA E141). An erased value carries its
 // own type but none of a bound's members, so a bounded type parameter on
 // the cycle cannot be erased (E0438).
 interface Named { String name(); }

@@ -1,5 +1,5 @@
 // A base constructor calling an override that reads a subclass field before
-// the subclass's initializers have run (ERRATA E140, E1XX-GAP39g): a field
+// the subclass's initializers have run (ERRATA E140, E141): a field
 // with a default value reads it (`0`, and `""` for a String, which is
 // non-null by type), and a field whose type has none (a class) throws
 // `NullPointerException`, as Java's `null` does, naming the field.

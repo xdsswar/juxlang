@@ -52,7 +52,7 @@ pub struct Closure {
     /// function or method that keeps growing it.
     pub unbounded: HashMap<String, String>,
     /// Generic functions and methods (as call keys) called with arguments
-    /// that keep growing (ERRATA E1XX-GAP39g erases them).
+    /// that keep growing (ERRATA E141 erases them).
     pub growing: HashSet<String>,
 }
 

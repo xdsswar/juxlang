@@ -1690,7 +1690,7 @@ public class Child extends Base {
 A subclass field whose type has no default value (a class, an interface, a
 type parameter) holds none yet, and reading it throws `NullPointerException`
 ("field 'v' of Child read before it was initialized"), as Java's `null` does
-(`ERRATA.md` E140, E1XX-GAP39g). Calling an overridable method from a constructor is
+(`ERRATA.md` E140, E141). Calling an overridable method from a constructor is
 worth avoiding for exactly this reason.
 
 **Record constructors.** Records get an implicit primary constructor from their declaration plus optional compact-form validation; see §7.6.

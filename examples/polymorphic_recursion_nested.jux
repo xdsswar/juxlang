@@ -1,4 +1,4 @@
-// A classic polymorphic-recursion data structure (ERRATA E1XX-GAP39g):
+// A classic polymorphic-recursion data structure (ERRATA E141):
 // `Nested<T>` is either a `Flat<T>` holding one `T`, or a `Nest<T>` holding a
 // `Nested<Pair<T>>` -- each level squares the number of values it holds, so
 // its type grows with its depth, and so do the types `build` and `sameAfter` are

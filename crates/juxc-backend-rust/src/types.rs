@@ -241,7 +241,7 @@ impl RustEmitter {
             self.kind_type_subst = saved;
             return;
         }
-        // **Erasure** (ERRATA E1XX-GAP39g): a use of a class on a
+        // **Erasure** (ERRATA E141): a use of a class on a
         // polymorphic-recursion cycle is its one instantiation, every type
         // argument the erased type.
         if Self::is_erased_marker(ty) && !ty.nullable && ty.array_shape.is_none() && ty.ptr_depth == 0 {

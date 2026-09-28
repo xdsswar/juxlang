@@ -5446,7 +5446,7 @@ and §S.4.4 and `JUX-MISSING-DEFS-ADDENDUM.md` §M.1.2 and §M.1.4 are amended
 to Java's order; E21 is superseded, and E139's order and its overloaded
 private method boundary with it. GAPS.md gap 39f is closed.
 
-## E1XX-GAP39g. Polymorphic recursion by erasure; an early read throws NullPointerException
+## E141. Polymorphic recursion by erasure; an early read throws NullPointerException
 
 **Conflict.** Two items were left open:
 

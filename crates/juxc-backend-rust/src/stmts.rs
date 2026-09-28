@@ -3866,7 +3866,7 @@ impl RustEmitter {
 
     fn emit_assign_impl(&mut self, a: &AssignStmt) {
         // A store into an erased class's type-parameter field from outside its
-        // generic body boxes the value (ERRATA E1XX-GAP39g).
+        // generic body boxes the value (ERRATA E141).
         if let Expr::Field(f) = &a.target {
             if a.op.is_none() && self.erased_field_slot(f) {
                 self.erase_on_emit.insert(Self::erase_key(&a.value), None);

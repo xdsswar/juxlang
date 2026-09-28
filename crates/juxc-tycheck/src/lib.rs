@@ -402,7 +402,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     // (ERRATA E137), and a dispatch that cannot close is `E0438`.
     let seeds: Vec<ty::Ty> = all_expr_types.values().cloned().collect();
     symbols.instantiations = instantiations::close(&symbols, &all_inst_facts, &seeds);
-    // Polymorphic recursion is lowered by erasure (ERRATA E1XX-GAP39g): the
+    // Polymorphic recursion is lowered by erasure (ERRATA E141): the
     // erased classes have one instantiation, and only what cannot be erased
     // is left for `E0438`.
     symbols.erasure = erasure::plan(&symbols);

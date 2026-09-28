@@ -873,7 +873,7 @@ impl RustEmitter {
             // Clone to release the immutable borrow on `n` before
             // the `emit_type_as_rust` calls (which need `&mut self`).
             // An erased class is built at its one instantiation (ERRATA
-            // E1XX-GAP39g).
+            // E141).
             let written = juxc_ast::TypeRef {
                 name: n.class_name.clone(),
                 generic_args: n.generic_args.iter().cloned().map(juxc_ast::GenericArg::Type).collect(),
@@ -1365,7 +1365,7 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
-        // **Erasure** (ERRATA E1XX-GAP39g): a value filling a slot declared as
+        // **Erasure** (ERRATA E141): a value filling a slot declared as
         // an erased type parameter is boxed; one read out of such a slot is
         // unboxed to the type the checker gave it.
         if self.erasure_active() {

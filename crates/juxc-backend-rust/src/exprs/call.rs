@@ -7608,7 +7608,7 @@ impl RustEmitter {
     /// where it lands (see `call_returns_foreign_collection`).
     fn emit_turbofish_arg(&mut self, call: &CallExpr, ty: &juxc_ast::TypeRef) {
         // An erased function or method is instantiated at the erased type
-        // only (ERRATA E1XX-GAP39g).
+        // only (ERRATA E141).
         if self.call_type_args_erased(call) {
             self.w.push_str(crate::erasure::ERASED_RUST);
             return;

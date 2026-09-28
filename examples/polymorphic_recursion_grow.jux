@@ -1,4 +1,4 @@
-// Polymorphic recursion (ERRATA E1XX-GAP39g): `grow<A, B>` calls itself as
+// Polymorphic recursion (ERRATA E141): `grow<A, B>` calls itself as
 // `grow<A, Vec<B>>`, so it builds a `Weird<A, B>` at a larger `B` at every
 // depth -- a set of instantiations with no last one. Java runs it through
 // erasure, and so does Jux: the functions and classes on the cycle are
