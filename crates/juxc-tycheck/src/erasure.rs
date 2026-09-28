@@ -121,7 +121,7 @@ pub fn plan(symbols: &SymbolTable) -> Erasure {
             break;
         }
     }
-    // A bound is carried along with the value (ERRATA E1XX-GAP39h): the
+    // A bound is carried along with the value (ERRATA E142): the
     // boxing site, which knows the value's type, keeps it as the bound's
     // dispatch object too. A bound that is not a fixed type (one naming a
     // type parameter, `T extends Comparable<T>`) has no one object to keep,

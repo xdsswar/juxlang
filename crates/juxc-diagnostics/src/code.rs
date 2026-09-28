@@ -391,7 +391,7 @@ pub enum Code {
     /// it is `E0414`. Nothing emits it; the number is not reused.
     E0437_FieldThroughPolymorphicBase,
     /// E0438 — **Polymorphic recursion that cannot be erased** (ERRATA
-    /// E141, E1XX-GAP39h): a function calling itself at an ever-larger type
+    /// E141, E142): a function calling itself at an ever-larger type
     /// argument is compiled by erasing the type arguments of every function
     /// and class on that cycle, and an erased value keeps each bound of its
     /// type parameter as one fixed dispatch object; a bound that names a type

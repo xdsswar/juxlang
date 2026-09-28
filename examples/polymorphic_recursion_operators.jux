@@ -1,5 +1,5 @@
 // Polymorphic recursion over a type parameter with operator bounds (ERRATA
-// E1XX-GAP39h): the erased value keeps its type's `<=>`, `==` and `+` the
+// E142): the erased value keeps its type's `<=>`, `==` and `+` the
 // way it keeps its text and hash, so `a < b`, `a == b` and `a + b` on an
 // erased `T` run the value's own operators at every depth.
 

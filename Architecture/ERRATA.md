@@ -5494,7 +5494,7 @@ private method boundary with it. GAPS.md gap 39f is closed.
 4. **`E0438` is left for a bound.** An erased value has none of a bound's
    members, so a cycle with a bounded type parameter (`<T extends Named>`
    calling itself at `Wrap<T>`) cannot be erased: `E0438` names the parameter
-   and the function that keeps growing it. Superseded by E1XX-GAP39h: the
+   and the function that keeps growing it. Superseded by E142: the
    erased value keeps each bound as its dispatch object, and `E0438` is left
    for a bound that names a type parameter.
 5. **An early read throws `NullPointerException`** (superseding E140's
@@ -5520,7 +5520,7 @@ now holds the bounded case.
 E137's and E140's corresponding statements are superseded. GAPS.md gap 39g is
 closed.
 
-## E1XX-GAP39h. A bounded type parameter on a polymorphic-recursion cycle
+## E142. A bounded type parameter on a polymorphic-recursion cycle
 
 **Conflict.** E141 compiled polymorphic recursion by erasing the type
 arguments on the cycle, and refused (`E0438`) a cycle with a bounded type

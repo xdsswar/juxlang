@@ -24,7 +24,7 @@ use crate::RustEmitter;
 
 /// What a value boxed into an erased slot is taken as: the slot's type
 /// where the site wrote it, and the bounds of the slot's type parameter,
-/// each kept as its dispatch object (ERRATA E1XX-GAP39h).
+/// each kept as its dispatch object (ERRATA E142).
 #[derive(Clone, Default)]
 pub(crate) struct EraseMark {
     pub(crate) written: Option<TypeRef>,
@@ -420,7 +420,7 @@ impl RustEmitter {
     /// Whether the trait named `bare` (an interface, or a class's `Kind`) is
     /// a bound an erased type parameter has, or a supertrait of one: the
     /// erased type implements it by dispatching through the object it keeps
-    /// (ERRATA E1XX-GAP39h).
+    /// (ERRATA E142).
     pub(crate) fn erased_bound_trait(&self, bare: &str) -> bool {
         if !self.erasure_active() {
             return false;

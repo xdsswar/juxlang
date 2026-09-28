@@ -1,4 +1,4 @@
-// Polymorphic recursion over a bounded type parameter (ERRATA E1XX-GAP39h):
+// Polymorphic recursion over a bounded type parameter (ERRATA E142):
 // `nest<T extends Sized2>` calls itself as `nest<Wrap<T>>`, so it is compiled
 // with its type argument erased (E1XX-GAP39g) -- and the erased value keeps
 // what its bound promises. Where the value is boxed, its type is known, so it

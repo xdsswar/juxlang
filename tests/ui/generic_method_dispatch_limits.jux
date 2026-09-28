@@ -1,7 +1,7 @@
 // Polymorphic recursion -- a function calling itself at an ever-larger type
 // argument -- is compiled by erasing the type arguments of the functions and
 // classes on the cycle, and an erased value keeps each of its bounds as that
-// bound's dispatch object (ERRATA E1XX-GAP39g, E1XX-GAP39h). A bound that
+// bound's dispatch object (ERRATA E1XX-GAP39g, E142). A bound that
 // names the type parameter itself (`T extends Ranked<T>`) is not one fixed
 // type, so there is no one object to keep (E0438).
 interface Ranked<T> { int rank(T other); }

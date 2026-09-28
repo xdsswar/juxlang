@@ -4298,7 +4298,7 @@ impl RustEmitter {
         let twin_mark = self.w.mark();
         self.emit_kind_rc_forwarding_impl_inner(class_decl, own_methods, hook_targets, accessor_fields);
         // An erased value bounded by the class implements its `Kind` through
-        // the dispatch object it keeps (ERRATA E1XX-GAP39h).
+        // the dispatch object it keeps (ERRATA E142).
         if self.erased_bound_trait(&class_decl.name.text) {
             let text = self.w.text_from(twin_mark).to_string();
             if let Some(twin) = Self::erased_twin_of_forwarding_impl(&text) {

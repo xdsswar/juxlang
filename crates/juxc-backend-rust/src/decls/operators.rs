@@ -873,7 +873,7 @@ impl RustEmitter {
         self.w.emit_indent();
         self.w.push_str("impl");
         // A generic class's operator is its generic impl's (ERRATA
-        // E1XX-GAP39h: a `where T has operator+` bound needs the trait).
+        // E142: a `where T has operator+` bound needs the trait).
         let generic = self.op_impl_class.clone();
         if let Some(decl) = &generic {
             self.emit_class_impl_generic_params(decl);
