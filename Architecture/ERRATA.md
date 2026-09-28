@@ -4580,6 +4580,180 @@ and what `JUX_SELFCHECK=1` reports instead. GAPS.md gap 34 is closed.
 
 ---
 
+## E132. Two types of one simple name in a crate family, and a crate's deprecated items
+
+**Conflict.** §G.6.2.4 (E128) gave a crate family one Jux name per simple
+name: when two members declare the same one, the host's item (or the one the
+family publishes) wins, and the other was dropped. `eframe::Frame` (the
+window's surroundings) and `egui::Frame` (a panel's fill, stroke and margins)
+are both `Frame`, so `egui::Frame` could not be named, and every egui
+signature that takes one (`Panel.frame`, `CentralPanel.frame`,
+`TextEdit.frame`, `Ui.dnd_drop_zone`) was written with the bare `Frame`, which
+meant eframe's (LEAKS L29). The same held for any shared name: `accesskit`'s
+`Rect` against `emath`'s, `naga`'s `Error` against `wgpu`'s. Separately, a
+crate's `#[deprecated]` items were not marked, so the program learned of one
+only from rustc's warning under `--verbose` (LEAKS L39). And nothing reported
+a simple name two wildcard imports bring for different types: the first one
+seen was silently used.
+
+**Resolution.**
+
+- **Nested packages that follow the Rust path.** A family stub keeps one
+  declaration per Rust type in the host's package, as before, and adds a
+  NESTED package for each module the host publishes a member's items under:
+  `eframe::egui::Frame` is `rust.eframe.egui.Frame`, next to
+  `rust.eframe.Frame`. The module is the item's SHORTEST public path in its own
+  crate, through the host (`egui::Frame`, not `egui::containers::frame::Frame`),
+  so the Jux FQN is the path a Rust program would write. Each type the host's
+  package declares is also an alias in its nested package
+  (`public type Ui = rust.eframe.Ui;` in `rust.eframe.egui`), so
+  `import rust.eframe.egui.*;` reaches all of egui; a type that lost a shared
+  simple name is DECLARED there, with its methods. A nested package's file
+  imports the host's package, so its signatures read bare names as the host's
+  do. A loser the host publishes no path to has no Jux name; a member that
+  mentions it is left out of the stub rather than typed with the winner.
+- **Every signature names the exact type.** Before any type of the family is
+  mapped, bindgen decides every shared simple name (the winner by
+  `FamilyPaths::rank`, as before), and every reference to a participant, in a
+  parameter, return, field, variant payload or trait-object position, is
+  written with its qualified name: `public Panel frame(rust.eframe.egui.Frame
+  frame)`, `run((Ui, rust.eframe.Frame) -> void app)`. A member another
+  package of the program declares (`rust.egui` bound too) is that package's
+  type, `rust.egui.Frame`, and the nested package aliases it.
+- **Files.** The nested packages of `.jux-stubs/rust/eframe.jux.d` are
+  written to `.jux-stubs/rust/eframe/<nested package>.jux.d`, regenerated with
+  the stub, loaded with it, and never pruned while it is declared.
+  `CRATE_STUB_CACHE_VERSION` is 22.
+- **Import conflicts, in Java's terms.** Two single-type imports binding one
+  simple name to different types stay `E0303`, whose text now also says to
+  import only one of them; two spellings of one type (`rust.eframe.Ui` and its
+  alias `rust.eframe.egui.Ui`) are one import. A simple name two wildcard
+  imports bring for different types is `E0303` where it is USED, in a type, a
+  `new` or a static access, naming both candidates and the single-type import
+  that settles it (JLS 6.5.5.1); an unused one is not an error, and a
+  declaration of the unit's package or a single-type import of the name wins
+  as before.
+- **Deprecated items.** A crate's `#[deprecated]` function, method,
+  constructor or type is marked `@Deprecated(message = "<its note>")` in the
+  stub (the note, else "deprecated since <version>", else no message). A call
+  to anything marked `@Deprecated`, the program's own declarations included,
+  is `W0491`, "`Panel.show_inside` is deprecated: Renamed to `show`". The
+  emitted crate allows rustc's `deprecated` lint, so the toolchain's copy never
+  reaches `--verbose` either. `STD_STUB_CACHE_VERSION` is 47 (std's deprecated
+  items are marked too) and the vendored `rust.std` snapshot is regenerated.
+- **A static read releases its lock at once (found on the way, LEAKS L40).**
+  A `static final` computed at run time lives in a `Mutex`, and a read was
+  `X.lock().unwrap().clone()` in place, whose guard lived until the end of the
+  statement. A lambda the same statement ran that read the static again
+  waited on it forever: the leaker's `Panel.left(..).frame(.. Palette.NAV_BG
+  ..).show(ui, (nav) -> .. Palette.NAV_BG ..)` hung before the first frame. A
+  read is now `({ let v = X.lock().unwrap().clone(); v })`
+  (`examples/static_read_in_chain.jux`).
+- **Tests.** `crates/juxc-bindgen/tests/leaks_fixture.rs` over a two-crate
+  family in eframe's and egui's shape (`fixtures/family-src/{g37app,g37ui}`,
+  real rustdoc JSON): both `Frame`s declared, every signature exact, the
+  nested aliases, a member bound in its own right, the deprecation marker.
+  `bin/juxc/tests/family_names.rs` generates the stubs from that JSON as the
+  driver does, then builds and RUNS programs against the real crates: the
+  member's `Frame` imported by its nested name, written by its FQN beside an
+  import of the host's, and imported under an alias beside it; importing both
+  (`E0303`); two wildcards (`E0303` at a use only); `W0491`. UI:
+  `tests/ui/ambiguous_wildcard_import`. The leaker app's side navigation is
+  dark again, through `Panel.left(..).frame(new Frame().fill(..))` with
+  `import rust.eframe.egui.Frame;`.
+
+**Known boundary.** Two items of one simple name inside ONE crate (naga's
+several `Error`s) still collapse to the first, as §G.4.1 always said, and a
+reference to the other is written as the one kept. Names inside bindgen's
+string markers (`@RustFrom("...")`, `implements`) stay simple.
+
+**Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.6.2.4 (nested packages, exact
+names) and new §G.5.8 (deprecated items); `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4
+(`E0303` for a wildcard ambiguity at a use, new `W0491`). GAPS.md gap 37 is
+closed; LEAKS L29 and L39 are fixed.
+
+---
+
+## E133. An import alias and a `type` alias mean their target everywhere
+
+**Conflict.** `import app.model.Circle as C;` bound `C` in the unit's name
+table, and every part of the checker and backend that asked that table got
+it right. Every part that read the SPELLED name did not: `class Sq implements
+S` implemented nothing the subtype relation could find (`E0410` "expected
+app.model.Shape, found Sq"), the upcast to `S` was not emitted (rustc
+`E0308`), `case C c` asked the value for `__jux_as_C` (rustc `E0599`), and
+`C.Builder` named no type (rustc `E0223`). `type` aliases had the same shape
+at `new`: `new Dict<int>()` with `type Dict<V> = HashMap<String, V>` handed
+`<int>` to `HashMap` (`E0410`), `new Keyed<double>(..)` with `type Keyed<K> =
+Pair<K, int>` was `E0443`, `new Shapes()` with `type Shapes = Vec<Shape>`
+reached rustc (`E0061`), and `class Sq implements Sh` was refused as
+implementing an alias (`E0424`). A cycle of `type` aliases overflowed the
+checker's stack.
+
+**Resolution.** Both kinds of alias are expanded ONCE, in the AST, before
+anything resolves a name (`crates/juxc-tycheck/src/aliases.rs`,
+`type_aliases.rs`, over the new mutable walk `juxc_ast::visit_mut`, which
+reaches every place a unit names a type: declarations, supertypes, locals,
+casts, type tests, `catch`, lambda parameters, generic arguments and bounds,
+function types, `new`, `throws`, method references, `case T t` patterns and
+the head of a static access). Nothing after it sees an alias.
+
+- **Import aliases.** An alias becomes its target's simple name, with the
+  single-type import that name then needs, when the simple name means nothing
+  else in the unit (no type of its package, no other import or wildcard type,
+  no library type every unit reaches by that name): that is the form every
+  part of the compiler reads. Otherwise, which is usually why the alias was
+  written (`import rust.eframe.egui.Frame as EguiFrame;` beside eframe's
+  `Frame`), it becomes the target's fully-qualified name. The alias's import
+  is then removed, since nothing spells the alias any more and its binding
+  would make a lookup by simple name take `Vec` for the `HashMap` an alias
+  called `Vec` named. An expression head is not rewritten where a local,
+  parameter or field of that name is in scope (JLS 6.4.2), nor a type name
+  where a generic parameter of that name is. An alias whose name another
+  import binds to something else, or that a type of the package has, is left
+  as written for `E0303`.
+- **`type` aliases.** Each use is replaced by the target with the alias's
+  parameters substituted, following aliases of aliases; the target's names
+  are qualified where the alias is DECLARED and written back as simple names
+  where the use site reads them the same way. The wrong number of type
+  arguments is `E0443` ("type alias `Dict` takes 1 type argument, but 2 were
+  supplied"), and a cycle is the new `E0498` at each alias in it. The Rust
+  program names no alias; one of an interface is no longer emitted as a Rust
+  `type` of a trait.
+- **A qualified name works where a simple one does.** A type pattern may be
+  written `case app.model.Circle c`, a lambda parameter `(app.model.Circle c)
+  ->`, `(Vec<int> xs) ->` or `(int[] a) ->`; a supertype by its qualified name
+  is found by the obligation check and the backend (which gets it as one
+  name, `pack_qualified_supertypes`); `new app.model.Circle.Builder()` builds
+  the nested type; a downcast hook names its target from the module it is
+  emitted in (a root-package `class Sq` tested for on `app.model.Shape` was
+  rustc `E0425`, with plain imports too).
+- **Tests.** `examples/multifile/importalias` (every position; an alias that
+  is the only name its type has in the file; two aliases of one type; an
+  alias called `Vec` for `HashMap`), `examples/type_alias_everywhere.jux`
+  (`new` through generic aliases fixing some parameters, of a foreign generic,
+  a supertype, an alias of an alias, a static call, type tests and patterns,
+  array and function aliases), `bin/juxc/tests/family_names.rs`
+  (`import rust.g37app.g37ui.Frame as EguiFrame` beside the host's `Frame`),
+  UI `import_alias_clash`, `type_alias_cycle`, `type_alias_arity`.
+
+**A nested type through a qualified owner (gap 37c).** Where the alias's
+target shares its simple name with another type of the file, `C.Builder`
+becomes `app.model.Circle.Builder`. The checker read a qualified TYPE only as
+a declaration or as `<first segment>.<nested>`, so that spelling lowered to
+`Unknown`: a slot declared with it took any value, a member chained on the
+value (`b.build().r`) had no type, and the backend read the member on the
+file's own `Circle` (rustc `E0609`). A type position now tries every split,
+longest owner first (`app.model.Circle` + `Builder`, the lifted
+`app.model.Circle__Builder`), as the backend already did, and a `new` with
+such a name has the same type. `examples/multifile/importalias` chains members
+on both spellings.
+
+**Spec status:** `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.4.1 (what an alias binds),
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 (`E0443` covers an alias, new `E0498`).
+
+---
+
 ## E1XX-GAP38. The four leaks E129 left: a stack overflow off Windows, a foreign value's text, a library's error, a crate's docs
 
 **Conflict.** E129 made Rust impossible to ship through every exit it could

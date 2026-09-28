@@ -1,0 +1,2 @@
+ambiguous_wildcard_import\app.jux:11:5: [E0303] error: reference to `Widget` is ambiguous: both `alpha.Widget` and `beta.Widget` match, each brought in by a wildcard import -- import the one you mean by name (`import beta.Widget;`) or write its fully-qualified name
+ambiguous_wildcard_import\app.jux:11:16: [E0303] error: reference to `Widget` is ambiguous: both `alpha.Widget` and `beta.Widget` match, each brought in by a wildcard import -- import the one you mean by name (`import beta.Widget;`) or write its fully-qualified name

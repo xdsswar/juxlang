@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 46
+// juxc rust.std stub cache-version 47
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -164,18 +164,19 @@ public interface AsSocket {
 }
 
 /** Extension methods for ASCII-subset only operations. */
+@Deprecated(message = "use inherent methods instead")
 @rust("std::ascii::AsciiExt")
 @RustImplementedBy("[]")
 @RustImplementedBy("char")
 @RustImplementedBy("str")
 @RustImplementedBy("u8")
 public interface AsciiExt {
-    public bool is_ascii();
-    public Self.Owned to_ascii_uppercase();
-    public Self.Owned to_ascii_lowercase();
-    public bool eq_ignore_ascii_case(&Self other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
+    @Deprecated(message = "use inherent methods instead") public bool is_ascii();
+    @Deprecated(message = "use inherent methods instead") public Self.Owned to_ascii_uppercase();
+    @Deprecated(message = "use inherent methods instead") public Self.Owned to_ascii_lowercase();
+    @Deprecated(message = "use inherent methods instead") public bool eq_ignore_ascii_case(&Self other);
+    @Deprecated(message = "use inherent methods instead") @MutSelf public void make_ascii_uppercase();
+    @Deprecated(message = "use inherent methods instead") @MutSelf public void make_ascii_lowercase();
 }
 
 /** A simple wrapper around a type to assert that it is unwind safe. */
@@ -735,7 +736,7 @@ public class Condvar {
     public Condvar();
     @RustBorrowsSelf public MutexGuard<T> wait<T>(MutexGuard<T> guard) throws PoisonError<T>;
     @RustBorrowsSelf @RustClosureRefs("1") public MutexGuard<T> wait_while<T, F>(MutexGuard<T> guard, (T) -> bool condition) throws PoisonError<T>;
-    public (MutexGuard<T>, bool) wait_timeout_ms<T>(MutexGuard<T> guard, u32 ms) throws PoisonError<T>;
+    @Deprecated(message = "replaced by `std::sync::Condvar::wait_timeout`") public (MutexGuard<T>, bool) wait_timeout_ms<T>(MutexGuard<T> guard, u32 ms) throws PoisonError<T>;
     public (MutexGuard<T>, WaitTimeoutResult) wait_timeout<T>(MutexGuard<T> guard, Duration dur) throws PoisonError<T>;
     @RustClosureRefs("2") public (MutexGuard<T>, WaitTimeoutResult) wait_timeout_while<T, F>(MutexGuard<T> guard, Duration dur, (T) -> bool condition) throws PoisonError<T>;
     public void notify_one();
@@ -1583,17 +1584,9 @@ public class IoSlice {
     public Self.Output connect<Separator>(Separator sep);
     public Vec<ubyte> to_ascii_uppercase();
     public Vec<ubyte> to_ascii_lowercase();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     @RustRefOut public T[] as_flattened();
     @MutSelf @RustRefOut public T[] as_flattened_mut();
-    public bool is_ascii();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -1703,9 +1696,17 @@ public class IoSlice {
     @MutSelf public T[] get_disjoint_mut(uint[] indices) throws GetDisjointMutError;
     @MutSelf public T[][] get_disjoint_mut(RangeFull[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
+    @MutSelf public void sort_floats();
     @RustRefOut public String as_str();
     @RustRefOut public ubyte[] as_bytes();
-    @MutSelf public void sort_floats();
+    public bool is_ascii();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
+    @RustRefOut public ubyte[] trim_ascii_start();
+    @RustRefOut public ubyte[] trim_ascii_end();
+    @RustRefOut public ubyte[] trim_ascii();
     @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
     @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
@@ -1737,17 +1738,9 @@ public class IoSliceMut {
     public Self.Output connect<Separator>(Separator sep);
     public Vec<ubyte> to_ascii_uppercase();
     public Vec<ubyte> to_ascii_lowercase();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     @RustRefOut public T[] as_flattened();
     @MutSelf @RustRefOut public T[] as_flattened_mut();
-    public bool is_ascii();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     public uint len();
     public bool is_empty();
     @RustRefOut public T? first();
@@ -1857,9 +1850,17 @@ public class IoSliceMut {
     @MutSelf public T[] get_disjoint_mut(uint[] indices) throws GetDisjointMutError;
     @MutSelf public T[][] get_disjoint_mut(RangeFull[] indices) throws GetDisjointMutError;
     public uint? element_offset(&T element);
+    @MutSelf public void sort_floats();
     @RustRefOut public String as_str();
     @RustRefOut public ubyte[] as_bytes();
-    @MutSelf public void sort_floats();
+    public bool is_ascii();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
+    @RustRefOut public ubyte[] trim_ascii_start();
+    @RustRefOut public ubyte[] trim_ascii_end();
+    @RustRefOut public ubyte[] trim_ascii();
     @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
     @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
@@ -2057,6 +2058,7 @@ public class Lines<B> implements RustIterator {
 }
 
 /** Created with the method [`lines_any`]. */
+@Deprecated(message = "use lines()/Lines instead now")
 @rust("std::str::LinesAny")
 @RustClone
 @RustDebug
@@ -2187,7 +2189,7 @@ public class Metadata implements MetadataExt, ToOwned {
 /** OS-specific extensions to [`fs::Metadata`]. */
 @rust("std::os::darwin::fs::MetadataExt")
 public interface MetadataExt {
-    @RustRefOut public stat as_raw_stat();
+    @Deprecated(message = "deprecated in favor of the accessor methods of this trait") @RustRefOut public stat as_raw_stat();
     public ulong st_dev();
     public ulong st_ino();
     public u32 st_mode();
@@ -2496,6 +2498,7 @@ public class NonZeroIsize {
 /** A [`u128`] that is known not to equal zero. */
 @rust("std::num::NonZeroU128")
 public class NonZeroU128 {
+    public NonZeroU128 div_ceil(NonZeroU128 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2512,13 +2515,11 @@ public class NonZeroU128 {
     public NonZeroU128 saturating_mul(NonZeroU128 other);
     public NonZeroU128? checked_pow(u32 other);
     public NonZeroU128 saturating_pow(u32 other);
-    public NonZeroU128 div_ceil(NonZeroU128 rhs);
 }
 
 /** A [`u16`] that is known not to equal zero. */
 @rust("std::num::NonZeroU16")
 public class NonZeroU16 {
-    public NonZeroU16 div_ceil(NonZeroU16 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2535,12 +2536,12 @@ public class NonZeroU16 {
     public NonZeroU16 saturating_mul(NonZeroU16 other);
     public NonZeroU16? checked_pow(u32 other);
     public NonZeroU16 saturating_pow(u32 other);
+    public NonZeroU16 div_ceil(NonZeroU16 rhs);
 }
 
 /** A [`u32`] that is known not to equal zero. */
 @rust("std::num::NonZeroU32")
 public class NonZeroU32 {
-    public NonZeroU32 div_ceil(NonZeroU32 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2557,12 +2558,12 @@ public class NonZeroU32 {
     public NonZeroU32 saturating_mul(NonZeroU32 other);
     public NonZeroU32? checked_pow(u32 other);
     public NonZeroU32 saturating_pow(u32 other);
+    public NonZeroU32 div_ceil(NonZeroU32 rhs);
 }
 
 /** A [`u64`] that is known not to equal zero. */
 @rust("std::num::NonZeroU64")
 public class NonZeroU64 {
-    public NonZeroU64 div_ceil(NonZeroU64 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2579,11 +2580,13 @@ public class NonZeroU64 {
     public NonZeroU64 saturating_mul(NonZeroU64 other);
     public NonZeroU64? checked_pow(u32 other);
     public NonZeroU64 saturating_pow(u32 other);
+    public NonZeroU64 div_ceil(NonZeroU64 rhs);
 }
 
 /** A [`u8`] that is known not to equal zero. */
 @rust("std::num::NonZeroU8")
 public class NonZeroU8 {
+    public NonZeroU8 div_ceil(NonZeroU8 rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2600,12 +2603,12 @@ public class NonZeroU8 {
     public NonZeroU8 saturating_mul(NonZeroU8 other);
     public NonZeroU8? checked_pow(u32 other);
     public NonZeroU8 saturating_pow(u32 other);
-    public NonZeroU8 div_ceil(NonZeroU8 rhs);
 }
 
 /** A [`usize`] that is known not to equal zero. */
 @rust("std::num::NonZeroUsize")
 public class NonZeroUsize {
+    public NonZeroUsize div_ceil(NonZeroUsize rhs);
     public u32 leading_zeros();
     public u32 trailing_zeros();
     public NonZero<u32> count_ones();
@@ -2622,7 +2625,6 @@ public class NonZeroUsize {
     public NonZeroUsize saturating_mul(NonZeroUsize other);
     public NonZeroUsize? checked_pow(u32 other);
     public NonZeroUsize saturating_pow(u32 other);
-    public NonZeroUsize div_ceil(NonZeroUsize rhs);
 }
 
 /** An error indicating that an interior nul byte was found. */
@@ -3904,8 +3906,8 @@ public class String implements ToOwned, ToString, Write {
     @MutSelf @RustRefOut public unsafe ubyte[] as_bytes_mut();
     public ubyte* as_ptr();
     @MutSelf public ubyte* as_mut_ptr();
-    @RustRefOut public unsafe String slice_unchecked(uint begin, uint end);
-    @MutSelf @RustRefOut public unsafe String slice_mut_unchecked(uint begin, uint end);
+    @Deprecated(message = "use `get_unchecked(begin..end)` instead") @RustRefOut public unsafe String slice_unchecked(uint begin, uint end);
+    @Deprecated(message = "use `get_unchecked_mut(begin..end)` instead") @MutSelf @RustRefOut public unsafe String slice_mut_unchecked(uint begin, uint end);
     public (String, String) split_at(uint mid);
     @MutSelf public (String, String) split_at_mut(uint mid);
     public (String, String)? split_at_checked(uint mid);
@@ -3916,7 +3918,7 @@ public class String implements ToOwned, ToString, Write {
     @RustBorrowsSelf public SplitWhitespace split_whitespace();
     @RustBorrowsSelf public SplitAsciiWhitespace split_ascii_whitespace();
     @RustBorrowsSelf public Lines lines();
-    @RustBorrowsSelf public LinesAny lines_any();
+    @Deprecated(message = "use lines() instead now") @RustBorrowsSelf public LinesAny lines_any();
     @RustBorrowsSelf public EncodeUtf16 encode_utf16();
     public bool contains<P>(P pat);
     public bool starts_with<P>(P pat);
@@ -3939,15 +3941,15 @@ public class String implements ToOwned, ToString, Write {
     @RustRefOut public String trim();
     @RustRefOut public String trim_start();
     @RustRefOut public String trim_end();
-    @RustRefOut public String trim_left();
-    @RustRefOut public String trim_right();
+    @Deprecated(message = "superseded by `trim_start`") @RustRefOut public String trim_left();
+    @Deprecated(message = "superseded by `trim_end`") @RustRefOut public String trim_right();
     @RustRefOut public String trim_matches<P>(P pat);
     @RustRefOut public String trim_start_matches<P>(P pat);
     @RustRefOut public String? strip_prefix<P>(P prefix);
     @RustRefOut public String? strip_suffix<P>(P suffix);
     @RustRefOut public String trim_end_matches<P>(P pat);
-    @RustRefOut public String trim_left_matches<P>(P pat);
-    @RustRefOut public String trim_right_matches<P>(P pat);
+    @Deprecated(message = "superseded by `trim_start_matches`") @RustRefOut public String trim_left_matches<P>(P pat);
+    @Deprecated(message = "superseded by `trim_end_matches`") @RustRefOut public String trim_right_matches<P>(P pat);
     public bool is_ascii();
     public bool eq_ignore_ascii_case(&String other);
     public bool eq_ignore_case_unnormalized(&String other);
@@ -4058,8 +4060,8 @@ public class TcpListener implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRa
     @RustBorrowsSelf public Incoming incoming();
     public void set_ttl(u32 ttl) throws Error;
     public u32 ttl() throws Error;
-    public void set_only_v6(bool only_v6) throws Error;
-    public bool only_v6() throws Error;
+    @Deprecated(message = "this option can only be set before the socket is bound") public void set_only_v6(bool only_v6) throws Error;
+    @Deprecated(message = "this option can only be set before the socket is bound") public bool only_v6() throws Error;
     public Error? take_error() throws Error;
     public void set_nonblocking(bool nonblocking) throws Error;
 }
@@ -4503,19 +4505,9 @@ public class Vec<T, A> implements ToOwned {
     public Self.Output connect<Separator>(Separator sep);
     public Vec<ubyte> to_ascii_uppercase();
     public Vec<ubyte> to_ascii_lowercase();
-    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     @RustRefOut public T[] as_flattened();
     @MutSelf @RustRefOut public T[] as_flattened_mut();
-    public bool is_ascii();
-    @RustRefOut public Char[]? as_ascii();
-    @RustRefOut public unsafe Char[] as_ascii_unchecked();
-    public bool eq_ignore_ascii_case(ubyte[] other);
-    @MutSelf public void make_ascii_uppercase();
-    @MutSelf public void make_ascii_lowercase();
-    @RustBorrowsSelf public EscapeAscii escape_ascii();
-    @RustRefOut public ubyte[] trim_ascii_start();
-    @RustRefOut public ubyte[] trim_ascii_end();
-    @RustRefOut public ubyte[] trim_ascii();
+    @RustBorrowsSelf public Utf8Chunks utf8_chunks();
     @RustRefOut public T? first();
     @MutSelf @RustRefOut public T? first_mut();
     public (T, T[])? split_first();
@@ -4622,6 +4614,16 @@ public class Vec<T, A> implements ToOwned {
     public uint? element_offset(&T element);
     @RustRefOut public String as_str();
     @RustRefOut public ubyte[] as_bytes();
+    public bool is_ascii();
+    @RustRefOut public Char[]? as_ascii();
+    @RustRefOut public unsafe Char[] as_ascii_unchecked();
+    public bool eq_ignore_ascii_case(ubyte[] other);
+    @MutSelf public void make_ascii_uppercase();
+    @MutSelf public void make_ascii_lowercase();
+    @RustBorrowsSelf public EscapeAscii escape_ascii();
+    @RustRefOut public ubyte[] trim_ascii_start();
+    @RustRefOut public ubyte[] trim_ascii_end();
+    @RustRefOut public ubyte[] trim_ascii();
     @MutSelf public (Self, MaybeUninit<U>[], Self) align_to_uninit_mut<U>();
     @MutSelf @RustRefOut @RustBounds("T: Copy") public T[] write_copy_of_slice(T[] src);
     @MutSelf @RustRefOut @RustBounds("T: Clone") public T[] write_clone_of_slice(T[] src);
@@ -5008,7 +5010,7 @@ public class f32_methods {
     public float log(float base);
     public float log2();
     public float log10();
-    public float abs_sub(float other);
+    @Deprecated(message = "you probably meant `(self - other).abs()`: this operation is `(self - other).max(0.0)` except that `abs_sub` also propagates NaNs (also known as `fdimf` in C). If you truly need the positive difference, consider using that expression or the C function `fdimf`, depending on how you wish to handle NaN (please consider filing an issue describing your use-case too).") public float abs_sub(float other);
     public float cbrt();
     public float hypot(float other);
     public float sin();
@@ -5080,7 +5082,7 @@ public class f64_methods {
     public double log(double base);
     public double log2();
     public double log10();
-    public double abs_sub(double other);
+    @Deprecated(message = "you probably meant `(self - other).abs()`: this operation is `(self - other).max(0.0)` except that `abs_sub` also propagates NaNs (also known as `fdim` in C). If you truly need the positive difference, consider using that expression or the C function `fdim`, depending on how you wish to handle NaN (please consider filing an issue describing your use-case too).") public double abs_sub(double other);
     public double cbrt();
     public double hypot(double other);
     public double sin();
@@ -5269,8 +5271,8 @@ public class i16_methods {
     public static short from_be_bytes(ubyte[2] bytes);
     public static short from_le_bytes(ubyte[2] bytes);
     public static short from_ne_bytes(ubyte[2] bytes);
-    public static short min_value();
-    public static short max_value();
+    @Deprecated(message = "replaced by the `MIN` associated constant on this type") public static short min_value();
+    @Deprecated(message = "replaced by the `MAX` associated constant on this type") public static short max_value();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -5398,8 +5400,8 @@ public class i32_methods {
     public static i32 from_be_bytes(ubyte[4] bytes);
     public static i32 from_le_bytes(ubyte[4] bytes);
     public static i32 from_ne_bytes(ubyte[4] bytes);
-    public static i32 min_value();
-    public static i32 max_value();
+    @Deprecated(message = "replaced by the `MIN` associated constant on this type") public static i32 min_value();
+    @Deprecated(message = "replaced by the `MAX` associated constant on this type") public static i32 max_value();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -5527,8 +5529,8 @@ public class i64_methods {
     public static long from_be_bytes(ubyte[8] bytes);
     public static long from_le_bytes(ubyte[8] bytes);
     public static long from_ne_bytes(ubyte[8] bytes);
-    public static long min_value();
-    public static long max_value();
+    @Deprecated(message = "replaced by the `MIN` associated constant on this type") public static long min_value();
+    @Deprecated(message = "replaced by the `MAX` associated constant on this type") public static long max_value();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -5656,8 +5658,8 @@ public class i8_methods {
     public static byte from_be_bytes(ubyte[1] bytes);
     public static byte from_le_bytes(ubyte[1] bytes);
     public static byte from_ne_bytes(ubyte[1] bytes);
-    public static byte min_value();
-    public static byte max_value();
+    @Deprecated(message = "replaced by the `MIN` associated constant on this type") public static byte min_value();
+    @Deprecated(message = "replaced by the `MAX` associated constant on this type") public static byte max_value();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -5794,8 +5796,8 @@ public class isize_methods {
     public static int from_be_bytes(ubyte[8] bytes);
     public static int from_le_bytes(ubyte[8] bytes);
     public static int from_ne_bytes(ubyte[8] bytes);
-    public static int min_value();
-    public static int max_value();
+    @Deprecated(message = "replaced by the `MIN` associated constant on this type") public static int min_value();
+    @Deprecated(message = "replaced by the `MAX` associated constant on this type") public static int max_value();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -5843,7 +5845,7 @@ public void park();
 public void park_timeout(Duration dur);
 
 @rust("std::thread::park_timeout_ms")
-public void park_timeout_ms(u32 ms);
+@Deprecated(message = "replaced by `std::thread::park_timeout`") public void park_timeout_ms(u32 ms);
 
 public type pid_t = i32;
 
@@ -5915,10 +5917,10 @@ public uint size_of_val<T>(&T val);
 public void sleep(Duration dur);
 
 @rust("std::thread::sleep_ms")
-public void sleep_ms(u32 ms);
+@Deprecated(message = "replaced by `std::thread::sleep`") public void sleep_ms(u32 ms);
 
 @rust("std::fs::soft_link")
-public void soft_link<P, Q>(P original, Q link) throws Error;
+@Deprecated(message = "replaced with std::os::unix::fs::symlink and std::os::windows::fs::{symlink_file, symlink_dir}") public void soft_link<P, Q>(P original, Q link) throws Error;
 
 @rust("std::thread::spawn")
 public JoinHandle<T> spawn<F, T>(() -> T f);
@@ -6104,8 +6106,8 @@ public class u16_methods {
     public static ushort from_be_bytes(ubyte[2] bytes);
     public static ushort from_le_bytes(ubyte[2] bytes);
     public static ushort from_ne_bytes(ubyte[2] bytes);
-    public static ushort min_value();
-    public static ushort max_value();
+    @Deprecated(message = "replaced by the `MIN` associated constant on this type") public static ushort min_value();
+    @Deprecated(message = "replaced by the `MAX` associated constant on this type") public static ushort max_value();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -6232,8 +6234,8 @@ public class u32_methods {
     public static u32 from_be_bytes(ubyte[4] bytes);
     public static u32 from_le_bytes(ubyte[4] bytes);
     public static u32 from_ne_bytes(ubyte[4] bytes);
-    public static u32 min_value();
-    public static u32 max_value();
+    @Deprecated(message = "replaced by the `MIN` associated constant on this type") public static u32 min_value();
+    @Deprecated(message = "replaced by the `MAX` associated constant on this type") public static u32 max_value();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -6360,8 +6362,8 @@ public class u64_methods {
     public static ulong from_be_bytes(ubyte[8] bytes);
     public static ulong from_le_bytes(ubyte[8] bytes);
     public static ulong from_ne_bytes(ubyte[8] bytes);
-    public static ulong min_value();
-    public static ulong max_value();
+    @Deprecated(message = "replaced by the `MIN` associated constant on this type") public static ulong min_value();
+    @Deprecated(message = "replaced by the `MAX` associated constant on this type") public static ulong max_value();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -6488,8 +6490,8 @@ public class u8_methods {
     public static ubyte from_be_bytes(ubyte[1] bytes);
     public static ubyte from_le_bytes(ubyte[1] bytes);
     public static ubyte from_ne_bytes(ubyte[1] bytes);
-    public static ubyte min_value();
-    public static ubyte max_value();
+    @Deprecated(message = "replaced by the `MIN` associated constant on this type") public static ubyte min_value();
+    @Deprecated(message = "replaced by the `MAX` associated constant on this type") public static ubyte max_value();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();
@@ -6636,8 +6638,8 @@ public class usize_methods {
     public static uint from_be_bytes(ubyte[8] bytes);
     public static uint from_le_bytes(ubyte[8] bytes);
     public static uint from_ne_bytes(ubyte[8] bytes);
-    public static uint min_value();
-    public static uint max_value();
+    @Deprecated(message = "replaced by the `MIN` associated constant on this type") public static uint min_value();
+    @Deprecated(message = "replaced by the `MAX` associated constant on this type") public static uint max_value();
     public Target widen<Target>();
     public T saturating_cast<T>();
     public T wrapping_cast<T>();

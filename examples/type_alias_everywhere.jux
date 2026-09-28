@@ -1,0 +1,94 @@
+// A `type` alias stands for its target everywhere a type is named (gap 37):
+// in a declaration, a `new`, a supertype, a static call, a type test and a
+// `switch` pattern, with its parameters substituted, through another alias,
+// and over a foreign generic type.
+
+import rust.std.Vec;
+import rust.std.HashMap;
+
+interface Shape {
+    double area();
+}
+
+class Circle implements Shape {
+    public double r;
+    public Circle(double r) { this.r = r; }
+    public double area() { return 3.0 * r * r; }
+}
+
+class Pair<A, B> {
+    public A a;
+    public B b;
+    public Pair(A a, B b) { this.a = a; this.b = b; }
+    public static Pair<String, int> origin() { return new Pair<String, int>("origin", 0); }
+}
+
+type Sh = Shape;
+type Round = Circle;
+type Named = Pair<String, int>;
+type Keyed<K> = Pair<K, int>;
+type Dict<V> = HashMap<String, V>;
+type Table<V> = HashMap<String, Vec<V>>;
+type Shapes = Vec<Shape>;
+type Label = Named;
+type Grid = int[][];
+type IntFn = (int) -> int;
+
+// A supertype written through an alias.
+class Square implements Sh {
+    public double area() { return 4.0; }
+}
+
+double total(Shapes xs) {
+    double t = 0.0;
+    for (Sh s : xs) {
+        t = t + s.area();
+    }
+    return t;
+}
+
+String kind(Sh s) {
+    return switch (s) {
+        case Round c -> $"round ${c.r}";
+        default -> "square";
+    };
+}
+
+int apply(IntFn f, int x) { return f(x); }
+
+void main() {
+    // `new` through a generic alias that fixes some parameters.
+    Dict<int> d = new Dict<int>();
+    d.insert("k", 5);
+    print(d.len());
+
+    Keyed<double> kd = new Keyed<double>(1.5, 2);
+    print(kd.a + kd.b);
+
+    Table<int> t = new Table<int>();
+    t.insert("x", new Vec<int>());
+    print(t.len());
+
+    // `new` of an alias of a foreign generic type.
+    Shapes xs = new Shapes();
+    xs.push(new Round(1.0));
+    xs.push(new Square());
+    print(xs.len());
+    print(total(xs));
+
+    // An alias of an alias, and a static call through an alias.
+    Label l = new Label("a", 1);
+    print(l.a + l.b);
+    print(Named.origin().a);
+
+    // A type test and patterns through aliases.
+    print(xs[0] => Round);
+    print(kind(xs[0]));
+    print(kind(xs[1]));
+
+    // Array and function-type aliases.
+    Grid g = new int[][]{ new int[]{1, 2}, new int[]{3, 4} };
+    print(g[1][0]);
+    IntFn dbl = (x) -> x * 2;
+    print(apply(dbl, 21));
+}

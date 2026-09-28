@@ -1,0 +1,28 @@
+// A static read in a statement that also runs code reading the same static.
+//
+// A `static final` computed at run time lives behind a lock, and a read
+// copies the value out. The copy used to hold the lock until the END of the
+// statement, so a lambda run by the same statement that read the static
+// again waited for it forever: the leaker app's `Panel.left(..).frame(..
+// Palette.NAV_BG ..).show(ui, (nav) -> .. Palette.NAV_BG ..)` never painted a
+// frame (gap 37).
+
+record Col(int v) {}
+
+class Palette {
+    public static final Col NAV = Palette.make(3);
+    public static Col make(int v) { return new Col(v); }
+    public static int again() { return Palette.NAV.v; }
+}
+
+class Builder {
+    int c = 0;
+    public Builder fill(Col x) { c = x.v; return this; }
+    public void show(() -> int body) { print(c + body()); }
+}
+
+void main() {
+    new Builder().fill(Palette.NAV).show(() -> Palette.again());
+    print(Palette.NAV.v + Palette.again());
+    print("done");
+}

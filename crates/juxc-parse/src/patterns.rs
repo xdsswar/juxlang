@@ -308,15 +308,23 @@ impl<'a> Parser<'a> {
                 // backend can lower it as `Sealed::Type(ident)`-
                 // style destructuring without forcing the user to
                 // write `Type(var ident)`.
-                let bare_single_segment =
-                    path.segments.len() == 1 && !self.at(&TokenKind::LParen);
-                if bare_single_segment {
+                // The type may be written by its fully-qualified name
+                // (`case app.model.Circle c`): a path of any length that is
+                // followed by a binder is a type, since an enum constant
+                // (`Color.RED`) is followed by `->`, `(` or `,`.
+                let type_then_binder = !path.segments.is_empty() && !self.at(&TokenKind::LParen);
+                if type_then_binder {
                     if let TokenKind::Ident(_) = self.peek() {
-                        // The type name and the binder are both
-                        // single-segment Idents — promote to
-                        // TypeBind. The first segment from the
-                        // qualified-name parse IS the type_name.
-                        let type_name = path.segments.first().cloned()?;
+                        // The type name and the binder — promote to
+                        // TypeBind. A qualified type keeps its dotted
+                        // spelling in the one name.
+                        let type_name = match path.segments.as_slice() {
+                            [only] => only.clone(),
+                            segs => juxc_ast::Ident {
+                                text: segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."),
+                                span: path.span,
+                            },
+                        };
                         let binder = self.parse_ident()?;
                         let end = self.last_consumed_span();
                         return Some(Pattern::TypeBind {

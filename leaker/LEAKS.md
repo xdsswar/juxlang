@@ -22,12 +22,17 @@ Gaps 30, 31 and 32 fixed L1 to L28, and the app was then **rewritten the way
 a Java programmer would write it, with every workaround removed** (branch
 `leaker-idiomatic`). The rewrite found ten more leaks, L29 to L39, listed
 under "Round 2" below. Eight of them were fixed in the compiler on the same
-branch, each with a test. Two are still open:
+branch, each with a test. The last two, L29 and L39, were fixed by gap 37:
 
-- **L29** (annoying): egui's `Frame` cannot be named, so a panel cannot be
-  given its own fill or margins. The app styles everything through `Visuals`
-  instead, which is why the side navigation is no longer dark.
-- **L39** (cosmetic): a crate's deprecated methods are not marked in the stubs.
+- **L29** (fixed): egui's `Frame` is `rust.eframe.egui.Frame`, beside
+  eframe's `rust.eframe.Frame`, and every egui signature takes the right one.
+  The side navigation is dark again: `Panel.left(..).frame(new
+  Frame().fill(Palette.NAV_BG).inner_margin(12.0f))`.
+- **L39** (fixed): a crate's deprecated methods carry `@Deprecated` with the
+  crate's note, and calling one is the Jux warning `W0491`.
+- **L40** (blocker, found and fixed by gap 37): a static read held its lock
+  to the end of the statement, so the app hung when the panel's lambda read a
+  `Palette` color the same statement had read (see L29).
 
 How the app is written now:
 
@@ -663,7 +668,7 @@ at `c16f909c` (gaps 30 to 32 closed). L30 to L38 are fixed on branch
   under the borrow self-check.
 - `examples/field_initializer_calls.jux` covers L31 and L32 in pure Jux.
 
-### L29. egui's `Frame` cannot be named. **annoying** (open)
+### L29. egui's `Frame` cannot be named. **annoying** (fixed, gap 37)
 
 eframe declares its own `eframe::Frame` (the window's surroundings), and egui
 declares `egui::Frame` (a panel's or group's fill, stroke and margins). The
@@ -683,8 +688,32 @@ two types called `Frame` from one family. A fix needs a second Jux name for
 the losing type, such as a nested `rust.eframe.egui.Frame`, or a renamed
 `EguiFrame` with a note on hover. Listing `rust.egui` as a dependency of its
 own does not help, because the eframe signatures still name eframe's `Frame`.
-**Workaround:** none. The app styles panels only through `Visuals`, so the
-side navigation is no longer dark.
+**Workaround:** none. The app styled panels only through `Visuals`, so the
+side navigation was no longer dark.
+
+**Fix (gap 37, ERRATA E132).** Not a `Frame` special case: when two
+members of a crate family share a simple name, both keep a Jux name that
+follows their Rust path. The family stub has a nested package for each module
+the host publishes a member's items under, `rust.eframe.egui` for
+`eframe::egui`, where egui's `Frame` is declared and every other egui type is
+an alias of its one declaration. Every signature names the exact type:
+`Panel.frame(rust.eframe.egui.Frame frame)`, and `run_ui_native`'s closure
+takes `(Ui, rust.eframe.Frame)`. Importing both `Frame`s by their simple name
+is `E0303`; `import ... as EguiFrame` names one beside the other. The app:
+```jux
+import rust.eframe.egui.Frame;
+Panel.left(new Id("nav")).frame(new Frame().fill(Palette.NAV_BG).inner_margin(12.0f))...
+```
+Inside the panel the text and selection colors are set on `nav.visuals_mut()`.
+
+**Found on the way (L40, fixed).** A first version built the panel's dark
+`Visuals` in `Palette.navVisuals()`, which reads `Palette.NAV_BG`, from the
+panel's lambda. The window never appeared: the process hung before eframe
+painted its first frame. A `static final` computed at run time lives behind a
+lock, and a read held the lock guard until the end of the STATEMENT, so the
+`show(ui, (nav) -> ..)` lambda of the same statement waited for the guard of
+`.frame(new Frame().fill(Palette.NAV_BG))` forever. A read now copies the value
+out and releases the lock at once (`examples/static_read_in_chain.jux`).
 
 ### L30. A lambda argument lost its parameter type when the call's arguments were hoisted. **blocker** (fixed)
 
@@ -853,13 +882,21 @@ closure type is read again in the function's own package when the caller's
 imports leave it incomplete. The `Ui` that any crate closure is lent is
 reborrowed (`&mut *ui`), as one lent by an egui container already was.
 
-### L39. Deprecated crate methods are not marked. **cosmetic** (open)
+### L39. Deprecated crate methods are not marked. **cosmetic** (fixed, gap 37)
 
 egui 0.36 renamed `Panel.show_inside` to `show`. The stub lists both with
 nothing to tell them apart. `show_inside` compiles, and rustc's deprecation
 warning shows only under `--verbose`. The app first used `show_inside`.
 **Expected:** a stub carries `@Deprecated("Renamed to show")`, and the
 checker warns at the call.
+
+**Fix (gap 37).** The stub says `@Deprecated(message = "Renamed to `show`")
+... show_inside<R>(..)`, and the call is
+```
+[W0491] warning: `Panel.show_inside` is deprecated: Renamed to `show`
+```
+The emitted crate allows rustc's `deprecated` lint, so rustc's own copy is
+gone from `--verbose` too.
 
 ### Also noted (not leaks)
 

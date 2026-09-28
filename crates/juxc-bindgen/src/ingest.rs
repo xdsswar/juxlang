@@ -141,8 +141,15 @@ fn generate_merged_impl(
     // to be held alive together.
     let mut pool = InherentPool::new();
     let mut sources_pooled = sources.is_empty();
-    for (_crate_name, json) in jsons.iter().chain(pool_only.iter()) {
+    // A family's shared simple names, decided before any type is mapped, so
+    // every reference to one is written as the exact type it is (LEAKS L29).
+    let clashes = match family {
+        Some((fam, excluded)) => plan_family_clashes(jsons, package, fam, excluded)?,
+        None => FamilyClashes::default(),
+    };
+    for (crate_name, json) in jsons.iter().chain(pool_only.iter()) {
         let krate: Crate = serde_json::from_str(json)?;
+        let _qualifier = QualifierScope::install(clashes.qualifier_for(&krate, crate_name));
         collect_inherent_pool(&krate, &mut pool);
         // The source-built signatures are mapped once, with any parsed crate
         // as the (unused) lookup context. After the JSON's own methods, so a
@@ -160,21 +167,40 @@ fn generate_merged_impl(
     // `alloc` re-exports `core` too, but `alloc::slice::...` is not a path a
     // program's crate can write.
     let facade = jsons.last().map(|(n, _)| *n);
+    // For a family: the nested package each collected TYPE is published under
+    // (`rust.eframe.egui` for `eframe::egui::Ui`), by name, and the types that
+    // lost a shared simple name, which are declared in theirs.
+    let mut home: HashMap<String, Option<String>> = HashMap::new();
+    let mut nested_decls: Vec<(String, String, StubItem)> = Vec::new();
     for (crate_name, json) in jsons {
         let krate: Crate = serde_json::from_str(json)?;
         format_version = krate.format_version;
         if Some(*crate_name) == facade {
             reexports.record(&krate, &pool_names);
         }
+        let _qualifier = QualifierScope::install(clashes.qualifier_for(&krate, crate_name));
         let member = crate_name.replace('-', "_");
         let excluded_pkg = family.and_then(|(_, ex)| ex.get(&member)).cloned();
-        for (name, item) in collect_items_with(&krate, &pool) {
+        let public = family.map(|_| PublicPaths::of(&krate));
+        for (id, name, item) in collect_items_with_ids(&krate, &pool) {
             let rust_name = rust_item_name(&item).unwrap_or(&name).to_string();
+            let is_type = matches!(item, StubItem::Type(_));
+            // Where the host publishes this type, as a nested Jux package.
+            let own_path = match (&public, is_type) {
+                (Some(public), true) => {
+                    krate.index.get(&Id(id)).and_then(|it| shortest_public_path(&krate, it, public))
+                }
+                _ => None,
+            };
+            let nested_home = match (family, &own_path) {
+                (Some((fam, _)), Some(path)) => nested_package_of(fam, package, path),
+                _ => None,
+            };
             // A member another package of the program declares contributes
             // only its types, as aliases of that declaration (§G.6.2.4).
             let item = match &excluded_pkg {
                 Some(pkg) => {
-                    if !matches!(item, StubItem::Type(_)) {
+                    if !is_type {
                         continue;
                     }
                     let target = format!("{pkg}.{name}");
@@ -182,10 +208,27 @@ fn generate_merged_impl(
                 }
                 None => item,
             };
+            // A type that lost a simple name another member of the family
+            // declares is declared in the nested package its path names, so
+            // both stay nameable (`rust.eframe.Frame` and
+            // `rust.eframe.egui.Frame`), or left out when the host publishes
+            // no path to it. Only the one the plan chose: any other item of
+            // that name in the same crate is dropped, as it always was.
+            if is_type {
+                if let Some(loser) = clashes.losers.get(&(member.clone(), rust_name.clone())) {
+                    if let (Some(pkg), true) = (&loser.package, own_path.as_deref() == Some(loser.path.as_str())) {
+                        nested_decls.push((pkg.clone(), name, item));
+                    }
+                    continue;
+                }
+            }
             // First definition wins (crates passed core→alloc→std), and
             // platform-duplicated names are collapsed.
             if seen.insert(name.clone()) {
                 owner.insert(name.clone(), (collected.len(), member.clone(), rust_name));
+                if is_type {
+                    home.insert(name.clone(), nested_home);
+                }
                 collected.push((name, item));
                 continue;
             }
@@ -195,6 +238,9 @@ fn generate_merged_impl(
             let Some((fam, _)) = family else { continue };
             let Some((pos, held_by, theirs)) = owner.get(&name).cloned() else { continue };
             if fam.rank(&member, &rust_name) < fam.rank(&held_by, &theirs) {
+                if is_type {
+                    home.insert(name.clone(), nested_home);
+                }
                 collected[pos] = (name.clone(), item);
                 owner.insert(name, (pos, member.clone(), rust_name));
             }
@@ -232,8 +278,10 @@ fn generate_merged_impl(
     });
     // Every member's item is written the way a program linking only the host
     // can name it.
+    let mut nested = Vec::new();
     if let Some((fam, _)) = family {
         apply_family_paths(&mut collected, fam);
+        nested = nested_family_files(package, fam, &collected, &home, nested_decls);
     }
 
     Ok(StubFile {
@@ -243,8 +291,307 @@ fn generate_merged_impl(
             jsons.len(),
             format_version
         )],
+        imports: Vec::new(),
         items: collected.into_iter().map(|(_, it)| it).collect(),
+        nested,
     })
+}
+
+// ============================================================================
+// Nested packages and shared names in a crate family (§G.6.2.4, LEAKS L29)
+// ============================================================================
+
+use crate::ty::UNNAMEABLE_PREFIX;
+
+/// What a family's shared simple names mean, decided before any type of it is
+/// mapped (`eframe::Frame` and `egui::Frame` are both `Frame`).
+#[derive(Debug, Default)]
+struct FamilyClashes {
+    /// `(defining crate, Rust name)` of every type that shares its simple
+    /// name with another member's -> the Jux name a reference to it writes:
+    /// `rust.eframe.Frame` for the winner, `rust.eframe.egui.Frame` for the
+    /// other.
+    names: HashMap<(String, String), String>,
+    /// The shared simple names.
+    shared: HashSet<String>,
+    /// `(member, Rust name)` of each type that lost its simple name -> where
+    /// it goes.
+    losers: HashMap<(String, String), Loser>,
+}
+
+/// A type that lost a simple name its family shares.
+#[derive(Debug)]
+struct Loser {
+    /// The nested package it is declared in, or `None` when the host
+    /// publishes no path to it.
+    package: Option<String>,
+    /// Its shortest path in its own crate: which of the crate's items of that
+    /// name the plan is about (a crate may declare several, in different
+    /// modules, and only one of them ever reaches the stub).
+    path: String,
+}
+
+impl FamilyClashes {
+    /// rustdoc id -> qualified Jux name, for every type `krate`'s signatures
+    /// can mention that shares a simple name in the family.
+    fn qualifier_for(&self, krate: &Crate, _crate_name: &str) -> HashMap<u32, String> {
+        let mut out = HashMap::new();
+        if self.shared.is_empty() {
+            return out;
+        }
+        for (id, summary) in &krate.paths {
+            if !matches!(
+                summary.kind,
+                rustdoc_types::ItemKind::Struct
+                    | rustdoc_types::ItemKind::Enum
+                    | rustdoc_types::ItemKind::Trait
+                    | rustdoc_types::ItemKind::TypeAlias
+                    | rustdoc_types::ItemKind::Union
+            ) {
+                continue;
+            }
+            let (Some(first), Some(last)) = (summary.path.first(), summary.path.last()) else {
+                continue;
+            };
+            if !self.shared.contains(last) {
+                continue;
+            }
+            let key = (first.replace('-', "_"), last.clone());
+            if let Some(q) = self.names.get(&key) {
+                out.insert(id.0, q.clone());
+            }
+        }
+        out
+    }
+}
+
+thread_local! {
+    /// The qualifier of the crate being ingested (see
+    /// [`FamilyClashes::qualifier_for`]), read by [`map_path`]. Thread-local
+    /// because the type map is a free function called from every builder.
+    static TYPE_QUALIFIER: std::cell::RefCell<HashMap<u32, String>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Installs a crate's qualifier for as long as it lives.
+struct QualifierScope;
+
+impl QualifierScope {
+    fn install(map: HashMap<u32, String>) -> QualifierScope {
+        TYPE_QUALIFIER.with(|q| *q.borrow_mut() = map);
+        QualifierScope
+    }
+}
+
+impl Drop for QualifierScope {
+    fn drop(&mut self) {
+        TYPE_QUALIFIER.with(|q| q.borrow_mut().clear());
+    }
+}
+
+/// The qualified Jux name a reference to the type `id` must be written with,
+/// when it shares its simple name in the family being ingested.
+fn qualified_type_name(id: &Id) -> Option<String> {
+    TYPE_QUALIFIER.with(|q| q.borrow().get(&id.0).cloned())
+}
+
+/// Decide every simple name two members of a family declare.
+///
+/// The winner keeps the plain name in the host's package, as before
+/// ([`crate::family::FamilyPaths::rank`]). Each other type of that name is
+/// declared in the nested package its public path names (`eframe::egui::Frame`
+/// is `rust.eframe.egui.Frame`), or, for a member another package declares,
+/// is that package's type (`rust.egui.Frame`). Every reference to any of them
+/// is then written qualified, so no signature can mean the wrong one.
+fn plan_family_clashes(
+    jsons: &[(&str, &str)],
+    package: &str,
+    fam: &crate::family::FamilyPaths,
+    excluded: &HashMap<String, String>,
+) -> Result<FamilyClashes, serde_json::Error> {
+    // Simple name -> (member, the type's shortest public path), one per
+    // member, in family order.
+    let mut declared: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    for (crate_name, json) in jsons {
+        let krate: Crate = serde_json::from_str(json)?;
+        let member = crate_name.replace('-', "_");
+        let public = PublicPaths::of(&krate);
+        let mut mine: HashMap<String, String> = HashMap::new();
+        for item in krate.index.values() {
+            if item.crate_id != 0 || !is_public(&item.visibility) {
+                continue;
+            }
+            let Some(name) = &item.name else { continue };
+            let is_type = match &item.inner {
+                ItemEnum::Struct(_) | ItemEnum::Enum(_) | ItemEnum::Trait(_) => true,
+                ItemEnum::TypeAlias(a) => a.generics.params.is_empty(),
+                _ => false,
+            };
+            if !is_type {
+                continue;
+            }
+            let Some(path) = shortest_public_path(&krate, item, &public) else { continue };
+            // One per member: the most general path, as `collect_items_with`
+            // sorts them.
+            let better = |old: &String| {
+                (path.matches("::").count(), path.as_str()) < (old.matches("::").count(), old.as_str())
+            };
+            match mine.get(name) {
+                Some(old) if !better(old) => {}
+                _ => {
+                    mine.insert(name.clone(), path);
+                }
+            }
+        }
+        let mut names: Vec<(String, String)> = mine.into_iter().collect();
+        names.sort();
+        for (name, path) in names {
+            declared.entry(name).or_default().push((member.clone(), path));
+        }
+    }
+
+    let mut out = FamilyClashes::default();
+    for (name, members) in declared {
+        if members.len() < 2 {
+            continue;
+        }
+        // The same rule the ingest applies: first in family order, unless a
+        // later member ranks strictly better.
+        let mut winner = 0;
+        for i in 1..members.len() {
+            if fam.rank(&members[i].0, &name) < fam.rank(&members[winner].0, &name) {
+                winner = i;
+            }
+        }
+        out.shared.insert(name.clone());
+        for (i, (member, path)) in members.iter().enumerate() {
+            let key = (member.clone(), name.clone());
+            if i == winner {
+                out.names.insert(key, format!("{package}.{name}"));
+                continue;
+            }
+            let nested = nested_package_of(fam, package, path);
+            let jux = match (excluded.get(member), &nested) {
+                (Some(owner_pkg), _) => format!("{owner_pkg}.{name}"),
+                (None, Some(pkg)) => format!("{pkg}.{name}"),
+                (None, None) => format!("{UNNAMEABLE_PREFIX}{name}"),
+            };
+            out.names.insert(key.clone(), jux);
+            out.losers.insert(key, Loser { package: nested, path: path.clone() });
+        }
+    }
+    Ok(out)
+}
+
+/// The shortest path a program can `use` the item by, within its own crate:
+/// its definition path when every module on it is public, or a re-export
+/// (`egui::Frame` rather than `egui::containers::frame::Frame`).
+fn shortest_public_path(krate: &Crate, item: &Item, public: &PublicPaths) -> Option<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(summary) = krate.paths.get(&item.id) {
+        if !summary.path.is_empty() && definition_path_is_public(public, &summary.path) {
+            candidates.push(public_rust_path(&summary.path));
+        }
+    }
+    if let Some(p) = public.reexports.get(&item.id) {
+        candidates.push(p.clone());
+    }
+    if candidates.is_empty() {
+        return real_rust_path(krate, item, public);
+    }
+    candidates.into_iter().min_by(|a, b| {
+        a.matches("::").count().cmp(&b.matches("::").count()).then_with(|| a.cmp(b))
+    })
+}
+
+/// The nested Jux package the host publishes an item under, from the item's
+/// path in its own crate: `egui::Frame` is `eframe::egui::Frame` through the
+/// host, so `rust.eframe.egui`. `None` for an item at the host's root, which
+/// is the host package itself, and for one the host publishes no path to.
+fn nested_package_of(fam: &crate::family::FamilyPaths, package: &str, path: &str) -> Option<String> {
+    let host = fam.host();
+    let public = fam.public_path(path).unwrap_or_else(|| path.to_string());
+    let rest = public.strip_prefix(&format!("{host}::"))?;
+    let (module, _) = rest.rsplit_once("::")?;
+    Some(format!("{package}.{}", module.replace("::", ".")))
+}
+
+/// The nested stub files of a family: each type declared in the host's
+/// package is also reachable, as an alias, under the nested package its path
+/// names (`rust.eframe.egui.Ui` is `rust.eframe.Ui`), and each type that lost
+/// a shared name is DECLARED there. A nested file imports the host's package,
+/// so its signatures read their bare names as the host's do.
+fn nested_family_files(
+    package: &str,
+    fam: &crate::family::FamilyPaths,
+    collected: &[(String, StubItem)],
+    home: &HashMap<String, Option<String>>,
+    decls: Vec<(String, String, StubItem)>,
+) -> Vec<StubFile> {
+    let mut by_pkg: std::collections::BTreeMap<String, Vec<(String, StubItem)>> =
+        std::collections::BTreeMap::new();
+    // The losers first: a declaration wins its name over an alias.
+    let mut decl_items: Vec<(String, StubItem)> = Vec::new();
+    let mut decl_pkgs: Vec<String> = Vec::new();
+    for (pkg, name, item) in decls {
+        decl_pkgs.push(pkg);
+        decl_items.push((name, item));
+    }
+    apply_family_paths(&mut decl_items, fam);
+    // Their `implements` and projection overloads are settled against the
+    // host's declarations, which is what their bare names mean.
+    let host_interfaces: HashSet<String> = collected
+        .iter()
+        .filter_map(|(n, it)| match it {
+            StubItem::Type(t) if t.kind == TypeKind::Interface && t.generics.is_empty() => Some(n.clone()),
+            StubItem::Alias(a) if a.target.contains('.') => Some(n.clone()),
+            _ => None,
+        })
+        .collect();
+    let host_declared: HashMap<String, String> = collected
+        .iter()
+        .filter_map(|(n, it)| match it {
+            StubItem::Type(t) => Some((n.clone(), t.rust_path.clone().unwrap_or_default())),
+            _ => None,
+        })
+        .collect();
+    for (_, item) in &mut decl_items {
+        if let StubItem::Type(t) = item {
+            t.implements.retain(|n| host_interfaces.contains(n) || n == "RustIterator");
+        }
+    }
+    settle_projection_overloads(&host_declared, &mut decl_items);
+    for (pkg, (name, item)) in decl_pkgs.into_iter().zip(decl_items) {
+        by_pkg.entry(pkg).or_default().push((name, item));
+    }
+    for (name, item) in collected {
+        let Some(Some(pkg)) = home.get(name) else { continue };
+        let target = match item {
+            StubItem::Type(_) => format!("{package}.{name}"),
+            StubItem::Alias(a) if a.target.contains('.') => a.target.clone(),
+            _ => continue,
+        };
+        let slot = by_pkg.entry(pkg.clone()).or_default();
+        if slot.iter().any(|(n, _)| n == name) {
+            continue;
+        }
+        slot.push((name.clone(), StubItem::Alias(StubAlias { name: name.clone(), target })));
+    }
+    by_pkg
+        .into_iter()
+        .map(|(pkg, mut items)| {
+            items.sort_by(|a, b| a.0.cmp(&b.0));
+            StubFile {
+                package: pkg,
+                header: vec![format!(
+                    "bindgen -- nested package of `{package}`: the items the host publishes under this path"
+                )],
+                imports: vec![format!("{package}.*")],
+                items: items.into_iter().map(|(_, it)| it).collect(),
+                nested: Vec::new(),
+            }
+        })
+        .collect()
 }
 
 /// Rewrite every `@rust` path a family member's item carries to the path the
@@ -503,6 +850,7 @@ pub fn generate(krate: &Crate, package: &str) -> StubFile {
             krate.format_version
         )],
         items: collected.into_iter().map(|(_, it)| it).collect(),
+        ..Default::default()
     }
 }
 
@@ -565,6 +913,7 @@ fn collect_inherent_pool(krate: &Crate, pool: &mut InherentPool) {
             }
             for mut sf in map_function_surface(krate, &public, mname, f, Some(&im.for_)) {
                 sf.is_static = false;
+                sf.deprecated = deprecation_note(mitem);
                 slot.push(sf);
             }
         }
@@ -820,6 +1169,7 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
                         closure_shared: Vec::new(),
                         bounds: Vec::new(),
                         projection_role: None,
+                        deprecated: None,
                     });
                 }
                 dedup_methods_by_name(&mut methods);
@@ -852,6 +1202,7 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
                 let mut sf = map_function(krate, name, f);
                 sf.is_static = false;
                 sf.rust_path = real_rust_path(krate, item, &public);
+                sf.deprecated = deprecation_note(item);
                 collected.push((item.id.0, name.clone(), StubItem::Function(sf)));
             }
             ItemEnum::Constant { type_, const_: _ } if is_public(&item.visibility) => {
@@ -888,6 +1239,13 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
                 ));
             }
             _ => {}
+        }
+    }
+
+    // A type the crate marks `#[deprecated]` says so (LEAKS L39).
+    for (id, _, item) in &mut collected {
+        if let StubItem::Type(t) = item {
+            t.deprecated = krate.index.get(&Id(*id)).and_then(deprecation_note);
         }
     }
 
@@ -994,6 +1352,7 @@ fn build_struct(
         // Its own `new` of the same arity wins: that is the crate's spelling.
         if !ctors.iter().any(|c| c.params.len() == tfields.len()) && !tfields.is_empty() {
             ctors.push(StubCtor {
+                deprecated: None,
                 visibility: Vis::Public,
                 name: name.to_string(),
                 params: tfields
@@ -1207,6 +1566,7 @@ fn build_trait(
             let mut sf = map_function(krate, mname, f);
             sf.is_static = !has_self_receiver(f);
             sf.is_default = f.has_body;
+            sf.deprecated = deprecation_note(mitem);
             st.methods.push(sf);
         }
     }
@@ -1309,6 +1669,7 @@ fn add_default_ctor(ctors: &mut Vec<StubCtor>, type_name: &str, implements_defau
         return;
     }
     ctors.push(StubCtor {
+        deprecated: None,
         visibility: Vis::Public,
         name: type_name.to_string(),
         params: Vec::new(),
@@ -1366,6 +1727,7 @@ fn collect_inherent_members(
                 // A `new() -> Result<Self, E>` surfaces as a `throws E` ctor so
                 // the call site unwraps the `Result` (§G.5.4).
                 ctors.push(StubCtor {
+                    deprecated: deprecation_note(mitem),
                     is_default: false,
                     is_tuple: false,
                     visibility: Vis::Public,
@@ -1376,6 +1738,7 @@ fn collect_inherent_members(
             } else {
                 for mut sf in map_function_surface(krate, public, mname, f, Some(&im.for_)) {
                     sf.is_static = !has_self;
+                    sf.deprecated = deprecation_note(mitem);
                     methods.push(sf);
                 }
             }
@@ -1607,6 +1970,7 @@ pub(crate) fn map_function(krate: &Crate, name: &str, f: &Function) -> StubFn {
         doc: None,
         bounds: type_param_bounds(&f.generics),
         projection_role: None,
+        deprecated: None,
     }
 }
 
@@ -2266,6 +2630,7 @@ fn iterator_next(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<StubFn> {
         closure_shared: Vec::new(),
         bounds: Vec::new(),
         projection_role: None,
+        deprecated: None,
     })
 }
 
@@ -3162,7 +3527,12 @@ fn retain_projection_overloads(collected: &mut [(String, StubItem)]) {
             _ => None,
         })
         .collect();
+    settle_projection_overloads(&declared, collected);
+}
 
+/// [`retain_projection_overloads`] against a given declared set: a nested
+/// family package's own types are settled against the host's declarations.
+fn settle_projection_overloads(declared: &HashMap<String, String>, collected: &mut [(String, StubItem)]) {
     for (_, item) in collected.iter_mut() {
         let StubItem::Type(t) = item else { continue };
         if t.methods.iter().all(|m| m.projection_role.is_none()) {
@@ -3176,7 +3546,7 @@ fn retain_projection_overloads(collected: &mut [(String, StubItem)]) {
                 out.push(m.clone());
             } else if settled.insert(m.name.clone()) {
                 // The whole group lands where its first member stood.
-                out.extend(settle_projection_group(&declared, &old, &m.name));
+                out.extend(settle_projection_group(declared, &old, &m.name));
             }
         }
         t.methods = out;
@@ -3283,7 +3653,12 @@ pub fn map_type(t: &Type) -> JuxType {
         Type::DynTrait(dt) => dt
             .traits
             .first()
-            .map(|pt| JuxType::user(last_segment(&pt.trait_.path)))
+            .map(|pt| {
+                JuxType::user(
+                    qualified_type_name(&pt.trait_.id)
+                        .unwrap_or_else(|| last_segment(&pt.trait_.path).to_string()),
+                )
+            })
             .unwrap_or_else(|| JuxType::Unknown("Object".into())),
         Type::FunctionPointer(fp) => {
             let params = fp.sig.inputs.iter().map(|(_, t)| map_type(t)).collect();
@@ -3401,9 +3776,13 @@ fn map_path(path: &Path) -> JuxType {
         "HashSet" | "BTreeSet" => JuxType::User { name: name.to_string(), args: vec![arg0()] },
         // Smart pointers are transparent to Jux (§G.3.1).
         "Box" | "Rc" | "Arc" => arg0(),
-        _ => JuxType::User {
-            name: name.to_string(),
-            args,
+        // A name two members of a crate family share is written as the exact
+        // type the reference means (LEAKS L29): `Panel::frame(Frame)` in
+        // egui takes `rust.eframe.egui.Frame`, never eframe's `Frame`.
+        _ => match qualified_type_name(&path.id) {
+            Some(q) if q.starts_with(UNNAMEABLE_PREFIX) => JuxType::Unknown(q),
+            Some(q) => JuxType::User { name: q, args },
+            None => JuxType::User { name: name.to_string(), args },
         },
     }
 }
@@ -3452,7 +3831,9 @@ fn conversion_bound_target(bounds: &[GenericBound]) -> Option<JuxType> {
 /// Name of the first trait bound in an `impl Trait` bound list.
 fn first_trait_in_bounds(bounds: &[GenericBound]) -> Option<String> {
     bounds.iter().find_map(|b| match b {
-        GenericBound::TraitBound { trait_, .. } => Some(last_segment(&trait_.path).to_string()),
+        GenericBound::TraitBound { trait_, .. } => Some(
+            qualified_type_name(&trait_.id).unwrap_or_else(|| last_segment(&trait_.path).to_string()),
+        ),
         _ => None,
     })
 }
@@ -3938,6 +4319,20 @@ fn public_rust_path(path: &[String]) -> String {
         }
     }
     segs.join("::")
+}
+
+/// What the crate says about an item it marks `#[deprecated]` (LEAKS L39):
+/// its note, or else the version it was deprecated in, or else nothing. `None`
+/// for an item that is not deprecated. One line, since it is written into a
+/// Jux string literal.
+fn deprecation_note(item: &Item) -> Option<String> {
+    let d = item.deprecation.as_ref()?;
+    let text = match (&d.note, &d.since) {
+        (Some(note), _) if !note.trim().is_empty() => note.clone(),
+        (_, Some(since)) if !since.trim().is_empty() => format!("deprecated since {since}"),
+        _ => String::new(),
+    };
+    Some(text.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 fn first_doc_line(item: &Item) -> Option<String> {

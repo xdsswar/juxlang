@@ -3159,18 +3159,27 @@ impl RustEmitter {
         // vocabulary — `__jux_as_Box` on `trait ContainerKind<T>` returns
         // `Option<Box<T>>`. Empty for a non-generic target.
         let args = self.hook_target_args(base, t).unwrap_or_default();
+        // Spelled from the module the hook is emitted in: the target may live
+        // in another package (a root-package `class Sq` tested for on
+        // `app.model.Shape`), where its bare name is not in scope.
+        let path = self
+            .lookup_interface_by_bare_or_fqn(t)
+            .map(|(k, _)| k.to_string())
+            .or_else(|| self.resolve_bare_class_fqn(t))
+            .map(|fqn| self.rust_path_for_type_fqn(&fqn))
+            .unwrap_or_else(|| t.to_string());
         if self.lookup_interface_by_bare_or_fqn(t).is_some() {
             self.w.push_str("std::rc::Rc<dyn ");
-            self.w.push_str(t);
+            self.w.push_str(&path);
             self.w.push('>');
         } else if self.is_poly_base_class(t) {
             self.w.push_str("std::rc::Rc<dyn ");
-            self.w.push_str(t);
+            self.w.push_str(&path);
             self.w.push_str("Kind");
             self.emit_kind_trait_args(t, &args);
             self.w.push('>');
         } else {
-            self.w.push_str(t);
+            self.w.push_str(&path);
             if !args.is_empty() {
                 self.w.push('<');
                 for (i, a) in args.iter().enumerate() {

@@ -1,0 +1,2 @@
+type_alias_arity.jux:7:5: [E0443] error: type alias `Dict` takes 1 type argument, but 2 were supplied
+type_alias_arity.jux:7:31: [E0443] error: type alias `Dict` takes 1 type argument, but 2 were supplied

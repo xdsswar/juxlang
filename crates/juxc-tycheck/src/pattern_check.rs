@@ -532,8 +532,14 @@ impl Checker<'_> {
             // were a plain struct.
             Pattern::TypeBind { type_name, binder, .. } => {
                 let written = juxc_ast::TypeRef {
+                    // A type written by its qualified name (`case app.model.Circle c`)
+                    // is that path.
                     name: juxc_ast::QualifiedName {
-                        segments: vec![type_name.clone()],
+                        segments: type_name
+                            .text
+                            .split('.')
+                            .map(|s| juxc_ast::Ident { text: s.to_string(), span: type_name.span })
+                            .collect(),
                         span: type_name.span,
                     },
                     generic_args: Vec::new(),
@@ -690,7 +696,7 @@ impl Checker<'_> {
     /// the product coverage for a record pattern naming it, nothing otherwise.
     fn rows_for_member(&self, pattern: &Pattern, record: &str, bare: &str, dom: &Domain, rows: &mut Vec<Vec<Cov>>) {
         match pattern {
-            Pattern::TypeBind { type_name, .. } if type_name.text == bare => rows.push(vec![Cov::Any]),
+            Pattern::TypeBind { type_name, .. } if juxc_ast::type_pattern_bare(&type_name.text) == bare => rows.push(vec![Cov::Any]),
             Pattern::EnumVariant { path, .. } if self.pattern_record_fqn(path).as_deref() == Some(record) => {
                 for c in self.coverage(pattern, dom) {
                     rows.push(vec![c]);

@@ -907,8 +907,20 @@ fn ty_from_ref_unnullable(t: &TypeRef, env: &TypeEnv, symbols: &SymbolTable) -> 
                     symbols.find_fqn_by_bare_in(first, &env.current_package.join("."))
                 }
             });
-        if let Some(candidate) =
-            owner_fqn.map(|o| format!("{o}__{rest}")).filter(|c| symbols.is_type_name(c))
+        // The owner may itself be written by its qualified name
+        // (`app.model.Circle.Builder`, which is how an import alias of
+        // `Circle` that clashes with a type of the file reaches here): every
+        // longer split is tried too, longest owner first, as the backend's
+        // `lifted_nested_type_fqn` does. Missing it left the value `Unknown`,
+        // and a member chained on it (`b.build().r`) was read on the wrong type.
+        let segs: Vec<&str> = t.name.segments.iter().map(|s| s.text.as_str()).collect();
+        let qualified_owner = (2..segs.len()).rev().find_map(|split| {
+            let owner = segs[..split].join(".");
+            let candidate = format!("{owner}__{}", segs[split..].join("__"));
+            (symbols.is_type_name(&owner) && symbols.is_type_name(&candidate)).then_some(candidate)
+        });
+        if let Some(candidate) = qualified_owner
+            .or_else(|| owner_fqn.map(|o| format!("{o}__{rest}")).filter(|c| symbols.is_type_name(c)))
         {
             let generic_args = t
                 .generic_args
@@ -1617,6 +1629,12 @@ pub fn expand_alias(
         // back into `expand_alias` only for top-level matches, so
         // a target that itself references another alias produces
         // a `Ty::User` we then peel below).
+        // The wrong number of type arguments is `E0443`, reported where the
+        // alias is expanded (`crate::type_aliases`); the use names no type
+        // the checker could compare anything with.
+        if !args_cursor.is_empty() && args_cursor.len() != alias.generic_params.len() {
+            return Some(Ty::Unknown);
+        }
         let lowered_target = ty_from_ref(&alias.target, &scratch, symbols);
         let substituted = if alias.generic_params.is_empty() || args_cursor.is_empty() {
             lowered_target

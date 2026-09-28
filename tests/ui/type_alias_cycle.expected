@@ -1,0 +1,2 @@
+type_alias_cycle.jux:2:1: [E0498] error: type alias `A` stands for itself: its target leads back to it through other aliases, so it names no type -- make one of them name a class, record, enum, interface or primitive
+type_alias_cycle.jux:3:1: [E0498] error: type alias `B` stands for itself: its target leads back to it through other aliases, so it names no type -- make one of them name a class, record, enum, interface or primitive

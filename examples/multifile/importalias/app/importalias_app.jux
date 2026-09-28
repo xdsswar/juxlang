@@ -1,0 +1,117 @@
+// `import x.y.Z as W` works everywhere a plain import does (gap 37).
+//
+// Every alias below is used in every place a type can be named: a field, a
+// parameter and a return type, a local, a supertype, a `new`, a static call
+// and a static field, a nested type, an array, a generic argument, a lambda
+// parameter, a cast, a type test, a `switch` pattern and an enum constant.
+//
+// This package declares a `Circle` of its own, so `C` is the only name the
+// model's circle has here; `S`, `Col`, `P` and the `rust.std` aliases name
+// types nothing else in the file does.
+
+package importalias.app;
+
+import importalias.model.Circle as C;
+import importalias.model.Shape as S;
+import importalias.model.Color as Col;
+import importalias.model.Pair as P;
+import rust.std.HashMap as Map2;
+import rust.std.Vec as V;
+import rust.std.Vec as Seq;
+import rust.std.HashMap as Vec;
+
+class Circle { public int own = 7; }
+
+class Sq implements S { public double area() { return 4.0; } }
+abstract class Base implements S { }
+class Tri extends Base { public double area() { return 1.5; } }
+
+class Holder {
+    C c = new C(3.0);
+    V<C> list = new V<C>();
+}
+
+C make(double r) { return new C(r); }
+
+double total(V<S> xs) {
+    double t = 0.0;
+    for (S s : xs) {
+        t = t + s.area();
+    }
+    return t;
+}
+
+String kind(S s) {
+    return switch (s) {
+        case C cc -> $"circle ${cc.r}";
+        case Sq q -> "square";
+        default -> "other";
+    };
+}
+
+public void main() {
+    C c = new C(1.0);
+    print(c.area());
+    print(C.unit().r);
+    print(C.SIDES);
+
+    S s = make(2.0);
+    print(s.area());
+    switch (s) {
+        case C cc -> print(cc.r);
+        default -> print("other");
+    }
+    print(kind(new Sq()));
+    print(kind(new Tri()));
+
+    Col k = Col.GREEN;
+    switch (k) {
+        case RED -> print("red");
+        case GREEN -> print("green");
+    }
+
+    P<String, int> p = new P<String, int>("x", 2);
+    print(p.a + p.b);
+
+    Map2<String, int> m = new Map2<String, int>();
+    m.insert("a", 1);
+    print(m.len());
+
+    V<S> xs = new V<S>();
+    xs.push(new C(1.0));
+    xs.push(new Sq());
+    xs.push(new Tri());
+    print(total(xs));
+    print(xs[0] => C);
+
+    C[] arr = new C[]{ new C(5.0), new C(6.0) };
+    print(arr[1].r);
+
+    C.Builder b = new C.Builder();
+    C built = b.build();
+    print(built.r);
+    // Members chained on the nested type reached through the alias, and on
+    // the same type written by its qualified name.
+    print(b.build().r);
+    print(b.build().area());
+    importalias.model.Circle.Builder b2 = new importalias.model.Circle.Builder();
+    print(b2.build().r + b2.r);
+
+    Holder h = new Holder();
+    h.list.push(h.c);
+    print(h.list.len());
+
+    var f = (C x) -> x.r * 2.0;
+    print(f(new C(4.0)));
+
+    // The package's own `Circle` is untouched by the alias.
+    print(new Circle().own);
+
+    // Two aliases of one type are one type; an alias may take a name the
+    // standard library also uses (`Vec`), and then means what it imports.
+    Seq<int> nums = new V<int>();
+    nums.push(3);
+    Vec<String, int> byName = new Vec<String, int>();
+    byName.insert("n", nums.len());
+    print(byName.len());
+}

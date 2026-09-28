@@ -191,6 +191,11 @@ impl crate::RustEmitter {
                     format!("crate::{}", juxc_lex::to_rust_path(fqn))
                 }
             }
+            // A root-package type lives at the crate root: from a packaged
+            // unit's module it is `crate::Name`.
+            None if !self.current_package_path().is_empty() => {
+                format!("crate::{}", juxc_lex::to_rust_ident(fqn))
+            }
             None => juxc_lex::to_rust_ident(fqn),
         }
     }

@@ -266,18 +266,37 @@ diagnostic.
 
 **38. CLOSED 2026-09-27 (ERRATA E1XX-GAP38).** ~~The four leaks gap 33 left known.~~ A stack overflow on Linux and macOS (x86_64, aarch64) is reported as on Windows, `panic: stack overflow: ...`, status 101, by a `SIGSEGV`/`SIGBUS` handler on an alternate signal stack that compares the fault address with the thread's recorded stack (main and `Worker` threads; run under Linux, type-checked for all four targets). A foreign value with no `Display` prints its `Debug` structure in a record's form (`FromUtf8Error(bytes: [104, 255], error: Utf8Error(valid_up_to: 1, error_len: 1))`), with cells and wrappers stripped, `Some(x)` as `x`, `None` and `<uninit>` as `null`, and nothing inside quotes rewritten. A library's `Err` is a Jux exception: `NumberFormatException` (new) for a number that does not parse, `FileNotFoundException`/`IOException`, `EncodingException`, `ArithmeticException`, `IllegalArgumentException`, and `LibraryException` (new, naming the library) for the rest; a clause naming the library's own type still gets its value. A crate stub's doc comment is shown on hover and in completion rewritten in Jux terms (links as Jux names, `T?`, no borrows or lifetimes, no Rust code blocks or `# Safety`), and held to the leak detector, which now knows rustdoc. Tests: `bin/jux/tests/runtime_failures.rs`, `examples/foreign_debug_text.jux`, `examples/foreign_errors_as_jux_exceptions.jux`, `examples/runtime_foreign_error_uncaught.jux`, `examples/apps/json_lib`, the backend's `foreign_debug_text_is_laid_out_the_jux_way`, `crates/juxc-lsp/src/crate_doc.rs` and `hover_shows_a_crate_doc_in_jux_terms`.
 
-**37. OPEN (found 2026-09-27 by the idiomatic rewrite, LEAKS L29, L39).**
+**37. CLOSED 2026-09-27 (ERRATA E132, E133).** ~~Two types of one simple name in a crate family; deprecated crate items; aliases (LEAKS L29, L39).~~
 
-- **L29: egui's `Frame` cannot be named from `rust.eframe`.** `eframe::Frame`
-  and `egui::Frame` share a name within one crate family, and the host's item
-  wins (`FamilyPaths::rank`). So `egui::Frame` is dropped, and
-  `Panel.frame(..)`, `CentralPanel.frame(..)`, `TextEdit.frame(..)` and
-  `Ui.dnd_drop_zone(..)` name eframe's type. A panel cannot get its own fill
-  or margins. The fix needs a second Jux name for the losing type (a nested
-  package or a renamed type).
-- **L39: deprecated crate methods are not marked.** A stub does not mark them
-  (`Panel.show_inside`, renamed `show` in egui 0.36), and only rustc warns,
-  under `--verbose`.
+- **L29: egui's `Frame` cannot be named from `rust.eframe`.** Fixed in
+  general, not for `Frame`: a crate family's stub has a nested package for
+  every module the host publishes a member's items under, following the Rust
+  path (`rust.eframe.egui.Frame` is `eframe::egui::Frame`, beside
+  `rust.eframe.Frame`). A type that loses a shared simple name is declared
+  there; every other member type is aliased there; every signature naming a
+  shared name writes the exact type. Importing both by their simple name is
+  `E0303`; two wildcards bringing both are `E0303` at a use only, as in Java.
+  The leaker's side navigation is dark again.
+- **L39: deprecated crate methods are not marked.** A crate's
+  `#[deprecated]` item carries `@Deprecated(message = "<note>")` in its stub,
+  and a call to anything `@Deprecated` is the new warning `W0491`; rustc's own
+  warning is silenced in the emitted crate.
+- **Aliases (added to the gap 2026-09-27).** `import x.y.Z as W` works
+  everywhere a plain import does (supertypes, upcasts, patterns, nested types,
+  and every other position), and a `type` alias is expanded with its
+  parameters substituted everywhere, `new` and static calls included; both
+  are rewritten before checking, so nothing downstream sees an alias. An alias
+  cycle is the new `E0498`, the wrong number of type arguments `E0443`.
+- **L40 (found on the way).** A static read held its lock to the end of the
+  statement, so a lambda of the same statement reading the static again
+  hung; a read now copies the value out and releases the lock at once.
+
+Tests: `crates/juxc-bindgen/tests/leaks_fixture.rs` (a two-crate fixture
+family), `bin/juxc/tests/family_names.rs` (built and run against the real
+fixture crates), `examples/multifile/importalias`,
+`examples/type_alias_everywhere.jux`, `examples/static_read_in_chain.jux`,
+UI `ambiguous_wildcard_import`,
+`import_alias_clash`, `type_alias_cycle`, `type_alias_arity`.
 
 **36. CLOSED 2026-09-27 (branch `leaker-idiomatic`, LEAKS L30-L38).** ~~The shapes the idiomatic rewrite hit.~~
 

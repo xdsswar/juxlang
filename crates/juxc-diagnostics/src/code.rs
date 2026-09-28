@@ -796,6 +796,10 @@ pub enum Code {
     /// clean, built, printed nothing and never exited. There is no value an
     /// initializer cycle can produce that is right, so it is an error.
     E0497_StaticInitializerCycle,
+    /// E0498 -- A `type` alias that stands for itself, directly or through
+    /// other aliases (`type A = B; type B = A;`): it names no type. Expanding
+    /// one used to overflow the checker's stack.
+    E0498_TypeAliasCycle,
     /// E0479 -- `s.length` on a String (Semantics §S.3.2): a string has two
     /// lengths, and the program has to say which one it means.
     E0479_StringLengthAmbiguous,
@@ -949,6 +953,11 @@ pub enum Code {
     /// (a class, an interface, an array, a collection): §M.13.2 says such a
     /// `ref` is accepted and means nothing, and reserves this warning for it.
     W0490_RefOnReferenceType,
+    /// W0491 -- A call to a `@Deprecated` function, method or constructor,
+    /// with the declaration's `message`. A crate's `#[deprecated]` item is
+    /// marked in its stub, so the program hears it from Jux, never from rustc
+    /// (LEAKS L39).
+    W0491_DeprecatedUse,
 
     /// E0600 — A **non-nullable, non-`weak` field is not definitely assigned**
     /// by the end of construction (§S.4.5). A field with no textual initializer
@@ -1462,6 +1471,7 @@ impl Code {
             Code::E0495_EnumConstructorShape     => "E0495",
             Code::E0496_EnumArgumentsWithoutConstructor => "E0496",
             Code::E0497_StaticInitializerCycle   => "E0497",
+            Code::E0498_TypeAliasCycle           => "E0498",
             Code::E0479_StringLengthAmbiguous    => "E0479",
             Code::E0480_StringIndexAmbiguous     => "E0480",
             Code::E0477_TestAnnotationMisplaced  => "E0477",
@@ -1489,6 +1499,7 @@ impl Code {
             Code::W0242_UnknownLint              => "W0242",
             Code::W0470_MissingOverrideAnnotation => "W0470",
             Code::W0490_RefOnReferenceType       => "W0490",
+            Code::W0491_DeprecatedUse            => "W0491",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
             Code::E0601_LocalNotDefinitelyAssigned => "E0601",
             Code::E0840_ConstEvalLimitExceeded   => "E0840",

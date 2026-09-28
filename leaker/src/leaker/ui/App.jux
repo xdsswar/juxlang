@@ -8,6 +8,8 @@ import rust.eframe.Id;
 import rust.eframe.RichText;
 import rust.eframe.Layout;
 import rust.eframe.Align;
+import rust.eframe.Stroke;
+import rust.eframe.egui.Frame;
 
 public class App {
     private Session session;
@@ -53,6 +55,7 @@ public class App {
         }
 
         Panel.left(new Id("nav"))
+            .frame(new Frame().fill(Palette.NAV_BG).inner_margin(12.0f))
             .resizable(true)
             .default_size(200.0f)
             .min_size(150.0f)
@@ -82,9 +85,14 @@ public class App {
     }
 
     private void showNav(Ui nav) {
+        // The dark side navigation's own look: light text, a blue selection.
+        nav.visuals_mut().override_text_color = Palette.NAV_TEXT;
+        nav.visuals_mut().widgets.hovered.weak_bg_fill = Palette.NAV_HOVER;
+        nav.visuals_mut().selection.bg_fill = Palette.ACCENT;
+        nav.visuals_mut().selection.stroke = new Stroke(1.0f, Palette.WHITE);
         nav.add_space(8.0f);
-        nav.label(new RichText("Leaker").size(22.0f).strong().color(Palette.ACCENT));
-        nav.label(new RichText("Invoicing, in Jux").size(12.0f).color(Palette.MUTED));
+        nav.label(new RichText("Leaker").size(22.0f).strong().color(Palette.WHITE));
+        nav.label(new RichText("Invoicing, in Jux").size(12.0f).color(Palette.NAV_TEXT));
         nav.add_space(20.0f);
         for (var s : Screen.values()) {
             var text = new RichText(s.title()).size(15.0f);
@@ -97,8 +105,8 @@ public class App {
             nav.add_space(4.0f);
         }
         nav.with_layout(Layout.bottom_up(Align.Min), (foot) -> {
-            foot.label(new RichText($"Outstanding ${session.store.outstanding()}").size(12.0f).color(Palette.MUTED));
-            foot.label(new RichText($"Today ${session.today}").size(12.0f).color(Palette.MUTED));
+            foot.label(new RichText($"Outstanding ${session.store.outstanding()}").size(12.0f).color(Palette.NAV_TEXT));
+            foot.label(new RichText($"Today ${session.today}").size(12.0f).color(Palette.NAV_TEXT));
         });
     }
 }

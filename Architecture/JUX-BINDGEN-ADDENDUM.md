@@ -415,6 +415,10 @@ A Rust trait bound `where T: Ord` maps to the Jux structural-constraint form (§
 
 ---
 
+### G.5.8. Deprecated Items
+
+A Rust item marked `#[deprecated]` (a function, a method, a constructor's `new`, a type) carries `@Deprecated(message = "...")` in its stub: the crate's note, else "deprecated since <version>", else no message. A call to anything marked `@Deprecated`, the program's own declarations included, is the warning `W0491` at the call, quoting the message (`` `Panel.show_inside` is deprecated: Renamed to `show` ``). The emitted crate allows rustc's `deprecated` lint, so the toolchain's copy of the warning never reaches the user, `--verbose` included (ERRATA E132).
+
 ## §G.6 — Rust Crate Bindings
 
 ### G.6.1. Source of Truth
@@ -462,7 +466,8 @@ A single crate's rustdoc JSON only fully defines its **own** (`crate_id == 0`) i
 A crate's public API is routinely made of other crates: `eframe` is `pub use egui;`, `egui` re-exports `emath::Rect` and `ecolor::Color32`, and a program that binds `rust.eframe` links `eframe` alone. The stub of a bound crate therefore describes its FAMILY:
 
 - **Members.** The crates it re-exports from, and then, for up to two rounds, the crates that define a type the stub mentions without declaring, as far as the host publishes them (reached through at most two module re-exports, or re-exported by name). A graphics backend's own dependencies stay out even when a signature deep inside mentions them.
-- **Shared names.** A name several members declare means the definition the family PUBLISHES under it (`egui` re-exports `emath::Rect`, so `accesskit::Rect` does not win), then the member closest to the host.
+- **Shared names.** A name several members declare means the definition the family PUBLISHES under it (`egui` re-exports `emath::Rect`, so `accesskit::Rect` does not win), then the member closest to the host. That one keeps the simple name in the host's package; the others keep theirs in a nested package (below). Every signature naming any of them writes its qualified name, so none can mean the wrong one: egui's `Panel::frame(Frame)` is `frame(rust.eframe.egui.Frame frame)` and eframe's `run_ui_native` closure takes `(Ui, rust.eframe.Frame)`. A type that lost its name and that the host publishes no path to has no Jux name, and a member mentioning it is left out.
+- **Nested packages.** Each module the host publishes a member's items under is a Jux package nested in the host's, named after the item's SHORTEST public path through the host: `eframe::egui::Frame` is `rust.eframe.egui.Frame`, `eframe::egui::memory::Areas` is `rust.eframe.egui.memory.Areas`. A type the host's package declares is an alias there (`public type Ui = rust.eframe.Ui;`), so `import rust.eframe.egui.*;` reaches all of egui; a type that lost a shared name is declared there. A nested package imports the host's package. Its stub is `.jux-stubs/rust/<host>/<nested package>.jux.d`, generated, loaded and kept with the host's stub (ERRATA E132).
 - **Paths.** Every `@rust` path is written through the host: `eframe::egui::Color32`.
 - **One Rust type, one Jux type.** A member the program also binds in its own right (`rust.egui` beside `rust.eframe`) is declared once, by the dependency whose family holding it is smallest, and every other stub declares its types as aliases of that declaration (`public type Ui = rust.egui.Ui;`). An `import` of such an alias is a `use` of the real path.
 
