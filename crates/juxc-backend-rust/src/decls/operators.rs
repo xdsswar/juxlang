@@ -363,9 +363,12 @@ impl RustEmitter {
             .line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
         self.w.indent_inc();
         self.w.emit_indent();
+        // A class lifted from an anonymous class prints as one, `Shape$anon@..`
+        // (ERRATA E1XX-GAP39c).
+        let shown = juxc_ast::anon_class_display(class_name);
         if wrapper {
             self.w.push_str("write!(f, \"");
-            self.w.push_str(class_name);
+            self.w.push_str(&shown);
             // Both handles expose the address of the shared cell; the atomic
             // one does it as an inherent method rather than `Rc`'s associated fn.
             if self.sync_classes.contains(class_name) {
@@ -380,7 +383,7 @@ impl RustEmitter {
             }
         } else {
             self.w.push_str("write!(f, \"");
-            self.w.push_str(class_name);
+            self.w.push_str(&shown);
             self.w.push_str("@{:p}\", self as *const Self)\n");
         }
         self.w.indent_dec();

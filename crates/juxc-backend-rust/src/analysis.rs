@@ -5136,6 +5136,15 @@ impl crate::RustEmitter {
         if r == k {
             return None;
         }
+        // A method parameter whose bound is lowered to `Into<C>` flowing into
+        // a slot typed by C (ERRATA E1XX-GAP39c).
+        if self
+            .into_params
+            .iter()
+            .any(|(p, b)| *p == r && b.name.segments.last().is_some_and(|s| s.text == k))
+        {
+            return Some(r);
+        }
         // An ancestor's body copied into a subclass that fixes both
         // parameters (`PetChain extends Chain<Pet, Cat>`): the checker held
         // `V extends K` where the body was written, and the conversion is
@@ -5627,6 +5636,18 @@ impl crate::RustEmitter {
                 }
             }
             IfaceCoercion::ParamInto { param } => {
+                // In a `__jux_via_` twin the parameter converts into the
+                // supertype's parameter, which is the slot's type there
+                // (ERRATA E1XX-GAP39c).
+                if let Some((_, k)) = self.into_via.iter().find(|(n, _)| *n == param).cloned() {
+                    self.w.push_str(&format!("crate::__jux_seen_as::<{k}, _>(std::convert::Into::<{k}>::into(("));
+                    self.emit_expr(expr);
+                    self.w.push_str(").clone()))");
+                    if nullable {
+                        self.w.push(')');
+                    }
+                    return;
+                }
                 // `R` into its bound `K`: the bound itself is written onto the
                 // declaration once its body is known to need it.
                 self.param_into_used.insert(param);
@@ -5671,7 +5692,7 @@ impl crate::RustEmitter {
     /// negligible. Instance-method receivers are intentionally not resolved here
     /// (nested-nullable generics through an inferred receiver are rarer still and
     /// add receiver-class resolution complexity — falls back to "no wrap").
-    fn callee_params_and_generics(
+    pub(crate) fn callee_params_and_generics(
         &self,
         callee: &juxc_ast::Expr,
     ) -> Option<(Vec<juxc_ast::TypeRef>, Vec<String>)> {

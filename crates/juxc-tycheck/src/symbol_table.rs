@@ -151,6 +151,9 @@ pub struct SymbolTable {
     /// types; the backend writes its `where` clauses from this table and the
     /// checker's `E0457` reads the same one.
     pub clone_needs: crate::clone_needs::CloneNeeds,
+    /// Every concrete instantiation of each generic class the program
+    /// builds (`crate::instantiations`, ERRATA E1XX-GAP39c).
+    pub instantiations: crate::instantiations::Closure,
 }
 
 /// Per-unit name-resolution context built once during
@@ -2253,7 +2256,8 @@ pub fn build_workspace(
     check_abstract_methods_implemented(&table, diagnostics);
     check_diamond_default_conflicts(&table, diagnostics);
     check_interface_on_exception_class(&table, diagnostics);
-    check_polymorphic_base_generic_methods(&table, diagnostics);
+    // E0438 is decided after the check, over the closed instantiations
+    // (`generic_dispatch::unclosable_diagnostics`, ERRATA E1XX-GAP39c).
     check_method_modifier_combinations(&table, diagnostics);
     check_constructor_overloads(&table, diagnostics);
     check_method_overloads(&table, diagnostics);
@@ -4723,57 +4727,6 @@ pub fn polymorphic_base_bare_names(table: &SymbolTable) -> std::collections::Has
         }
     }
     candidate.intersection(&extended).cloned().collect()
-}
-
-/// **E0438**: a method with type parameters of its own, reached through a
-/// supertype, dispatches over the concrete types that are that supertype
-/// (`crate::generic_dispatch`, ERRATA E136). A value of the supertype
-/// has to say which of them it is, arguments included, and a subtype with a
-/// type parameter the supertype does not fix (`class Weird<T, U> extends
-/// Tree<T>`) cannot: a `Tree<int>` that is a `Weird` does not say what `U`
-/// is. That, and only that, is refused, with the reason. The refusal this
-/// replaces covered every generic method on an extended class.
-fn check_polymorphic_base_generic_methods(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
-    let owners = crate::generic_dispatch::generic_virtual_owners(table);
-    let mut owner_keys: Vec<&String> = owners.keys().collect();
-    owner_keys.sort();
-    let mut reported: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for owner in owner_keys {
-        let method = &owners[owner][0];
-        for sub in crate::generic_dispatch::concrete_implementers(table, owner) {
-            if &sub == owner || reported.contains(&sub) {
-                continue;
-            }
-            let Some(param) = crate::generic_dispatch::unpinned_implementer_param(table, &sub, owner) else {
-                continue;
-            };
-            let span = table
-                .classes
-                .get(&sub)
-                .map(|c| c.span)
-                .or_else(|| table.records.get(&sub).map(|r| r.span))
-                .unwrap_or(Span::DUMMY);
-            let sub_bare = fqn_bare(&sub);
-            let owner_bare = fqn_bare(owner);
-            reported.insert(sub.clone());
-            diagnostics.push(
-                Diagnostic::error(
-                    code::Code::E0438_GenericVirtualMethod,
-                    format!(
-                        "`{sub_bare}` is a `{owner_bare}` with a type parameter `{param}` that `{owner_bare}` \
-                         does not fix, so a `{owner_bare}` value that is a `{sub_bare}` does not say what \
-                         `{param}` is -- and `{method}`, which has type parameters of its own, is called on \
-                         such a value by finding out which type it is",
-                    ),
-                )
-                .with_span(span)
-                .with_help(format!(
-                    "give `{sub_bare}` no type parameter beyond the ones its `{owner_bare}` supertype \
-                     fixes, or make `{method}` non-generic"
-                )),
-            );
-        }
-    }
 }
 
 /// Stage-1 interface dispatch (E0436): reject a class that **extends the

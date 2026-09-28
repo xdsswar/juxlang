@@ -48,7 +48,7 @@ pub fn apply_call_expansions(
     if plans.is_empty() {
         return;
     }
-    rewrite_units(units, &Rewrites { plans, components: &HashMap::new(), destructuring: false });
+    rewrite_units(units, &Rewrites { plans, components: &HashMap::new(), destructuring: false, anon: None });
 }
 
 /// Rename the positional component reads the parser writes for a record
@@ -58,7 +58,31 @@ pub fn apply_call_expansions(
 /// field identifier's span. The destructuring temporaries also lose their
 /// written type here (see the `Stmt::VarDecl` arm of the walker).
 pub fn apply_component_names(units: &mut [CompilationUnit], components: &HashMap<Span, String>) {
-    rewrite_units(units, &Rewrites { plans: &HashMap::new(), components, destructuring: true });
+    rewrite_units(units, &Rewrites { plans: &HashMap::new(), components, destructuring: true, anon: None });
+}
+
+/// What an anonymous class's `new` expression becomes when it is lifted
+/// (`crate::anon_lift`): the named class, its type arguments, and the
+/// captured locals passed after the written arguments.
+pub struct AnonSite {
+    pub class_name: juxc_ast::QualifiedName,
+    pub generic_args: Vec<juxc_ast::TypeRef>,
+    pub capture_args: Vec<Expr>,
+}
+
+/// Rewrite every `new T(..) { body }` whose span has a site in `sites` to
+/// construct the lifted class instead, and hand back each body, by span, for
+/// the lifted class to take (ERRATA E1XX-GAP39c).
+pub fn lift_anonymous_classes(
+    units: &mut [CompilationUnit],
+    sites: HashMap<Span, AnonSite>,
+) -> HashMap<Span, juxc_ast::AnonymousBody> {
+    let anon = std::cell::RefCell::new((sites, HashMap::new()));
+    rewrite_units(
+        units,
+        &Rewrites { plans: &HashMap::new(), components: &HashMap::new(), destructuring: false, anon: Some(&anon) },
+    );
+    anon.into_inner().1
 }
 
 /// What one walk over the AST applies: call-sugar plans keyed by call span,
@@ -68,6 +92,9 @@ pub(crate) struct Rewrites<'a> {
     components: &'a HashMap<Span, String>,
     /// Whether this walk also finishes record-destructuring temporaries.
     destructuring: bool,
+    /// Anonymous classes to lift, and the bodies taken from them.
+    #[allow(clippy::type_complexity)]
+    anon: Option<&'a std::cell::RefCell<(HashMap<Span, AnonSite>, HashMap<Span, juxc_ast::AnonymousBody>)>>,
 }
 
 fn rewrite_units(units: &mut [CompilationUnit], plans: &Rewrites<'_>) {
@@ -288,6 +315,23 @@ fn expand_expr(expr: &mut Expr, plans: &Rewrites<'_>) {
                 }
                 for b in &mut body.init_blocks {
                     expand_block(b, plans);
+                }
+            }
+            if let Some(anon) = plans.anon {
+                let site = anon.borrow_mut().0.remove(&n.span);
+                let body = if site.is_some() { n.anonymous_body.take() } else { None };
+                if let (Some(site), Some(body)) = (site, body) {
+                    anon.borrow_mut().1.insert(n.span, body);
+                    n.class_name = site.class_name;
+                    n.generic_args = site.generic_args;
+                    let written = n.args.len();
+                    for a in site.capture_args {
+                        n.args.push(a);
+                        n.arg_names.push(None);
+                    }
+                    if !n.eval_order.is_empty() {
+                        n.eval_order.extend(written..n.args.len());
+                    }
                 }
             }
         }

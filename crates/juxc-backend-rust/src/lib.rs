@@ -1349,6 +1349,16 @@ struct RustEmitter {
     /// `Into<K> + ` can be inserted there once the body shows it is needed.
     /// `None` outside such a list.
     pub(crate) param_into_marks: Option<Vec<(String, String, usize)>>,
+    /// The method type parameters of the method being emitted whose bound is
+    /// lowered to `Into<bound>` to match the supertype's trait, with that
+    /// bound (ERRATA E1XX-GAP39c, `decls::generic_dispatch`).
+    pub(crate) into_params: Vec<(String, juxc_ast::TypeRef)>,
+    /// Receivers of a member access typed by one of [`Self::into_params`],
+    /// by span: each is emitted converted to the bound it names.
+    pub(crate) into_receivers: std::collections::HashMap<juxc_source::Span, juxc_ast::TypeRef>,
+    /// In a `__jux_via_` twin: each `into` parameter's stand-in for the
+    /// supertype's parameter, through which it converts to its bound.
+    pub(crate) into_via: Vec<(String, String)>,
     /// Spans of local reads that are **not** that local's last read, for the
     /// function body currently being emitted (see [`crate::lastuse`]).
     ///
@@ -6882,6 +6892,9 @@ pub fn jux_enter_thread() {
             inherited_body_subst: None,
             param_into_used: std::collections::HashSet::new(),
             param_into_marks: None,
+            into_params: Vec::new(),
+            into_receivers: std::collections::HashMap::new(),
+            into_via: Vec::new(),
             non_final_uses: std::collections::HashSet::new(),
             level: lowering_level::ActiveLevel::from_thread(),
             fixed_array_dynamic_decls: std::collections::HashMap::new(),

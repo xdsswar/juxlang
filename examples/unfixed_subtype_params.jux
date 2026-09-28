@@ -1,0 +1,71 @@
+// A subtype with a type parameter its supertype does not fix
+// (`Weird<T, U> extends Tree<T>`), behind a `Tree<T>` value whose method has
+// type parameters of its own (ERRATA E1XX-GAP39c). The program is compiled
+// whole, so every `U` it builds a `Weird` with is known: written out, bound
+// by a generic function's call, or by a generic method of a generic class.
+// The call is dispatched to each of them.
+
+import rust.std.Vec;
+
+interface TreeVisitor<T, R> {
+    R leaf(T value);
+    R tagged(T value, String tag);
+}
+
+abstract class Tree<T> {
+    public abstract <R> R accept(TreeVisitor<T, R> v);
+}
+
+class Leaf<T> extends Tree<T> {
+    T value;
+    Leaf(T value) { this.value = value; }
+    public <R> R accept(TreeVisitor<T, R> v) { return v.leaf(value); }
+}
+
+class Weird<T, U> extends Tree<T> {
+    T value; U extra;
+    Weird(T value, U extra) { this.value = value; this.extra = extra; }
+    public <R> R accept(TreeVisitor<T, R> v) { return v.tagged(value, "" + extra); }
+}
+
+class Show<T> implements TreeVisitor<T, String> {
+    public String leaf(T value) { return "leaf " + value; }
+    public String tagged(T value, String tag) { return value + "#" + tag; }
+}
+
+class Count<T> implements TreeVisitor<T, int> {
+    public int leaf(T value) { return 1; }
+    public int tagged(T value, String tag) { return 1 + tag.length(); }
+}
+
+// `B` is known at each call of `wrap`.
+<A, B> Tree<A> wrap(A a, B b) { return new Weird<A, B>(a, b); }
+
+// `Vec<X>` is known at each `Maker<X>` the program builds.
+class Maker<X> {
+    X seed;
+    Maker(X seed) { this.seed = seed; }
+    <Y> Tree<Y> make(Y y) {
+        Vec<X> xs = new Vec<X>();
+        xs.push(seed);
+        return new Weird<Y, Vec<X>>(y, xs);
+    }
+}
+
+void main() {
+    Vec<Tree<int>> ts = new Vec<Tree<int>>();
+    ts.push(new Leaf<int>(1));
+    ts.push(new Weird<int, String>(2, "s"));
+    ts.push(new Weird<int, double>(3, 0.5));
+    ts.push(wrap(4, true));
+    ts.push(new Maker<String>("m").make(5));
+    ts.push(new Maker<int>(9).make(6));
+    int total = 0;
+    for (Tree<int> t : ts) {
+        print(t.accept(new Show<int>()));
+        total += t.accept(new Count<int>());
+    }
+    print(total);
+    Tree<String> w = wrap("x", 7);
+    print(w.accept(new Show<String>()));
+}

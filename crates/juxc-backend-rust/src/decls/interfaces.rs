@@ -579,6 +579,7 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();
+        self.emit_iface_from_impls(&interface.name.text, !interface.generic_params.is_empty());
         // **A handle to an interface behaves as the interface.** An
         // interface-typed value lowers to `Rc<dyn Iface>`, which Rust sees as a
         // smart pointer rather than an implementer — so a bound naming the
