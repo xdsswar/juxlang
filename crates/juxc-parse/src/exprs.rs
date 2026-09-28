@@ -1552,9 +1552,11 @@ impl<'a> Parser<'a> {
                 // `new T?[n]` allocates an array whose ELEMENTS may be
                 // missing, which is how one is built: every slot starts empty.
                 let elem_nullable = self.eat(&TokenKind::Question);
+                // The element keeps its type arguments: `new Vec<int>[n]` is an
+                // array of `Vec<int>`, not of a bare `Vec`.
                 let element_type = TypeRef {
                     name: element_name.clone(),
-                    generic_args: Vec::new(),
+                    generic_args: generic_args.iter().cloned().map(juxc_ast::GenericArg::Type).collect(),
                     nullable: elem_nullable,
                     array_shape: None,
                     fn_shape: None,

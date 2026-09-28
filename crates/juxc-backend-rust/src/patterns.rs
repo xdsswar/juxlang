@@ -432,8 +432,13 @@ impl RustEmitter {
                         self.w.push(')');
                     }
                     // A `String` read out of a place is copied, not moved out
-                    // of it, as a `? :` arm's is.
-                    if own_string_arms && widen.is_none() && self.value_place_needs_clone(e) {
+                    // of it, as a `? :` arm's is; so is a class or collection
+                    // handle, which the arm SHARES (§CR.4.1, §6.5.1): moving
+                    // it out left the source unusable after the switch.
+                    if widen.is_none()
+                        && arm_iface_target.is_none()
+                        && (self.wrapper_value_needs_clone(e) || self.value_place_needs_clone(e))
+                    {
                         self.w.push_str(".clone()");
                     }
                     self.emitting_format_arg = prev_format_arg;

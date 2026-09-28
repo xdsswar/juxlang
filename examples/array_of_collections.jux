@@ -1,0 +1,25 @@
+// An array of collections starts with one EMPTY collection per slot, each its
+// own (JUX-LANG-V1 §6.5.1, §6.5.2). A collection is a reference, so building
+// the slots by repeating one empty list would have made every slot the same
+// list: a push into the first would have shown up in all of them.
+//
+// Aliasing still works the ordinary way: storing one slot's list into another
+// makes both slots name it.
+//
+// Expected output: 1 0 0 / 2 2 / 1
+
+import rust.std.*;
+
+public void main() {
+    Vec<int>[] buckets = new Vec<int>[3];
+    buckets[0].push(7);
+    print(buckets[0].len() + " " + buckets[1].len() + " " + buckets[2].len());
+
+    buckets[2] = buckets[0];
+    buckets[2].push(8);
+    print(buckets[0].len() + " " + buckets[2].len());
+
+    var sets = new HashSet<String>[2];
+    sets[1].insert("x");
+    print(sets[0].len() + sets[1].len());
+}

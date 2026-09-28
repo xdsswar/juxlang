@@ -1,0 +1,13 @@
+nullable local: 1
+nullable parameter: 2
+nullable return: 3
+nullable field via method: 4
+nullable field: 5
+field: 6
+reassignment: 7
+nullable reassignment: 8
+switch arm: 9
+lambda result: 11
+map value: 12
+list element: 13
+sum: 91

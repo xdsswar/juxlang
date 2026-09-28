@@ -3423,9 +3423,11 @@ impl RustEmitter {
                 // `.clone()` from `emit_field`'s class-field auto-clone, so
                 // the shared helper covers only the bare-`Path` / `this` and
                 // index-read (`var r = xs[0]`) places the field path doesn't.
-                if !wrap_some
-                    && (self.wrapper_value_needs_clone(init) || self.value_place_needs_clone(init))
-                {
+                // The same holds under a nullable slot's `Some(…)`: `Node? n =
+                // a;` and `Vec<int>? nv = v;` name the object `a` / `v` name,
+                // and moving it into the `Option` left the source unusable
+                // (rustc E0382).
+                if self.wrapper_value_needs_clone(init) || self.value_place_needs_clone(init) {
                     self.w.push_str(".clone()");
                 }
                 // **Base-class upcast.** A subclass initializer in a
@@ -5167,7 +5169,10 @@ impl RustEmitter {
             // for compound forms (`x += y` has no wrapped-place meaning) and
             // when the value was lifted into `Some(...)` (a nullable field
             // never takes a bare wrapped place; the helper returns false too).
-            if !is_compound && !assign_nullable && self.wrapper_value_needs_clone(a_value) {
+            if !is_compound
+                && !assign_nullable
+                && (self.wrapper_value_needs_clone(a_value) || self.value_place_needs_clone(a_value))
+            {
                 self.w.push_str(".clone()");
             } else if !is_compound && !assign_nullable {
                 // Owned ctor param still read by a later statement —
