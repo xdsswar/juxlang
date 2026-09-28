@@ -323,6 +323,11 @@ private fun PsiBuilder.parsePostfix(): PsiBuilder.Marker? {
 
 private fun PsiBuilder.parsePrimary(): PsiBuilder.Marker? {
     val t = tokenType
+    // A keyword already taken as a binding's name (E0204) reads as that name.
+    if (atKeywordBindingUse()) {
+        remapCurrentToken(T.IDENTIFIER)
+        return single(E.REFERENCE_EXPRESSION)
+    }
     return when {
         T.LITERALS.contains(t) -> single(E.LITERAL_EXPRESSION)
         t === T.IDENTIFIER -> single(E.REFERENCE_EXPRESSION)

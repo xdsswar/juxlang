@@ -85,6 +85,19 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.8</h3>
+            <p>The editor catches up with the language changes of the latest compiler (aliases, crate families, library exceptions, the release-blocker sweep), and stops marking code that compiles.</p>
+            <ul>
+              <li><b>A type alias means its target everywhere.</b> With <b>type Sh = Shape;</b>, <b>class Square implements Sh</b> implements the interface, and <b>new Dict&lt;int&gt;()</b>, <b>Named.origin()</b>, <b>x =&gt; Round c</b> and <b>case P(var x, var y)</b> all read the type the alias stands for, parameters substituted. <b>import a.b.Circle as C;</b> does the same. An alias cycle (<b>E0498</b>) and the wrong number of type arguments (<b>E0443</b>) are reported.</li>
+              <li><b>A grouped import decides which type a name means</b>: <b>import orders.events.{Bus, Listener};</b> no longer picks up another file's <b>Listener</b>.</li>
+              <li><b>Task.yield()</b> is a call, not a generator's <b>yield</b>, and <b>rust.std.File.open(p)</b> no longer marks <b>rust</b> as unknown.</li>
+              <li><b>Crate families</b>: a nested package such as <b>rust.eframe.egui.Frame</b> is its own package beside <b>rust.eframe.Frame</b>, and its aliases of the host's types are the same types.</li>
+              <li><b>Deprecated crate members are struck through</b> with their message, as the compiler's <b>W0491</b> says it; your own <b>@Deprecated</b> declarations too.</li>
+              <li><b>Ambiguous imports (E0303)</b>: a name two wildcard imports bring for different types is an error where it is used, with a fix that imports the one you mean; two single-type imports of one name are too. Two spellings of one type are not.</li>
+              <li><b>A keyword cannot name a parameter or a local (E0204)</b>: <b>int f(int type)</b> is reported once, and later uses of the name no longer cascade into syntax errors.</li>
+              <li><b>@export(convention = ...)</b> other than <b>"C"</b> is reported (<b>E0527</b>).</li>
+              <li><b>NumberFormatException</b>, <b>LibraryException</b> and <b>EncodingException</b>, the classes a library's error now surfaces as, resolve and complete like every other exception.</li>
+            </ul>
             <h3>0.1.7</h3>
             <p>The editor follows the compiler again. 0.1.6 flagged code that compiles; this fixes the cause rather than the symptoms.</p>
             <ul>

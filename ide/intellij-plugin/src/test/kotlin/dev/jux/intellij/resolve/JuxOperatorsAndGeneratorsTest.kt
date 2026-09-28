@@ -169,6 +169,35 @@ class JuxOperatorsAndGeneratorsTest : BasePlatformTestCase() {
         assertEquals(emptyList<String>(), e)
     }
 
+    /**
+     * `Task.yield()` is the built-in that hands the loop back once (ERRATA
+     * E131): a member call named `yield`, not a generator's `yield`. The
+     * function calling it is no generator, so neither E0996 nor E0994 applies
+     * (`examples/release_blockers.jux`), and a `yield` statement beside it
+     * still is one.
+     */
+    fun testTaskYieldIsACallNotAGenerator() {
+        val e = errors(
+            """
+            async int yielding() {
+                await Task.yield();
+                return 7;
+            }
+            Iterator<int> gen() {
+                Task.yield();
+                yield 1;
+            }
+            void lambdas() {
+                var f = () -> { Task.yield(); };
+            }
+            """,
+        )
+        assertEquals(emptyList<String>(), e)
+        myFixture.enableInspections(dev.jux.intellij.inspections.JuxMissingReturnInspection())
+        val missing = myFixture.doHighlighting().mapNotNull { it.description }.filter { it.contains("Missing return") }
+        assertEquals(emptyList<String>(), missing)
+    }
+
     fun testYieldOutsideAGenerator() {
         val e = errors(
             """

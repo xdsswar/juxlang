@@ -806,6 +806,32 @@
         enabledByDefault="true"
         level="ERROR"
         implementationClass="dev.jux.intellij.inspections.JuxImplementsClauseInspection"/>
+    <!-- ERRATA E132/E133: an ambiguous wildcard import at a use, the rules of
+         a `type` alias, and a call to a `@Deprecated` declaration. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxAmbiguousImport"
+        displayName="Ambiguous or conflicting import (E0303)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxAmbiguousImportInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxTypeAlias"
+        displayName="Type alias cycle or wrong type-argument count (E0498, E0443)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxTypeAliasInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxDeprecatedUsage"
+        displayName="Use of a deprecated declaration (W0491)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="WARNING"
+        implementationClass="dev.jux.intellij.inspections.JuxDeprecatedUsageInspection"/>
     <localInspection
         language="Jux"
         shortName="JuxInheritedTypeParam"

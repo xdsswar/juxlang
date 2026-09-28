@@ -1,0 +1,18 @@
+<html>
+<body>
+Reports a simple type name that two wildcard imports bring in for different
+types, where it is used: in a type, a <code>new</code> or a static access
+(<b>E0303</b>). Nothing written says which one is meant, so the compiler does
+not pick one.
+<p>
+Importing both packages is fine as long as the name is not used. A
+declaration of the file, a type of its own package or a single-type import of
+the name settles it. The quick-fixes import the candidate you mean by name.
+</p>
+<p>
+Also reports two single-type imports that bind one simple name to different
+types. Two spellings of one type (a crate family's nested alias beside the
+host's type) are one import.
+</p>
+</body>
+</html>

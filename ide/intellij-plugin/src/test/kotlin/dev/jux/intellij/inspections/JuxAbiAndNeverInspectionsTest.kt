@@ -38,6 +38,29 @@ class JuxAbiAndNeverInspectionsTest : BasePlatformTestCase() {
         return myFixture.editor.document.text
     }
 
+    // ---- E0527 (ERRATA E131) ------------------------------------------------
+
+    fun testExportConventionOtherThanC() {
+        val d = descriptions(
+            """
+            @export(convention = "Stdcall")
+            public int add(int a, int b) { return a + b; }
+
+            @export(convention = "Bogus")
+            public int sub(int a, int b) { return a - b; }
+
+            @export(convention = "C")
+            public int mul(int a, int b) { return a * b; }
+
+            @export
+            public int div(int a, int b) { return a / b; }
+            """,
+        ).filter { it.contains("E0527") }
+        assertEquals(d.toString(), 2, d.size)
+        assertTrue(d.toString(), d.any { it.contains("Calling convention `Stdcall` is not supported") })
+        assertTrue(d.toString(), d.any { it.contains("`Bogus` is not a calling convention") })
+    }
+
     // ---- never ------------------------------------------------------------
 
     fun testNeverFunctionRules() {

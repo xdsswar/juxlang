@@ -621,7 +621,8 @@ class JuxParser : PsiParser {
         }
         b.parseType()
         if (b.at(T.ELLIPSIS)) b.advanceLexer() // `T... name` varargs
-        b.consumeDeclName("Parameter name expected")
+        // A keyword name (`int type`) is taken and reported as E0204.
+        b.consumeBindingName("Parameter name expected", declNameFallback = true)
         if (b.at(T.EQ)) { b.advanceLexer(); b.parseExpression() }
         p.done(E.PARAMETER)
     }

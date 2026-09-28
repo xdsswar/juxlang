@@ -32,6 +32,45 @@ class JuxUnresolvedReferenceInspectionTest : BasePlatformTestCase() {
         assertFalse("unexpected unresolved diagnostic in $d", d.any { it.startsWith("Cannot resolve symbol") })
     }
 
+    // ---- qualified names in expressions (gap 6, examples/qualified_static_calls)
+
+    fun testQualifiedLibraryStaticHeadIsAPackage() {
+        // `rust` heads a fully-qualified static call; it names a package, and
+        // the stub it names may not be generated on this machine.
+        assertAllResolved(
+            """
+            public void main() {
+                rust.std.File? f = rust.std.File.open("p");
+                String s = rust.std.String.from_utf8(null);
+                var t = jux.std.io.File.readText("p");
+            }
+            """.trimIndent(),
+        )
+    }
+
+    fun testQualifiedUserStaticHeadIsAPackage() {
+        myFixture.addFileToProject(
+            "app/model/Circle.jux",
+            "package app.model;\n\npublic class Circle { public static Circle unit() { return new Circle(); } }\n",
+        )
+        assertAllResolved(
+            """
+            public void main() {
+                var c = app.model.Circle.unit();
+            }
+            """.trimIndent(),
+        )
+        // A head that spells no package is still an unknown name.
+        assertUnresolved(
+            """
+            public void main() {
+                var c = nowhere.model.Circle.unit();
+            }
+            """.trimIndent(),
+            "nowhere",
+        )
+    }
+
     // ---- positive: genuinely unknown / orphaned-by-rename -------------------
 
     fun testOrphanedUsageFlagged() {
