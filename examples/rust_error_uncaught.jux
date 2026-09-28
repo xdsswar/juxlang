@@ -1,5 +1,6 @@
 // A Rust error nothing catches ends the program like an uncaught Jux
-// exception (Bindgen G.5.4): the report names the Rust error type.
+// exception (Bindgen G.5.4), under the Jux exception it surfaces as, never
+// the library's own type name (gap 38).
 void main() {
     print("before");
     double d = "x1".parse<double>();

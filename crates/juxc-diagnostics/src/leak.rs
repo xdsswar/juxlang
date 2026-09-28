@@ -234,6 +234,15 @@ fn scan(text: &str, user_wrote: Option<&dyn Fn(&str) -> bool>) -> Option<LeakHit
             return Some(hit(rule, &plain_text, i, phrase));
         }
     }
+    // A code block in Rust: its body is quoted, but its info string is not
+    // the program's.
+    for fence in ["```rust", "``` rust"] {
+        if let Some(i) = text.find(fence) {
+            if !user_wrote.is_some_and(|f| f(fence)) {
+                return Some(hit("a Rust code block", text, i, fence));
+            }
+        }
+    }
     for (start, end, kind) in segments(text) {
         let seg = &text[start..end];
         if kind == Kind::Quoted {
@@ -280,6 +289,7 @@ const PHRASES: &[(&str, &str)] = &[
     ("attempt to shift", "Rust's overflow panic"),
     ("attempt to calculate the remainder", "Rust's division panic"),
     ("no entry found for key", "Rust's map panic"),
+    ("# Safety", "a Rust doc section"),
     ("error: could not compile", "cargo's build report"),
     ("aborting due to", "rustc's summary line"),
 ];
@@ -416,9 +426,24 @@ fn structural_at(text: &str, at: usize, end: usize) -> Option<(usize, &'static s
     if rest.starts_with("&mut ") || rest.starts_with("&mut\n") {
         return Some((4, "a Rust mutable borrow"));
     }
+    // `&str` and `&self`: Jux has neither a borrow nor a string slice.
+    for (p, rule) in [("&str", "a Rust string slice"), ("&self", "a Rust receiver")] {
+        if rest.starts_with(p) && !rest[p.len()..].chars().next().is_some_and(is_ident) {
+            return Some((p.len(), rule));
+        }
+    }
+    // A rustdoc intra-doc link, ``[`Ui::add`]``: the `[` is plain text, the
+    // code after it a quoted span, so the whole line is looked at.
+    if text[at..].starts_with("[`") {
+        let line_end = text[at..].find('\n').map_or(text.len(), |i| at + i);
+        if text[at + 2..line_end].contains("`]") {
+            return Some((2, "a rustdoc link"));
+        }
+    }
     if word_start {
         for (p, rule) in [
             ("Rc<", "Rust's Rc"),
+            ("Option<", "Rust's Option"),
             ("Arc<", "Rust's Arc"),
             ("Box<dyn", "a Rust trait object"),
             ("RefCell", "Rust's RefCell"),
@@ -517,6 +542,20 @@ mod tests {
         assert!(leaks("a &'a str slice"));
         assert!(leaks("Ref<'_, T>"));
         assert!(leaks("the helper __jux_idiv failed"));
+        assert!(leaks("returns an Option<Rect>"));
+        assert!(leaks("takes a &str argument"));
+        assert!(leaks("borrows &self for the call"));
+    }
+
+    #[test]
+    fn rustdoc_text_is_found() {
+        assert!(leaks("Added to a [`Ui`] with [`Ui::add`]."));
+        assert!(leaks("Makes one.\n```rust\nlet x = 1;\n```"));
+        assert!(leaks("# Safety\nThe pointer must be valid."));
+        // Jux's own text with brackets and a `jux` block is not.
+        assert!(!leaks("the range [0, 1] and `x`"));
+        assert!(!leaks("```jux\nprint(x);\n```"));
+        assert!(!leaks("an &-separated list, a String, a strong ref"));
     }
 
     #[test]

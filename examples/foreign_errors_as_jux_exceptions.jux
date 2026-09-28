@@ -1,0 +1,80 @@
+// A Rust library's error surfaces as a Jux exception (Bindgen G.5.4, gap 38).
+//
+// A number that does not parse is a `NumberFormatException`, a missing file a
+// `FileNotFoundException` (an `IOException`), text that is not UTF-8 an
+// `EncodingException`, and an error with no standard Jux exception of its own
+// a `LibraryException` naming the library. Each is caught by its own class or
+// by any class above it; a clause naming the library's own error type still
+// receives the library's value.
+import rust.std.Duration;
+import rust.std.Error;
+import rust.std.read_to_string;
+
+double parse(String text) {
+    try {
+        return text.parse<double>();
+    } catch (NumberFormatException e) {
+        print($"not a number: ${text} (${e.getMessage()})");
+        return -1.0;
+    }
+}
+
+void main() {
+    print(parse("2.5"));
+    print(parse("abc"));
+
+    // A superclass catches it too: NumberFormatException is an
+    // IllegalArgumentException.
+    try {
+        int k = "".parse<int>();
+        print(k);
+    } catch (IllegalArgumentException e) {
+        print($"illegal argument: ${e.getMessage()}");
+    }
+
+    // A missing file.
+    try {
+        print(read_to_string("no/such/file.txt"));
+    } catch (FileNotFoundException e) {
+        print("file not found");
+    }
+    try {
+        print(read_to_string("no/such/file.txt"));
+    } catch (IOException e) {
+        print($"an IOException too, with a message: ${e.getMessage().length() > 0}");
+    }
+
+    // A clause that does not match leaves the error for the next one, which
+    // may name the library's own type and use its methods.
+    try {
+        print(read_to_string("no/such/file.txt"));
+    } catch (NumberFormatException e) {
+        print("never");
+    } catch (Error e) {
+        print($"the library's own value, kind ${e.kind()}");
+    }
+
+    // Bytes that are not UTF-8.
+    Vec<ubyte> bytes = new Vec<ubyte>();
+    bytes.push(255 as ubyte);
+    try {
+        print(String.from_utf8(bytes));
+    } catch (EncodingException e) {
+        print($"encoding: ${e.getMessage()}");
+    }
+
+    // An error with no standard Jux exception.
+    try {
+        print(Duration.try_from_secs_f64(-1.0));
+    } catch (LibraryException e) {
+        print($"library ${e.getLibrary()}: ${e.getMessage()}");
+    }
+
+    // Printed, an exception is its message.
+    try {
+        print("x1".parse<int>());
+    } catch (Exception e) {
+        print(e);
+    }
+    print("done");
+}

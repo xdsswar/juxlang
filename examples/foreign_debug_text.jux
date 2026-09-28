@@ -1,0 +1,58 @@
+// A value from a Rust library prints in Jux's form (gap 38).
+//
+// A type with a text form of its own prints that. One without prints its
+// structure the way a Jux record prints, `Name(field: value)`: a nullable
+// field's value is the value or `null`, a string is its text, a cell prints
+// what it holds, and a list keeps its brackets.
+import rust.std.Duration;
+import rust.std.FromUtf8Error;
+import rust.std.OnceLock;
+import rust.std.PathBuf;
+
+/** Inside a generic class the value's type is not known where it is printed. */
+class Shown<T> {
+    T value;
+
+    Shown(T value) {
+        this.value = value;
+    }
+
+    String text() {
+        return $"shown: ${value}";
+    }
+}
+
+void main() {
+    // An empty cell holds nothing; a filled one prints what it holds.
+    OnceLock<int> cell = new OnceLock<int>();
+    print(cell);
+    cell.set(5);
+    print(cell);
+
+    // A path prints its text, without quotes.
+    PathBuf path = new PathBuf();
+    path.push("data");
+    path.push("report.txt");
+    print(path.file_name());
+    print(path.extension());
+    PathBuf file = new PathBuf();
+    file.push("notes.txt");
+    print(file);
+
+    // A duration's own form.
+    print(Duration.from_millis(1500uL));
+
+    // An error's structure, reached where only its structure is known: a
+    // struct inside a struct, a nullable field, a list of numbers.
+    Vec<ubyte> bytes = new Vec<ubyte>();
+    bytes.push(104 as ubyte);
+    bytes.push(255 as ubyte);
+    try {
+        print(String.from_utf8(bytes));
+    } catch (FromUtf8Error e) {
+        print(e);
+        print(new Shown<FromUtf8Error>(e).text());
+    }
+    print(new Shown<Duration>(Duration.from_secs(2uL)).text());
+    print(new Shown<OnceLock<String>>(new OnceLock<String>()).text());
+}

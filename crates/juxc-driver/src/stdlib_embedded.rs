@@ -775,6 +775,60 @@ public class IllegalStateException extends RuntimeException {
     }
 }
 "###),
+    ("exceptions/NumberFormatException.jux", r###"/**
+ * jux.std.exceptions.NumberFormatException
+ *
+ * Text that does not spell a number of the type asked for:
+ * `"abc".parse<double>()`, `"".parse<int>()`, and a number parsed by a
+ * library (Bindgen G.5.4). Mirrors `java.lang.NumberFormatException`.
+ */
+package jux.std.exceptions;
+
+public class NumberFormatException extends IllegalArgumentException {
+    /**
+     * Construct a NumberFormatException describing why the text is
+     * not a number.
+     */
+    public NumberFormatException(String message) {
+        super(message);
+    }
+}
+"###),
+    ("exceptions/LibraryException.jux", r###"/**
+ * jux.std.exceptions.LibraryException
+ *
+ * An error a `rust.<crate>` library reported that has no standard Jux
+ * exception of its own (Bindgen G.5.4). The message is the library's own
+ * description of the error, and `getLibrary()` names the library. A
+ * `catch` clause naming the library's error type still receives the
+ * library's own value, with its methods.
+ */
+package jux.std.exceptions;
+
+public class LibraryException extends RuntimeException {
+    /**
+     * The library that reported the error, as its `rust.` package names it
+     * (`printpdf` for `rust.printpdf`).
+     */
+    public String library;
+
+    /**
+     * Construct a LibraryException with the library's description of the
+     * error and the library's name.
+     */
+    public LibraryException(String message, String library) {
+        super(message);
+        this.library = library;
+    }
+
+    /**
+     * The library that reported the error.
+     */
+    public String getLibrary() {
+        return this.library;
+    }
+}
+"###),
     ("exceptions/ExceptionInInitializerError.jux", r###"/**
  * jux.std.exceptions.ExceptionInInitializerError
  *

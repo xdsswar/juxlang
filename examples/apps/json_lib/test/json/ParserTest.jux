@@ -44,3 +44,12 @@ void badInputThrows() {
     assertThrows<ParseError>(() -> new Parser("[1,]").parse());
     assertThrows<ParseError>(() -> new Parser("tru").parse());
 }
+
+// A number the standard library cannot read is the Jux exception for it,
+// not the library's own error type (Bindgen G.5.4, gap 38).
+@Test
+void aNumberThatDoesNotParseIsANumberFormatException() {
+    final NumberFormatException e = assertThrows<NumberFormatException>(() -> "1.2.3".parse<double>());
+    assertEqual("invalid float literal", e.getMessage());
+    assertThrows<IllegalArgumentException>(() -> "x".parse<int>());
+}

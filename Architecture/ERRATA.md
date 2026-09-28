@@ -4320,13 +4320,14 @@ everything pinned.
   word for word by the corpus) and `runtime_stack_overflow` and holds their
   output to the detector with nothing excused.
 
-**Not guarded.** A stack overflow off Windows still prints the runtime's
-report: it never reaches a panic hook, and the signal handler that would see
-it needs per-platform `sigaction` layouts the prelude does not carry. A
-foreign type's `Display`, and `Debug` text other than cells and nullables
-(`OnceLock(<uninit>)`), is the crate author's. A foreign `Err` is reported
-under its Rust type name (`ParseFloatError`, Bindgen G.5.4). A crate's doc
-comments shown on hover are the stub's own text. `juxc explain` prints the
+**Not guarded.** Resolved by gap 38 (E1XX-GAP38): ~~a stack overflow off
+Windows still prints the runtime's report~~ (Linux and macOS now report it in
+Jux terms); ~~a foreign type's `Debug` text other than cells and nullables
+(`OnceLock(<uninit>)`) is the crate author's~~ (laid out in Jux's form; a
+type's own `Display` is still its author's text, by design); ~~a foreign `Err`
+is reported under its Rust type name (`ParseFloatError`, Bindgen G.5.4)~~ (it
+is a Jux exception); ~~a crate's doc comments shown on hover are the stub's own
+text~~ (rewritten in Jux terms and held to the detector). `juxc explain` prints the
 specification's prose, which discusses the Rust lowering. Informational lines
 the `jux` tool prints itself (`jux: ...`) do not pass the detector; the
 corpus sweep covers the ones that are pinned. `--verbose` output is the
@@ -4458,8 +4459,8 @@ an invalid one must be told why in Jux terms, and an internal compiler error
 **Not changed.** `Result.unwrap()` on an `Err` still throws
 `IllegalStateException` (E56's decision). `Result.from(() -> ...)` (§X.5.4) is
 still not provided; it is a clean `E0413` with help naming the variants. A
-stack overflow off Windows and a foreign type's own `Display` text stay as E129
-left them.
+stack overflow off Windows and a foreign type's own `Display` text stayed as
+E129 left them (the first, and foreign `Debug` text, are closed by gap 38).
 
 **Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 gains `E0204`, `E0327`,
 `E0527` and `E0708`, and the `E0434` row names interfaces.
@@ -4750,6 +4751,162 @@ on both spellings.
 
 **Spec status:** `JUX-BUILD-SYSTEM-ADDENDUM.md` §B.4.1 (what an alias binds),
 `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 (`E0443` covers an alias, new `E0498`).
+
+---
+
+## E1XX-GAP38. The four leaks E129 left: a stack overflow off Windows, a foreign value's text, a library's error, a crate's docs
+
+**Conflict.** E129 made Rust impossible to ship through every exit it could
+guard, and listed what it could not. Four of those still reached a Jux
+programmer, each as Rust:
+
+- **A stack overflow on Linux and macOS** printed the runtime's `thread 'main'
+  has overflowed its stack` and `fatal runtime error: stack overflow`, and
+  aborted, where Windows printed Jux's report and exited 101.
+- **A foreign value with no `Display`** printed its Rust `Debug` text beyond
+  the cells and nullables E129 rewrote: `OnceLock(<uninit>)`, `"report.txt"`
+  (a `PathBuf`, quoted), and struct syntax, `FromUtf8Error { bytes: [104,
+  255], error: Utf8Error { valid_up_to: 1, error_len: Some(1) } }`.
+- **A library's error kept its Rust type name** (Bindgen §G.5.4): an uncaught
+  failed parse ended the program with `Exception in thread "main"
+  ParseFloatError: invalid float literal`, and no Jux exception class caught
+  it but `Exception` and `Throwable`, so `catch (NumberFormatException e)` did
+  not exist to write.
+- **A crate's doc comment on hover** was the crate's rustdoc text: intra-doc
+  links (``[`Ui::add`]``, ``[`Area`](crate::containers::area::Area)``),
+  `Option<T>`, `&str`, `&mut self`, lifetimes, `rust` code blocks and `#
+  Safety` sections. The language server's guard excused it as "the declaring
+  file's own text"; in practice no stub doc was shown at all, because the
+  stub's `@rust("...")` line between the comment and the declaration ended
+  the search for it.
+
+**Resolution.** Each is prevented where the text is made.
+
+- **Stack overflow, Linux and macOS (x86_64, aarch64).** At startup the
+  prelude's `jux_stack_overflow::install` gives the main thread an alternate
+  signal stack (unless it has one; the runtime makes one for each thread it
+  starts) and installs a `SIGSEGV`/`SIGBUS` handler with `SA_ONSTACK |
+  SA_SIGINFO`, through `extern "C"` declarations of `sigaction`,
+  `sigaltstack`, `write`, `_exit`, `getrlimit` and the `pthread` stack
+  queries, with `struct sigaction`, `stack_t` and `si_addr`'s offset spelled
+  out per target (Linux: glibc and musl agree; macOS). Each thread that runs
+  Jux code records where its stack lies: the main thread from its current top
+  down to `RLIMIT_STACK` on Linux (the stack grows on demand, and musl's
+  `pthread_getattr_np` reports only what is mapped so far) and from
+  `pthread_get_stackaddr_np`/`pthread_get_stacksize_np` on macOS; a `Worker`
+  thread (`jux_enter_thread`, the first thing its closure runs) from
+  `pthread_getattr_np` or the macOS pair. Memory inside a stack never faults,
+  so a fault address from 1 MiB below the stack's lowest address (the gap the
+  kernel keeps below it) up to its top is the stack running out: the handler
+  writes `panic: stack overflow: a method called itself too many times without
+  finishing` with `write(2)` (async-signal-safe) and `_exit(101)`, exactly
+  the Windows report and status. Any other fault goes to the handler that was
+  installed before it (the runtime's), or, when that was the default, restores
+  the default so the fault ends the process as it would have. No `.jux` line
+  is given, on any platform: the faulting frame is not one a signal handler
+  can map to source without unwinding, which is not async-signal-safe. Other
+  Unix targets keep the runtime's report.
+- **A foreign value's text** (`jux_debug_foreign`, reached for a value whose
+  type is from outside the program and has no `Display`; a type with a
+  `Display` is printed through it, as before). The `Debug` text is read token
+  by token, never inside quotes, and laid out again:
+
+  | `Debug` writes | Jux prints | why |
+  |---|---|---|
+  | `Foo { a: 1, b: "x" }`, a variant `Circle { r: 1.0 }` | `Foo(a: 1, b: x)`, `Circle(r: 1.0)` | a record's form (`Point(x: 1, y: 2)`) |
+  | a trailing `..`; a field holding `PhantomData<T>`; `Foo { .. }` | dropped; dropped; `Foo` | no value to show |
+  | `RefCell { value: v }`, `Cell`, `Mutex { data: v, .. }`, `RwLock`, `ManuallyDrop` | `v` | a cell prints what it holds (E129) |
+  | `OnceLock(v)`, `OnceCell`, `LazyLock`, `LazyCell`, `Wrapping`, `Saturating`, `Reverse` | `v` | wrappers Jux does not have |
+  | `Some(v)` | `v` | a nullable (E107, E112) |
+  | `None` in a field, argument or element; `<uninit>` | `null` | a nullable with nothing in it |
+  | `None` as the whole value of a type that is not an `Option` | `None` | that is an enum's variant of the name |
+  | `"text"` / `'c'` as the whole value, a field or an argument | `text` / `c` | a record's `String` component prints its text |
+  | `"text"` in a list, map, set or tuple | `"text"` | a Jux collection quotes its strings (`["a", "b"]`) |
+  | `std::path::PathBuf`, `PhantomData<i64>` | `PathBuf`, `PhantomData` | a path's module part and a type's arguments are not values |
+  | `[1, 2]`, `{"k": 1}`, `(1, 2)`, `1.5s`, `1..5` | unchanged | already Jux's form |
+
+  Text the reader cannot follow is copied as it stands.
+- **A library's error is a Jux exception** (§G.5.4 as amended). The `Err` a
+  foreign call returns is thrown as a `JuxForeignError` carrying the Jux
+  exception it surfaces as, that class's ancestors, and the Rust value:
+
+  | Rust error | Jux exception |
+  |---|---|
+  | `ParseIntError`, `ParseFloatError` | `NumberFormatException` (new; extends `IllegalArgumentException`) |
+  | `io::Error` of kind `NotFound` / any other | `FileNotFoundException` / `IOException`, without ` (os error N)` |
+  | `Utf8Error`, `FromUtf8Error`, `FromUtf16Error` | `EncodingException` |
+  | `TryFromIntError` | `ArithmeticException` |
+  | `ParseBoolError`, `ParseCharError`, `AddrParseError` | `IllegalArgumentException` |
+  | anything else, from any crate | `LibraryException` (new; extends `RuntimeException`), `getMessage()` the error's text, `getLibrary()` the crate (`std` for Rust's own) |
+
+  A `catch` of a Jux exception class takes the error when its Jux exception
+  is that class or a subclass (`catch (NumberFormatException e)`, `catch
+  (IllegalArgumentException e)`, `catch (Exception e)`), and leaves it whole
+  otherwise, so a later clause still sees it. A clause naming the library's
+  own error type (`catch (Error e)` for `io::Error`) still receives the Rust
+  value with its methods: that is how the original stays reachable, and no
+  `cause()` is added. `assertThrows<E>` and an awaited task's failure follow
+  the same rule. Uncaught, the program ends with `Exception in thread "main"
+  jux.std.exceptions.NumberFormatException: invalid float literal`, the
+  `.jux` line, status 101; a spawned task's unhandled failure, a test's
+  report and the C-boundary barrier name the Jux class the same way.
+  Propagation is an exception's: a foreign call is never a `Result` in Jux,
+  so `?` does not apply to it, and a Jux `Result` holding a caught exception
+  prints `Err(<message>)` as before. A foreign error is unchecked, as before:
+  the stub's `throws` clause does not require a `catch`.
+- **A crate's doc on hover and in completion** (`juxc-lsp/src/crate_doc.rs`).
+  A doc comment from a `.jux.d` stub is rewritten when it is shown (one line
+  in practice, so nothing is cached): an intra-doc link is its target's Jux
+  name in code (``[`crate::Slider`]`` is `` `Slider` ``, ``[`Ui::add`]`` is
+  `` `Ui.add` ``), a link whose text is prose is that text, a web link stays;
+  `Option<T>` is `T?`, `&T`/`&mut T` and lifetimes go, `&str`/`str` is
+  `String`, `&self` is `this`, `Box`/`Rc`/`Arc`/`RefCell`/`dyn`/`impl` are
+  their inner type, a module path is the name it ends in (`Type.member` for a
+  member), and inside code a Rust number type is its Jux name (`u8` is
+  `ubyte`); code blocks not marked `jux` or `text` and `# Safety` sections are
+  dropped, and a heading left empty goes too. The result is held to the leak
+  detector on its own, with only the open buffer as the program's text; a doc
+  that still shows Rust is withheld (and fails a test). The doc search skips
+  annotation lines between a doc comment and its declaration, so a stub's
+  docs are shown at all. The rewrite runs at display time, so stubs generated
+  before it, and hand-written ones, read the same.
+- **The detector knows rustdoc.** `find_rust_leak` also finds `Option<`,
+  `&str`, `&self`, an intra-doc link ``[`...`]``, a code block marked `rust`
+  and a `# Safety` heading. No pinned output contains any of them.
+
+**Tests.** `bin/jux/tests/runtime_failures.rs`: the stack-overflow example
+must report in Jux terms with status 101 on Windows, Linux and macOS
+(x86_64/aarch64); the emitted crate must type-check for
+`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+`x86_64-apple-darwin` and `aarch64-apple-darwin` where those targets are
+installed; an uncaught library error is `NumberFormatException` with its line.
+`crates/juxc-backend-rust/src/tests.rs`
+(`foreign_debug_text_is_laid_out_the_jux_way`) compiles the prelude's
+renderer on its own and holds twenty hand-written cases.
+`examples/foreign_debug_text.jux`, `examples/foreign_errors_as_jux_exceptions.jux`
+and `examples/rust_error_uncaught.jux` are pinned by the corpus;
+`examples/apps/json_lib` tests `assertThrows<NumberFormatException>`.
+`crates/juxc-lsp/src/crate_doc.rs` holds the doc rewrite to hand-written
+results and runs every doc of the `rust.std` stub (and of any directory in
+`JUX_TEST_CRATE_STUBS`, which is how egui's, eframe's, epaint's, emath's and
+ecolor's were checked) through it and the detector;
+`crates/juxc-lsp/src/tests.rs` (`hover_shows_a_crate_doc_in_jux_terms`) hovers
+a fixture stub's type end to end. `crates/juxc-diagnostics/src/leak.rs` pins
+the new detector rules.
+
+**Known boundary.** The Unix handler covers the main thread and `Worker`
+threads; a crate's own thread that overflows its stack while running a Jux
+callback reaches the runtime's handler as before. A foreign error whose Jux
+exception is not listed above is a `LibraryException` even when a closer Jux
+class exists; the table grows by adding a row. A foreign value inside a Jux
+`Result`, printed through `Debug`, shows its structure in the record form
+under its own type name (`ParseIntError(kind: InvalidDigit)`).
+
+**Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.5.4's "Catching a Rust error"
+is replaced by the rule above; `JUX-EXCEPTIONS-ADDENDUM.md` §X.1.2 lists
+`NumberFormatException` and `LibraryException`. No diagnostic code is added,
+so `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 is unchanged. E129's "Not guarded" list
+loses these four items. GAPS.md gap 38 is closed.
 
 ---
 When you edit any addendum that touches one of the items above,

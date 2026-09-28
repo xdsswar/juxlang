@@ -115,6 +115,49 @@ fn hover_doc_comes_from_declaring_file() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A crate's doc comment on hover is in Jux terms (gap 38): a stub's rustdoc
+/// summary, intra-doc links and Rust types included, is rewritten, passes the
+/// leak detector with only the open buffer as the program's text, and is
+/// shown rather than withheld.
+#[test]
+fn hover_shows_a_crate_doc_in_jux_terms() {
+    let root = temp_root("hover_crate_doc");
+    let stub_dir = root.join(".jux-stubs").join("rust");
+    std::fs::create_dir_all(&stub_dir).unwrap();
+    std::fs::write(
+        stub_dir.join("demo.jux.d"),
+        "package rust.demo;\n\
+         /** A widget you add to a [`crate::Ui`] with [`Ui::add`], labelled by an `Option<&'a str>`. */\n\
+         @rust(\"demo::Widget\")\n\
+         public class Widget {\n\
+             public Widget(int w, int h);\n\
+             public int area();\n\
+         }\n",
+    )
+    .unwrap();
+    let main = root.join("main.jux");
+    let main_src = "import rust.demo.Widget;\npublic void main() {\n    var w = new Widget(2, 3);\n    print(w.area());\n}\n";
+    std::fs::write(&main, main_src).unwrap();
+
+    let uri = Url::from_file_path(&main).unwrap();
+    let rope = Rope::from_str(main_src);
+    let analysis = analyze_workspace(&root, &uri, &rope);
+    let doc = Document::analysed(rope, 1, U16, analysis);
+    let at = main_src.find("Widget(2").unwrap() + 1;
+    let hover = crate::hover::hover(&doc, &uri, doc.position_at(at)).expect("a hover over the crate type");
+    let HoverContents::Markup(m) = hover.contents else { panic!("markdown hover") };
+    assert!(
+        m.value.ends_with("\n\nA widget you add to a `Ui` with `Ui.add`, labelled by an `String?`."),
+        "{}",
+        m.value
+    );
+    let wrote = |s: &str| main_src.contains(s);
+    assert!(juxc_diagnostics::leak::find_rust_leak_quoting(&m.value, &wrote).is_none(), "{}", m.value);
+    assert!(juxc_diagnostics::leak::find_rust_leak(&m.value).is_none(), "{}", m.value);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A wrong-arity call (here a constructor missing its required argument)
 /// is type-checked by the workspace pass, tagged with the open file's index,
 /// and therefore PUBLISHED to that file's URI — i.e. it shows as a red

@@ -1493,31 +1493,31 @@ impl RustEmitter {
     /// the caller writes the type and the rest.
     ///
     /// A Rust `Err` thrown by a foreign call travels as a `JuxForeignError`
-    /// (Bindgen G.5.4), so the payload goes through an adapter first:
-    /// `catch (Exception e)` / `catch (Throwable e)` turn it into that class
-    /// with the error's text, and a clause naming the foreign type itself
-    /// unwraps the Rust value when it is one. Every other clause type, the
-    /// Jux exception classes, sees the payload as it is.
+    /// (Bindgen G.5.4), so the payload goes through an adapter first. It
+    /// carries the Jux exception the error surfaces as (gap 38): a clause for
+    /// a Jux exception class takes that exception out when it is one of the
+    /// class's (`catch (NumberFormatException e)` on a failed parse,
+    /// `catch (Exception e)` on any foreign error), and leaves the payload
+    /// whole otherwise, so a later clause can still take it. A clause naming
+    /// the foreign type itself unwraps the Rust value when it is one.
     fn emit_catch_downcast_head(&mut self, ty: &juxc_ast::TypeRef) {
         let fqn = self.resolve_catch_ty_fqn(ty);
         let foreign = fqn
             .as_deref()
             .and_then(|f| self.symbols.classes.get(f))
             .is_some_and(|c| c.is_external);
+        let jux_class = fqn.as_deref().is_some_and(|f| self.symbols.classes.contains_key(f));
         self.w.push_str("match ");
-        match fqn.as_deref() {
-            Some("jux.std.exceptions.Exception") => {
-                self.w.push_str("crate::__jux_foreign_as_exception(__jux_p)");
-            }
-            Some("jux.std.exceptions.Throwable") => {
-                self.w.push_str("crate::__jux_foreign_as_throwable(__jux_p)");
-            }
-            _ if foreign => {
-                self.w.push_str("crate::__jux_foreign_error_of::<");
-                self.emit_type_as_rust(ty);
-                self.w.push_str(">(__jux_p)");
-            }
-            _ => self.w.push_str("__jux_p"),
+        if foreign {
+            self.w.push_str("crate::__jux_foreign_error_of::<");
+            self.emit_type_as_rust(ty);
+            self.w.push_str(">(__jux_p)");
+        } else if jux_class {
+            self.w.push_str("crate::__jux_foreign_as::<");
+            self.emit_type_as_rust(ty);
+            self.w.push_str(">(__jux_p)");
+        } else {
+            self.w.push_str("__jux_p");
         }
         self.w.push_str(".downcast::<");
     }

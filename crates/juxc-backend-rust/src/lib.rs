@@ -4211,67 +4211,268 @@ fn jux_debug_is_foreign(name: &str) -> bool {
     let own = module_path!().split("::").next().unwrap_or("");
     name.contains("::") && !name.contains(&format!("{own}::"))
 }
-/// A foreign value's `Debug` text in Jux's terms (gap 33): the cells a
-/// value sits in print the value (`RefCell { value: 3 }` is `3`), `Some(x)`
-/// is `x`, and a `None` in a field (`hover: None`), or anywhere when the
-/// type itself is a nullable, is `null`. Quoted text is left alone.
+/// A foreign value's `Debug` text in Jux's form (gaps 33 and 38). The text is
+/// read as `Debug` writes it, token by token, and laid out again:
+///
+///   - a struct, `Foo { a: 1, b: "x" }`, is `Foo(a: 1, b: x)`, the form a Jux
+///     record prints in, with a trailing `..` dropped and a `PhantomData`
+///     field left out; a variant with fields reads the same;
+///   - a cell or lock prints its value: `RefCell { value: 3 }`, `Cell`,
+///     `Mutex { data: 3, .. }`, `RwLock`, `ManuallyDrop`, and the one-value
+///     wrappers `OnceLock(3)`, `OnceCell`, `LazyLock`, `LazyCell`,
+///     `Wrapping`, `Saturating`, `Reverse`;
+///   - `Some(x)` is `x`, and `None` (and a cell with nothing in it,
+///     `<uninit>`) is `null`, except that the whole value `None` of a type that
+///     is not a nullable is left alone: that is an enum's variant of the name;
+///   - a string or char in a field, or as the whole value, is its text, as a
+///     record's `String` component prints; inside a list, map, set or tuple it
+///     keeps its quotes, as a Jux collection prints its elements;
+///   - a type's generic arguments (`PhantomData<i64>`) and a path's module
+///     part are left out;
+///   - lists `[1, 2]`, maps `{"k": 1}`, sets, tuples and anything else
+///     (`1.5s`, `1..5`) stay as they are.
+///
+/// Quoted text is never rewritten. What cannot be read this way is copied
+/// as it stands.
 fn jux_debug_foreign(name: &str, text: &str) -> String {
-    let unwrapped = jux_debug_unwrap_cells(text);
-    jux_debug_strip_options_in(&unwrapped, name.contains("::option::Option<"))
-}
-/// `RefCell { value: X }`, `Cell { value: X }`, `Mutex { data: X, .. }` and
-/// `RwLock { data: X, .. }` as `X`, at any depth.
-fn jux_debug_unwrap_cells(text: &str) -> String {
-    let mut out = String::from(text);
-    for open in ["RefCell { value: ", "Cell { value: ", "Mutex { data: ", "RwLock { data: "] {
-        let mut from = 0;
-        while let Some(found) = out[from..].find(open) {
-            let at = from + found;
-            let own_word = !out[..at].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_');
-            let start = at + open.len();
-            match jux_debug_value_end(&out, start).filter(|_| own_word) {
-                Some((value_end, close)) => {
-                    let value = String::from(out[start..value_end].trim_end());
-                    out.replace_range(at..close + 1, &value);
-                    from = at;
-                }
-                _ => from = start,
-            }
-        }
+    let chars: Vec<char> = text.chars().collect();
+    let mut at = 0usize;
+    let slot = if name.contains("::option::Option<") { JUX_DBG_FIELD } else { JUX_DBG_TOP };
+    let mut out = jux_dbg_value(&chars, &mut at, slot);
+    while at < chars.len() {
+        out.push(chars[at]);
+        at = at + 1;
     }
     out
 }
-/// From `start`, the end of the value there (the first `,` outside brackets
-/// and quotes, else the closing brace) and the `}` that closes the struct.
-fn jux_debug_value_end(text: &str, start: usize) -> Option<(usize, usize)> {
-    let bytes = text.as_bytes();
-    let mut depth: i32 = 0;
-    let mut value_end: Option<usize> = Option::None;
-    let mut close: Option<usize> = Option::None;
-    let mut quote: Option<u8> = Option::None;
-    let mut i = start;
-    while i < bytes.len() && close == Option::None {
-        let b = bytes[i];
-        if let Some(q) = quote {
-            if b == b'\\' {
-                i = i + 1;
-            } else if b == q {
-                quote = Option::None;
-            }
-        } else if b == b'"' || b == b'\'' {
-            quote = Some(b);
-        } else if b == b'(' || b == b'[' || b == b'{' {
-            depth = depth + 1;
-        } else if (b == b')' || b == b']' || b == b'}') && depth > 0 {
-            depth = depth - 1;
-        } else if b == b'}' {
-            close = Some(i);
-        } else if b == b',' && depth == 0 && value_end == Option::None {
-            value_end = Some(i);
-        }
-        i = i + 1;
+/// Where a value sits in a `Debug` text: the whole value, a field or
+/// argument, or an element of a collection.
+const JUX_DBG_TOP: u8 = 0;
+const JUX_DBG_FIELD: u8 = 1;
+const JUX_DBG_ELEMENT: u8 = 2;
+fn jux_dbg_skip_space(c: &[char], at: &mut usize) {
+    while *at < c.len() && c[*at] == ' ' {
+        *at = *at + 1;
     }
-    close.map(|c| (value_end.unwrap_or(c), c))
+}
+fn jux_dbg_value(c: &[char], at: &mut usize, slot: u8) -> String {
+    jux_dbg_skip_space(c, at);
+    if *at >= c.len() {
+        String::new()
+    } else if c[*at] == '"' || c[*at] == '\'' {
+        let (raw, closed) = jux_dbg_quoted(c, at);
+        if slot == JUX_DBG_ELEMENT || !closed {
+            raw
+        } else {
+            jux_unescape_debug(&raw[1..raw.len() - 1])
+        }
+    } else if c[*at] == '[' {
+        *at = *at + 1;
+        format!("[{}]", jux_dbg_list(c, at, ']', JUX_DBG_ELEMENT).join(", "))
+    } else if c[*at] == '(' {
+        *at = *at + 1;
+        format!("({})", jux_dbg_list(c, at, ')', JUX_DBG_ELEMENT).join(", "))
+    } else if c[*at] == '{' {
+        *at = *at + 1;
+        jux_dbg_map(c, at)
+    } else if c[*at].is_alphabetic() || c[*at] == '_' {
+        jux_dbg_named(c, at, slot)
+    } else {
+        jux_dbg_atom(c, at)
+    }
+}
+/// A quoted string or char, quotes and escapes as written; and whether it
+/// was closed.
+fn jux_dbg_quoted(c: &[char], at: &mut usize) -> (String, bool) {
+    let quote = c[*at];
+    let mut raw = String::from(quote);
+    let mut closed = false;
+    *at = *at + 1;
+    while *at < c.len() && !closed {
+        let ch = c[*at];
+        raw.push(ch);
+        *at = *at + 1;
+        if ch == '\\' && *at < c.len() {
+            raw.push(c[*at]);
+            *at = *at + 1;
+        } else if ch == quote {
+            closed = true;
+        }
+    }
+    (raw, closed)
+}
+/// Values separated by commas up to `close`, which is consumed.
+fn jux_dbg_list(c: &[char], at: &mut usize, close: char, slot: u8) -> Vec<String> {
+    let mut items: Vec<String> = Vec::new();
+    let mut open = true;
+    while open {
+        jux_dbg_skip_space(c, at);
+        if *at >= c.len() {
+            open = false;
+        } else if c[*at] == close {
+            *at = *at + 1;
+            open = false;
+        } else if c[*at] == ',' {
+            *at = *at + 1;
+        } else {
+            let before = *at;
+            items.push(jux_dbg_value(c, at, slot));
+            open = *at > before;
+        }
+    }
+    items
+}
+/// A map or set after its `{`: `{"k": 1}`, `{1, 2}`.
+fn jux_dbg_map(c: &[char], at: &mut usize) -> String {
+    let mut entries: Vec<String> = Vec::new();
+    let mut open = true;
+    while open {
+        jux_dbg_skip_space(c, at);
+        if *at >= c.len() {
+            open = false;
+        } else if c[*at] == '}' {
+            *at = *at + 1;
+            open = false;
+        } else if c[*at] == ',' {
+            *at = *at + 1;
+        } else {
+            let before = *at;
+            let key = jux_dbg_value(c, at, JUX_DBG_ELEMENT);
+            jux_dbg_skip_space(c, at);
+            if *at < c.len() && c[*at] == ':' {
+                *at = *at + 1;
+                let value = jux_dbg_value(c, at, JUX_DBG_ELEMENT);
+                entries.push(format!("{key}: {value}"));
+            } else {
+                entries.push(key);
+            }
+            open = *at > before;
+        }
+    }
+    format!("{{{}}}", entries.join(", "))
+}
+/// A name, and what follows it: `(args)`, ` { fields }`, or nothing.
+fn jux_dbg_named(c: &[char], at: &mut usize, slot: u8) -> String {
+    let mut path = String::new();
+    let mut more = true;
+    while *at < c.len() && more {
+        if c[*at].is_alphanumeric() || c[*at] == '_' {
+            path.push(c[*at]);
+            *at = *at + 1;
+        } else if c[*at] == ':' && *at + 1 < c.len() && c[*at + 1] == ':' {
+            path.push_str("::");
+            *at = *at + 2;
+        } else {
+            more = false;
+        }
+    }
+    let name = String::from(path.rsplit("::").next().unwrap_or(&path));
+    if *at < c.len() && c[*at] == '<' {
+        let mut depth = 0i32;
+        let mut inside = true;
+        while *at < c.len() && inside {
+            if c[*at] == '<' {
+                depth = depth + 1;
+            } else if c[*at] == '>' {
+                depth = depth - 1;
+            }
+            *at = *at + 1;
+            inside = depth > 0;
+        }
+    }
+    let unwraps = matches!(
+        name.as_str(),
+        "Some" | "OnceLock" | "OnceCell" | "LazyLock" | "LazyCell" | "Wrapping" | "Saturating" | "Reverse"
+    );
+    if *at < c.len() && c[*at] == '(' {
+        *at = *at + 1;
+        let args = jux_dbg_list(c, at, ')', JUX_DBG_FIELD);
+        if unwraps && args.len() == 1 {
+            args.into_iter().next().unwrap_or_default()
+        } else {
+            format!("{name}({})", args.join(", "))
+        }
+    } else if *at + 1 < c.len() && c[*at] == ' ' && c[*at + 1] == '{' {
+        *at = *at + 2;
+        jux_dbg_struct(c, at, name)
+    } else if name == "None" && slot != JUX_DBG_TOP {
+        String::from("null")
+    } else {
+        String::from(name.as_str())
+    }
+}
+/// A struct's fields after its `{`, laid out as `Name(field: value, ...)`.
+fn jux_dbg_struct(c: &[char], at: &mut usize, name: String) -> String {
+    let mut fields: Vec<(String, String)> = Vec::new();
+    let mut open = true;
+    while open {
+        jux_dbg_skip_space(c, at);
+        if *at >= c.len() {
+            open = false;
+        } else if c[*at] == '}' {
+            *at = *at + 1;
+            open = false;
+        } else if c[*at] == ',' || c[*at] == '.' {
+            *at = *at + 1;
+        } else {
+            let before = *at;
+            let mut field = String::new();
+            while *at < c.len() && (c[*at].is_alphanumeric() || c[*at] == '_') {
+                field.push(c[*at]);
+                *at = *at + 1;
+            }
+            jux_dbg_skip_space(c, at);
+            if !field.is_empty() && *at < c.len() && c[*at] == ':' {
+                *at = *at + 1;
+                let value = jux_dbg_value(c, at, JUX_DBG_FIELD);
+                fields.push((field, value));
+            } else {
+                *at = before;
+                open = false;
+            }
+        }
+    }
+    let cell = matches!(name.as_str(), "RefCell" | "Cell" | "Mutex" | "RwLock" | "ManuallyDrop");
+    let held = fields.first().filter(|(f, _)| cell && (f == "value" || f == "data")).map(|(_, v)| v.clone());
+    match held {
+        Some(value) => value,
+        None => {
+            let shown: Vec<String> = fields
+                .into_iter()
+                .filter(|(_, v)| v != "PhantomData")
+                .map(|(f, v)| format!("{f}: {v}"))
+                .collect();
+            if shown.is_empty() {
+                name
+            } else {
+                format!("{name}({})", shown.join(", "))
+            }
+        }
+    }
+}
+/// Anything else, up to the next separator: `1.5s`, `-3`, `1..5`, `<uninit>`.
+fn jux_dbg_atom(c: &[char], at: &mut usize) -> String {
+    let mut text = String::new();
+    let mut angle = 0i32;
+    let mut more = true;
+    while *at < c.len() && more {
+        let ch = c[*at];
+        let separator = matches!(ch, ',' | ')' | ']' | '}')
+            || (ch == ':' && *at + 1 < c.len() && c[*at + 1] == ' ');
+        if angle == 0 && separator {
+            more = false;
+        } else {
+            if ch == '<' {
+                angle = angle + 1;
+            } else if ch == '>' && angle > 0 {
+                angle = angle - 1;
+            }
+            text.push(ch);
+            *at = *at + 1;
+        }
+    }
+    let text = String::from(text.trim_end());
+    if text == "<uninit>" { String::from("null") } else { text }
 }
 /// Whether `name` holds a nullable somewhere INSIDE it, and is built only from
 /// types whose `Debug` text is known: primitives, `String`, the collections and
@@ -4944,23 +5145,96 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("    let mut low = c.to_lowercase();\n");
         w.push_str("    match (low.next(), low.next()) { (Some(l), None) => l, _ => c }\n");
         w.push_str("}\n\n");
-        // A Rust `Err` crossing into Jux (Bindgen G.5.4): thrown wrapped, so
-        // `catch (Exception e)` can recognise it and a clause naming the Rust
-        // type still gets the value itself.
-        w.push_str(r#"/// A Rust `Err` thrown into Jux (Bindgen G.5.4). The error value rides
-/// along untouched for a `catch` that names its type; the text and type name
-/// serve `catch (Exception e)` and the uncaught-exception report.
+        // A Rust `Err` crossing into Jux (Bindgen G.5.4, gap 38): thrown as the
+        // Jux exception it stands for, wrapped with the Rust value, so a
+        // clause for that exception (or any class above it) catches it, and a
+        // clause naming the Rust type itself still gets the value.
+        w.push_str(r#"/// A Rust `Err` thrown into Jux (Bindgen G.5.4). `jux` is the Jux
+/// exception it surfaces as (`NumberFormatException`, `IOException`,
+/// `LibraryException`, ...), `ancestors` that class and every class above it,
+/// so a `catch` of any of them takes it; the Rust value rides along for a
+/// `catch` that names its own type.
 pub struct JuxForeignError {
-    pub type_name: &'static str,
+    pub jux_name: &'static str,
     pub text: String,
+    pub jux: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
+    pub ancestors: Vec<::std::any::TypeId>,
     pub error: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
 }
 /// Throw the `Err` of a foreign call; `text` is its Display (or Debug) form.
 #[track_caller]
 pub fn __jux_raise_foreign<E: ::std::any::Any + ::std::marker::Send>(text: String, error: E) -> ! {
-    let type_name = ::std::any::type_name::<E>();
-    let type_name = type_name.rsplit("::").next().unwrap_or(type_name);
-    ::std::panic::panic_any(JuxForeignError { type_name, text, error: ::std::boxed::Box::new(error) })
+    let (jux_name, text, jux, ancestors) = jux_foreign_exception(::std::any::type_name::<E>(), text, &error);
+    ::std::panic::panic_any(JuxForeignError { jux_name, text, jux, ancestors, error: ::std::boxed::Box::new(error) })
+}
+/// The Jux exception a Rust error surfaces as (Bindgen G.5.4, gap 38):
+///
+///   - a number that does not parse (`ParseIntError`, `ParseFloatError`) is a
+///     `NumberFormatException`;
+///   - an I/O error is a `FileNotFoundException` when the file is not there
+///     and an `IOException` otherwise, without the system's error number;
+///   - text that is not UTF-8 (`Utf8Error`, `FromUtf8Error`, `FromUtf16Error`)
+///     is an `EncodingException`;
+///   - an integer conversion out of range (`TryFromIntError`) is an
+///     `ArithmeticException`;
+///   - any other text that does not parse (`ParseBoolError`,
+///     `ParseCharError`, `AddrParseError`) is an `IllegalArgumentException`;
+///   - any other error is a `LibraryException` naming the library.
+fn jux_foreign_exception(
+    type_name: &'static str,
+    text: String,
+    error: &dyn ::std::any::Any,
+) -> (&'static str, String, ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>, Vec<::std::any::TypeId>) {
+    use crate::jux::std::exceptions as x;
+    use ::std::any::TypeId;
+    let path = type_name.split('<').next().unwrap_or(type_name);
+    let short = path.rsplit("::").next().unwrap_or(path);
+    let library = path.split("::").next().unwrap_or(path);
+    let from_std = matches!(library, "core" | "std" | "alloc");
+    let io = error.downcast_ref::<::std::io::Error>();
+    let throwable = [TypeId::of::<x::Exception>(), TypeId::of::<x::Throwable>()];
+    let unchecked = [TypeId::of::<x::RuntimeException>(), throwable[0], throwable[1]];
+    match io {
+        Some(e) => {
+            let text = match text.find(" (os error ") {
+                Some(at) => String::from(&text[..at]),
+                None => text,
+            };
+            if e.kind() == ::std::io::ErrorKind::NotFound {
+                let ancestors = Vec::from([TypeId::of::<x::FileNotFoundException>(), TypeId::of::<x::IOException>(), throwable[0], throwable[1]]);
+                ("jux.std.exceptions.FileNotFoundException", text.clone(), ::std::boxed::Box::new(x::FileNotFoundException::new(text)), ancestors)
+            } else {
+                let ancestors = Vec::from([TypeId::of::<x::IOException>(), throwable[0], throwable[1]]);
+                ("jux.std.exceptions.IOException", text.clone(), ::std::boxed::Box::new(x::IOException::new(text)), ancestors)
+            }
+        }
+        _ if from_std && matches!(short, "ParseIntError" | "ParseFloatError") => {
+            let mut ancestors = Vec::from([TypeId::of::<x::NumberFormatException>(), TypeId::of::<x::IllegalArgumentException>()]);
+            ancestors.extend(unchecked);
+            ("jux.std.exceptions.NumberFormatException", text.clone(), ::std::boxed::Box::new(x::NumberFormatException::new(text)), ancestors)
+        }
+        _ if from_std && matches!(short, "Utf8Error" | "FromUtf8Error" | "FromUtf16Error") => {
+            let mut ancestors = Vec::from([TypeId::of::<x::EncodingException>()]);
+            ancestors.extend(unchecked);
+            ("jux.std.exceptions.EncodingException", text.clone(), ::std::boxed::Box::new(x::EncodingException::new(text)), ancestors)
+        }
+        _ if from_std && short == "TryFromIntError" => {
+            let mut ancestors = Vec::from([TypeId::of::<x::ArithmeticException>()]);
+            ancestors.extend(unchecked);
+            ("jux.std.exceptions.ArithmeticException", text.clone(), ::std::boxed::Box::new(x::ArithmeticException::new(text)), ancestors)
+        }
+        _ if from_std && matches!(short, "ParseBoolError" | "ParseCharError" | "AddrParseError") => {
+            let mut ancestors = Vec::from([TypeId::of::<x::IllegalArgumentException>()]);
+            ancestors.extend(unchecked);
+            ("jux.std.exceptions.IllegalArgumentException", text.clone(), ::std::boxed::Box::new(x::IllegalArgumentException::new(text)), ancestors)
+        }
+        _ => {
+            let mut ancestors = Vec::from([TypeId::of::<x::LibraryException>()]);
+            ancestors.extend(unchecked);
+            let library = String::from(if from_std { "std" } else { library });
+            ("jux.std.exceptions.LibraryException", text.clone(), ::std::boxed::Box::new(x::LibraryException::new(text, library)), ancestors)
+        }
+    }
 }
 /// For `catch (T e)` with `T` a foreign type: the Rust error itself, when it is a `T`.
 pub fn __jux_foreign_error_of<T: ::std::any::Any>(
@@ -4972,23 +5246,23 @@ pub fn __jux_foreign_error_of<T: ::std::any::Any>(
         Err(p) => p,
     }
 }
-/// For `catch (Exception e)`: a foreign error is an `Exception` carrying its text.
-pub fn __jux_foreign_as_exception(
+/// For `catch (T e)` with `T` a Jux exception class: a foreign error whose
+/// Jux exception is a `T` (or a subclass of it) as that exception, so the
+/// clause's downcasts find it; anything else as it is.
+pub fn __jux_foreign_as<T: ::std::any::Any>(
     p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
 ) -> ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send> {
     match p.downcast::<JuxForeignError>() {
-        Ok(f) => ::std::boxed::Box::new(crate::jux::std::exceptions::Exception::new(f.text)),
+        Ok(f) if f.ancestors.contains(&::std::any::TypeId::of::<T>()) => f.jux,
+        Ok(f) => f,
         Err(p) => p,
     }
 }
-/// For `catch (Throwable e)`: the same, as a `Throwable`.
-pub fn __jux_foreign_as_throwable(
+/// For `catch (Exception e)`: a foreign error as its Jux exception.
+pub fn __jux_foreign_as_exception(
     p: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
 ) -> ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send> {
-    match p.downcast::<JuxForeignError>() {
-        Ok(f) => ::std::boxed::Box::new(crate::jux::std::exceptions::Throwable::new(f.text)),
-        Err(p) => p,
-    }
+    __jux_foreign_as::<crate::jux::std::exceptions::Exception>(p)
 }
 
 "#);
@@ -5932,7 +6206,7 @@ impl<T: ?Sized> JuxIdentity for JuxCell<T> {
             "    pub fn spawn<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(f: F) -> Task<T> {\n",
         );
         w.push_str("        let (tx, rx) = futures::channel::oneshot::channel();\n");
-        w.push_str("        std::thread::spawn(move || { let _ = tx.send(f()); });\n");
+        w.push_str("        std::thread::spawn(move || { crate::jux_enter_thread(); let _ = tx.send(f()); });\n");
         w.push_str("        Task(rx)\n");
         w.push_str("    }\n");
         w.push_str("}\n");
@@ -6125,7 +6399,7 @@ pub fn jux_panic_payload_text(p: &(dyn std::any::Any + Send)) -> Option<String> 
 /// A stack overflow never reaches a panic hook: the runtime prints its own
 /// message and aborts. On Windows a vectored exception handler sees it first
 /// and reports it in Jux terms, with the exit status of any other uncaught
-/// failure. Elsewhere the runtime's report stands (GAPS.md gap 33).
+/// failure (GAPS.md gap 33). Linux and macOS follow below (gap 38).
 #[cfg(windows)]
 mod jux_stack_overflow {
     #[repr(C)]
@@ -6164,10 +6438,238 @@ mod jux_stack_overflow {
             AddVectoredExceptionHandler(1, handler);
         }
     }
+    /// Every thread is covered by the one vectored handler.
+    pub fn enter_thread() {}
 }
-#[cfg(not(windows))]
+/// Linux and macOS (gap 38): the kernel raises `SIGSEGV` (or `SIGBUS`) when a
+/// thread runs off the end of its stack. Each thread that runs Jux code
+/// records where its stack lies (`enter_thread`) and has an alternate signal
+/// stack; the handler, run on that stack, compares the fault address with the
+/// recorded range. Memory inside a thread's stack never faults, and neither
+/// does the room below a main stack that the kernel grows it into, so a fault
+/// anywhere from the stack's lowest possible address (less the gap the kernel
+/// keeps below it) to its top is the stack running out: the handler writes the
+/// same report as on Windows with `write(2)`, which is async-signal-safe, and
+/// ends the process with status 101. Any other fault goes on to the handler
+/// that was installed before (the runtime's own), or takes the default action.
+///
+/// Where a stack lies: for the main thread, from the stack's current top down
+/// to the size limit (`RLIMIT_STACK`) on Linux, and from `pthread`'s account
+/// of it on macOS; for any other thread, from `pthread`'s account of it.
+///
+/// The declarations are the C library's own, spelled out per target, since
+/// the emitted crate depends on no binding crate: `struct sigaction`, `stack_t`
+/// and the offset of `si_addr` in `siginfo_t` differ between Linux (glibc and
+/// musl agree) and macOS.
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos"),
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+mod jux_stack_overflow {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[cfg(target_os = "linux")]
+    mod sys {
+        pub const SIGBUS: i32 = 7;
+        pub const SA_SIGINFO: i32 = 0x4;
+        pub const SA_ONSTACK: i32 = 0x0800_0000;
+        pub const SS_DISABLE: i32 = 2;
+        const RLIMIT_STACK: i32 = 3;
+        const RLIM_INFINITY: u64 = u64::MAX;
+        /// `si_addr`: after three `int`s, padded to the union's alignment.
+        pub const SI_ADDR: usize = 16;
+        #[repr(C)]
+        pub struct SigAction {
+            pub handler: usize,
+            pub mask: [u64; 16],
+            pub flags: i32,
+            pub restorer: usize,
+        }
+        #[repr(C)]
+        pub struct Stack {
+            pub sp: *mut u8,
+            pub flags: i32,
+            pub size: usize,
+        }
+        pub fn action(handler: usize, flags: i32) -> SigAction {
+            SigAction { handler, mask: [0; 16], flags, restorer: 0 }
+        }
+        pub fn stack(sp: *mut u8, size: usize) -> Stack {
+            Stack { sp, flags: 0, size }
+        }
+        extern "C" {
+            fn pthread_self() -> usize;
+            fn pthread_getattr_np(thread: usize, attr: *mut [u64; 16]) -> i32;
+            fn pthread_attr_getstack(attr: *const [u64; 16], addr: *mut *mut u8, size: *mut usize) -> i32;
+            fn pthread_attr_destroy(attr: *mut [u64; 16]) -> i32;
+            fn getrlimit(resource: i32, limit: *mut [u64; 2]) -> i32;
+        }
+        /// The calling thread's stack as `(lowest, top)`, `(0, 0)` if unknown.
+        /// `here` is an address on it. The main stack grows on demand, so it
+        /// runs from `here` down to its size limit; `pthread` reports only
+        /// what is mapped so far for it under musl.
+        pub fn stack_bounds(main: bool, here: usize) -> (usize, usize) {
+            let mut bounds = (0, 0);
+            unsafe {
+                if main {
+                    let mut limit = [0u64; 2];
+                    if getrlimit(RLIMIT_STACK, &mut limit) == 0 && limit[0] != RLIM_INFINITY {
+                        bounds = (here.saturating_sub(limit[0] as usize), here);
+                    }
+                } else {
+                    let mut attr = [0u64; 16];
+                    let mut addr: *mut u8 = std::ptr::null_mut();
+                    let mut size = 0usize;
+                    if pthread_getattr_np(pthread_self(), &mut attr) == 0 {
+                        if pthread_attr_getstack(&attr, &mut addr, &mut size) == 0 && !addr.is_null() {
+                            bounds = (addr as usize, (addr as usize).saturating_add(size));
+                        }
+                        pthread_attr_destroy(&mut attr);
+                    }
+                }
+            }
+            bounds
+        }
+    }
+    #[cfg(target_os = "macos")]
+    mod sys {
+        pub const SIGBUS: i32 = 10;
+        pub const SA_SIGINFO: i32 = 0x40;
+        pub const SA_ONSTACK: i32 = 0x1;
+        pub const SS_DISABLE: i32 = 4;
+        /// `si_addr`: after `si_signo`, `si_errno`, `si_code`, `si_pid`,
+        /// `si_uid` and `si_status`.
+        pub const SI_ADDR: usize = 24;
+        #[repr(C)]
+        pub struct SigAction {
+            pub handler: usize,
+            pub mask: u32,
+            pub flags: i32,
+        }
+        #[repr(C)]
+        pub struct Stack {
+            pub sp: *mut u8,
+            pub size: usize,
+            pub flags: i32,
+        }
+        pub fn action(handler: usize, flags: i32) -> SigAction {
+            SigAction { handler, mask: 0, flags }
+        }
+        pub fn stack(sp: *mut u8, size: usize) -> Stack {
+            Stack { sp, size, flags: 0 }
+        }
+        extern "C" {
+            fn pthread_self() -> *mut u8;
+            fn pthread_get_stackaddr_np(thread: *mut u8) -> *mut u8;
+            fn pthread_get_stacksize_np(thread: *mut u8) -> usize;
+        }
+        /// The calling thread's stack as `(lowest, top)`; `stackaddr` is its
+        /// top, and the main thread's size is its limit.
+        pub fn stack_bounds(_main: bool, _here: usize) -> (usize, usize) {
+            unsafe {
+                let me = pthread_self();
+                let top = pthread_get_stackaddr_np(me) as usize;
+                (top.saturating_sub(pthread_get_stacksize_np(me)), top)
+            }
+        }
+    }
+    extern "C" {
+        fn sigaction(signal: i32, action: *const sys::SigAction, old: *mut sys::SigAction) -> i32;
+        fn sigaltstack(stack: *const sys::Stack, old: *mut sys::Stack) -> i32;
+        fn write(fd: i32, buf: *const u8, len: usize) -> isize;
+        fn _exit(status: i32) -> !;
+    }
+    const SIGSEGV: i32 = 11;
+    const MESSAGE: &[u8] = b"panic: stack overflow: a method called itself too many times without finishing\n";
+    /// How far below a stack's lowest address a fault still counts as running
+    /// off it: Linux keeps a gap of 256 pages below a stack, and one frame can
+    /// step over several pages.
+    const BELOW: usize = 1 << 20;
+    const ALT_STACK: usize = 64 << 10;
+    std::thread_local! {
+        /// This thread's stack, `(lowest, top)`; `(0, 0)` when not recorded.
+        static STACK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    }
+    /// The handler each signal had before, and its flags: `[SIGSEGV, SIGBUS]`.
+    static PREVIOUS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+    static PREVIOUS_FLAGS: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+    fn slot(signal: i32) -> usize {
+        if signal == SIGSEGV { 0 } else { 1 }
+    }
+    /// Whether a fault at `addr` is the stack `(low, top)` running out.
+    pub fn is_overflow(addr: usize, (low, top): (usize, usize)) -> bool {
+        top != 0 && addr < top && addr >= low.saturating_sub(BELOW)
+    }
+    unsafe extern "C" fn handler(signal: i32, info: *mut u8, context: *mut u8) {
+        let addr = if info.is_null() { 0 } else { std::ptr::read_unaligned(info.add(sys::SI_ADDR) as *const usize) };
+        let bounds = STACK.try_with(|c| c.get()).unwrap_or((0, 0));
+        if is_overflow(addr, bounds) {
+            write(2, MESSAGE.as_ptr(), MESSAGE.len());
+            _exit(101);
+        }
+        let previous = PREVIOUS[slot(signal)].load(Ordering::SeqCst);
+        let flags = PREVIOUS_FLAGS[slot(signal)].load(Ordering::SeqCst) as i32;
+        if previous <= 1 {
+            // It was the default (or ignored): restore the default, and the
+            // faulting instruction runs again and ends the process as it would
+            // have without this handler.
+            let restore = sys::action(0, 0);
+            sigaction(signal, &restore, std::ptr::null_mut());
+        } else if flags & sys::SA_SIGINFO != 0 {
+            let chained: unsafe extern "C" fn(i32, *mut u8, *mut u8) = std::mem::transmute(previous);
+            chained(signal, info, context);
+        } else {
+            let chained: unsafe extern "C" fn(i32) = std::mem::transmute(previous);
+            chained(signal);
+        }
+    }
+    fn record(main: bool) {
+        let here = 0u8;
+        let bounds = sys::stack_bounds(main, std::ptr::addr_of!(here) as usize);
+        STACK.with(|c| c.set(bounds));
+        // The handler cannot run on the stack that overflowed: give the
+        // thread an alternate one unless it has one (the runtime makes one
+        // for each thread it starts).
+        unsafe {
+            let mut current = sys::stack(std::ptr::null_mut(), 0);
+            if sigaltstack(std::ptr::null(), &mut current) == 0 && current.flags & sys::SS_DISABLE != 0 {
+                let memory: &'static mut [u8] = Box::leak(std::iter::repeat(0u8).take(ALT_STACK).collect::<Vec<u8>>().into_boxed_slice());
+                let alt = sys::stack(memory.as_mut_ptr(), ALT_STACK);
+                sigaltstack(&alt, std::ptr::null_mut());
+            }
+        }
+    }
+    /// Record a thread the program started.
+    pub fn enter_thread() {
+        record(false);
+    }
+    pub fn install() {
+        record(true);
+        let entry: unsafe extern "C" fn(i32, *mut u8, *mut u8) = handler;
+        for signal in [SIGSEGV, sys::SIGBUS] {
+            let ours = sys::action(entry as usize, sys::SA_SIGINFO | sys::SA_ONSTACK);
+            let mut old = sys::action(0, 0);
+            unsafe {
+                // Installed twice, the handler must not chain to itself.
+                if sigaction(signal, &ours, &mut old) == 0 && old.handler != entry as usize {
+                    PREVIOUS[slot(signal)].store(old.handler, Ordering::SeqCst);
+                    PREVIOUS_FLAGS[slot(signal)].store(old.flags as usize, Ordering::SeqCst);
+                }
+            }
+        }
+    }
+}
+#[cfg(not(any(
+    windows,
+    all(any(target_os = "linux", target_os = "macos"), any(target_arch = "x86_64", target_arch = "aarch64"))
+)))]
 mod jux_stack_overflow {
     pub fn install() {}
+    pub fn enter_thread() {}
+}
+/// Called first on every thread the program starts that runs Jux code (a
+/// `Worker`), so a stack overflow there is reported like one on `main`.
+pub fn jux_enter_thread() {
+    jux_stack_overflow::enter_thread();
 }
 "##);
         // `now_ms()` helper — wall-clock reading in milliseconds
@@ -7228,7 +7730,7 @@ mod jux_stack_overflow {
             ));
         }
         self.w.line(
-            "if let Some(e) = p.downcast_ref::<crate::JuxForeignError>() { return format!(\"{}: {}\", e.type_name, e.text); }",
+            "if let Some(e) = p.downcast_ref::<crate::JuxForeignError>() { return format!(\"{}: {}\", e.jux_name, e.text); }",
         );
         self.w.line("String::from(\"<panic>\")");
         self.w.indent_dec();
@@ -8335,13 +8837,14 @@ mod jux_stack_overflow {
                     ));
                 }
                 // A Rust `Err` nothing caught (Bindgen G.5.4) is reported like
-                // an uncaught exception, under the Rust error type's name. A
+                // an uncaught exception, under the Jux exception it surfaces
+                // as (`NumberFormatException`, `LibraryException`, gap 38). A
                 // panic the hook already reported adds nothing; anything else
                 // is an instance of a generic exception class, whose name the
                 // wrapper cannot enumerate.
                 wrapper.push_str(concat!(
                     "if let Some(__jux_e) = __jux_p.downcast_ref::<crate::JuxForeignError>() {\n",
-                    "            eprintln!(\"Exception in thread \\\"main\\\" {}: {}\", __jux_e.type_name, __jux_e.text);\n",
+                    "            eprintln!(\"Exception in thread \\\"main\\\" {}: {}\", __jux_e.jux_name, __jux_e.text);\n",
                     "            crate::jux_report_throw_site(&*__jux_p);\n",
                     "        } else if __jux_p.is::<&str>() || __jux_p.is::<::std::string::String>() {\n",
                     "        } else {\n",
@@ -8369,6 +8872,8 @@ mod jux_stack_overflow {
                     "    if let Some(e) = p.downcast_ref::<{path}>() {{\n        eprintln!(\"Unhandled exception in spawned task: {fqn}: {{}}\", e.getMessage());\n        std::process::exit(101);\n    }}\n"
                 ));
             }
+            // A Rust `Err` (Bindgen G.5.4) under the Jux exception it is.
+            hook.push_str("    if let Some(e) = p.downcast_ref::<crate::JuxForeignError>() {\n        eprintln!(\"Unhandled exception in spawned task: {}: {}\", e.jux_name, e.text);\n        std::process::exit(101);\n    }\n");
             hook.push_str("    if let Some(s) = crate::jux_panic_payload_text(&*p) {\n        eprintln!(\"Unhandled panic in spawned task: {s}\");\n    } else {\n        eprintln!(\"Unhandled failure in spawned task\");\n    }\n    std::process::exit(101);\n}\n");
             source.push_str(&hook);
         }
@@ -8396,7 +8901,7 @@ mod jux_stack_overflow {
             }
             helper.push_str(concat!(
                 "                if let Some(e) = p.downcast_ref::<crate::JuxForeignError>() {\n",
-                "                    break 'what format!(\"{}: {}\", e.type_name, e.text);\n",
+                "                    break 'what format!(\"{}: {}\", e.jux_name, e.text);\n",
                 "                }\n",
                 "                if let Some(s) = crate::jux_panic_payload_text(&*p) {\n",
                 "                    break 'what s;\n",
