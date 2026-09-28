@@ -1,0 +1,2 @@
+bound_on_foreign_type.jux:10:53: [E0459] error: `V extends Vec<Pair<K, T>>` admits only `Vec<Pair<K, T>>` itself: `Vec<Pair<K, T>>` is a Rust type, and no Jux type can extend one (§T.4.6)
+bound_on_foreign_type.jux:14:12: [E0459] error: `M extends HashMap<String, int>` admits only `HashMap<String, int>` itself: `HashMap<String, int>` is a Rust type, and no Jux type can extend one (§T.4.6)

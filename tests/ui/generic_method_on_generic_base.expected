@@ -1,0 +1,2 @@
+generic_method_on_generic_base.jux:5:10: [E0438] error: class `Shape` is extended, so its method `convert` is called through whichever subclass the object is -- and `convert` has type parameters of its own, which a method reached that way cannot have in this version of Jux
+generic_method_on_generic_base.jux:15:1: [E0438] error: class `Mapper` is extended, so its method `same` is called through whichever subclass the object is -- and `same` has type parameters of its own, which a method reached that way cannot have in this version of Jux

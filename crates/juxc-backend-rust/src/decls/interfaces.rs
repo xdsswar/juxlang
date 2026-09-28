@@ -269,6 +269,14 @@ impl RustEmitter {
         // on the trait, so a `T` it formats needs that bound where the
         // `format!` is emitted.
         self.emit_generic_params_with_bounds(&interface.generic_params, &std::collections::HashSet::new());
+        // The interface's own parameters are in scope for every method in it:
+        // a method's `<V extends K>` names one, and a default body turns a `V`
+        // into a `K` (ERRATA E1XX-GAP39). Restored at the end of the trait.
+        let iface_params: Vec<String> = crate::collect_type_param_names(&interface.generic_params).into_iter().collect();
+        let prev_iface_scope = (self.current_type_params.clone(), self.type_param_bounds.clone());
+        self.current_type_params.extend(iface_params.iter().cloned());
+        self.type_param_bounds
+            .extend(crate::collect_type_param_bounds(&interface.generic_params));
         // `: std::fmt::Debug` supertrait — interface values lower to
         // `Rc<dyn Trait>`, which is held in `#[derive(Clone, Debug)]`
         // structs (wrapper-class fields, holders). `dyn Trait` is only
@@ -345,6 +353,10 @@ impl RustEmitter {
             } else {
                 self.w.push_str(&to_rust_ident(&method.name.text));
             }
+            // The method's own parameters and their bounds, for its default
+            // body (an interface parameter a method one shadows is replaced).
+            self.type_param_bounds
+                .extend(crate::collect_type_param_bounds(&method.generic_params));
             // A default method's own type parameters carry the bounds a class
             // method's get: `Clone` for the value model, `Display` where a
             // value is formatted.
@@ -356,7 +368,11 @@ impl RustEmitter {
                     &method.body.iter().collect::<Vec<_>>(),
                     &[],
                 );
-                self.emit_generic_params_with_bounds(&method.generic_params, &defaulted);
+                // `<V extends K>` over the interface's `K`: `V: Into<K>`, stated
+                // outright here because every implementing class forwards to
+                // this signature (see `bounds_into_outer_params`).
+                let params = crate::decls::classes::bounds_into_outer_params(&method.generic_params, &iface_params);
+                self.emit_generic_params_with_bounds(&params, &defaulted);
             }
             // `&self` — interface methods take a shared receiver so the
             // interface can be used as a `dyn` value type (`Rc<dyn Trait>`,
@@ -502,6 +518,7 @@ impl RustEmitter {
         for t in self.interface_hook_targets(&iface_bare) {
             self.emit_downcast_hook_sig(&t, &iface_bare);
         }
+        (self.current_type_params, self.type_param_bounds) = prev_iface_scope;
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();

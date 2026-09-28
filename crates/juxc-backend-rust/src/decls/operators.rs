@@ -751,7 +751,7 @@ impl RustEmitter {
         // `self.__op_cmp(other.clone())` returns isize; `.cmp(&0)`
         // converts it to Ordering via isize's own Ord impl
         // (negative → Less, zero → Equal, positive → Greater).
-        self.w.line(&format!("Some(self.__op_cmp({arg}).cmp(&0))"));
+        self.w.line(&format!("Some(std::cmp::Ord::cmp(&self.__op_cmp({arg}), &0))"));
         self.w.indent_dec();
         self.w.line("}");
         self.w.indent_dec();
@@ -793,12 +793,14 @@ impl RustEmitter {
     /// them with no extra declaration. `partial_cmp` stays the `Some(...)`
     /// bridge next to it; `Ord` needs `Eq`, which the caller provides.
     pub(super) fn emit_ord_from_cmp(&mut self, class_name: &str, arg: &str) {
-        self.emit_operator_impl_head("Ord", class_name);
+        // Path-qualified: a program may declare its own `Ord` (ERRATA
+        // E1XX-GAP39), which would shadow the prelude's here.
+        self.emit_operator_impl_head("std::cmp::Ord", class_name);
         self.w.push_str(" {\n");
         self.w.indent_inc();
         self.w.line("fn cmp(&self, other: &Self) -> std::cmp::Ordering {");
         self.w.indent_inc();
-        self.w.line(&format!("self.__op_cmp({arg}).cmp(&0)"));
+        self.w.line(&format!("std::cmp::Ord::cmp(&self.__op_cmp({arg}), &0)"));
         self.w.indent_dec();
         self.w.line("}");
         self.w.indent_dec();

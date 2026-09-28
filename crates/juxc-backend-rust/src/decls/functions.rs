@@ -510,6 +510,15 @@ impl RustEmitter {
         // the signature. `<__W0: AnimalKind + Clone, …>` is emitted
         // through the same bound-aware helper used for user params,
         // so class bounds get the marker-trait rewrite consistently.
+        // The function's own parameters are in scope for its own bounds, so
+        // `<K, V extends K>` expands `V`'s bound through `K` rather than
+        // writing `V: K`; and `V: Into<K>` is written in if the body turns a
+        // `V` into a `K` (ERRATA E1XX-GAP39).
+        let prev_sig_bounds = self.type_param_bounds.clone();
+        self.type_param_bounds
+            .extend(crate::collect_type_param_bounds(&fn_decl.generic_params));
+        let prev_marks = self.param_into_marks.replace(Vec::new());
+        let prev_used = std::mem::take(&mut self.param_into_used);
         if combined_generics.is_empty() {
             self.emit_generic_params(&fn_decl.generic_params);
         } else {
@@ -532,6 +541,8 @@ impl RustEmitter {
             self.eq_bound_params.clear();
             self.hashed_params.clear();
         }
+        let param_into_marks = std::mem::replace(&mut self.param_into_marks, prev_marks).unwrap_or_default();
+        self.type_param_bounds = prev_sig_bounds;
         self.w.push('(');
         // Params the body mutates in place (`xs.push(…)` on a by-value
         // collection param, reassignment) need Rust's `mut` binding —
@@ -787,6 +798,7 @@ impl RustEmitter {
                 self.w.indent_dec();
                 self.w.line("})");
             }
+            self.insert_param_into_bounds(&param_into_marks);
             self.current_fn_params = prev_params;
             self.local_types.pop();
             self.byref_param_names = prev_byref;
@@ -796,6 +808,7 @@ impl RustEmitter {
             self.type_param_bounds = prev_type_param_bounds;
             self.current_return_type = saved;
         }
+        self.param_into_used = prev_used;
         self.w.indent_dec();
         self.w.line("}");
         self.w.newline();

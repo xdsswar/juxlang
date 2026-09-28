@@ -1,0 +1,4 @@
+intersection_bound_one_missing.jux:13:11: [E0446] error: type `OnlyNamed` does not satisfy the bound `T extends Base` declared by function `describe`
+intersection_bound_one_missing.jux:13:11: [E0446] error: type `OnlyNamed` does not satisfy the bound `T extends Aged` declared by function `describe`
+intersection_bound_one_missing.jux:14:11: [E0446] error: type `NoAge` does not satisfy the bound `T extends Aged` declared by function `describe`
+intersection_bound_one_missing.jux:15:21: [E0446] error: type `NoAge` does not satisfy the bound `T extends Aged` declared by class `Team`

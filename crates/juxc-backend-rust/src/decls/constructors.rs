@@ -104,6 +104,23 @@ fn ctor_owned_param_names(params: &[juxc_ast::Param]) -> HashSet<String> {
 }
 
 impl RustEmitter {
+    /// [`extract_ctor_prefix_seeds`] with the class's method table: a bare
+    /// `m(..)` naming a method of the class, its own or inherited, is a call
+    /// through `this` and may read any field.
+    fn ctor_prefix_seeds(
+        &self,
+        ctor: &juxc_ast::ConstructorDecl,
+        class_decl: &juxc_ast::ClassDecl,
+    ) -> Vec<crate::analysis::CtorPrefixSeed> {
+        let fqn = self
+            .resolve_bare_class_fqn(&class_decl.name.text)
+            .unwrap_or_else(|| class_decl.name.text.clone());
+        let is_method = |m: &str| {
+            class_decl.methods.iter().any(|d| d.name.text == m) || self.symbols.lookup_method(&fqn, m).is_some()
+        };
+        extract_ctor_prefix_seeds(ctor, class_decl, &is_method)
+    }
+
     /// Emit a constructor body's statements with per-statement
     /// liveness for owned parameters: before each statement, record
     /// which owned params are still read by a LATER statement, so the
@@ -402,7 +419,7 @@ impl RustEmitter {
         // has a real value for a slot whose type has no `Default` -- a class
         // field, most of all. The `let`s run in CONSTRUCTOR order; the literal
         // only moves them, so two initializers with side effects keep theirs.
-        let seeds = extract_ctor_prefix_seeds(ctor, class_decl);
+        let seeds = self.ctor_prefix_seeds(ctor, class_decl);
         let seeded: std::collections::HashMap<String, String> = seeds
             .iter()
             .map(|s| (s.field.clone(), format!("__jux_seed_{}", to_rust_ident(&s.field))))
@@ -419,7 +436,30 @@ impl RustEmitter {
             self.w.push_str("let ");
             self.w.push_str(&seeded[&seed.field]);
             self.w.push_str(" = ");
+            let value_mark = self.w.mark();
             self.emit_ctor_field_init(field_ty.as_ref(), &seed.value);
+            // A parameter the rest of the body still reads is copied into
+            // its seed, not moved (the wrapper path's rule, below).
+            if let juxc_ast::Expr::Path(qn) = &seed.value {
+                let name = qn.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+                let is_param = qn.segments.len() == 1 && ctor.params.iter().any(|p| p.name.text == name);
+                let rest = juxc_ast::Block {
+                    statements: ctor
+                        .body
+                        .statements
+                        .iter()
+                        .enumerate()
+                        .filter(|(k, _)| *k != seed.stmt_index)
+                        .map(|(_, s)| s.clone())
+                        .collect(),
+                    span: ctor.body.span,
+                };
+                let mut read_later = false;
+                crate::exprs::collect_bare_names_block(&rest, &mut |n| read_later |= n == name);
+                if is_param && read_later && !self.w.text_from(value_mark).ends_with(".clone()") {
+                    self.w.push_str(".clone()");
+                }
+            }
             self.w.push_str(";\n");
         }
 
@@ -1510,7 +1550,7 @@ impl RustEmitter {
             // `Default::default()` to offer a slot whose type has none --
             // which every Jux class is, since a class lowers to this very
             // `Rc<RefCell<_Inner>>` shape.
-            let seeds = extract_ctor_prefix_seeds(ctor, class_decl);
+            let seeds = self.ctor_prefix_seeds(ctor, class_decl);
             let seeded: std::collections::HashMap<String, String> = seeds
                 .iter()
                 .map(|s| (s.field.clone(), format!("__jux_seed_{}", to_rust_ident(&s.field))))
@@ -1546,8 +1586,19 @@ impl RustEmitter {
                 if let juxc_ast::Expr::Path(qn) = &seed.value {
                     let name = qn.segments.last().map(|s| s.text.as_str()).unwrap_or("");
                     let is_param = qn.segments.len() == 1 && ctor.params.iter().any(|p| p.name.text == name);
+                    // Every OTHER statement, not only the later ones: a seed
+                    // may have been lifted past a `super(...)` call or a
+                    // statement that reads the same parameter (ERRATA
+                    // E1XX-GAP39), and those now run after it.
                     let rest = juxc_ast::Block {
-                        statements: ctor.body.statements[seed.stmt_index + 1..].to_vec(),
+                        statements: ctor
+                            .body
+                            .statements
+                            .iter()
+                            .enumerate()
+                            .filter(|(k, _)| *k != seed.stmt_index)
+                            .map(|(_, s)| s.clone())
+                            .collect(),
                         span: ctor.body.span,
                     };
                     let mut read_later = false;

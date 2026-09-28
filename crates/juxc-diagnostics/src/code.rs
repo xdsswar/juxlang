@@ -252,6 +252,13 @@ pub enum Code {
     /// it, use `?.`, or assert it with `!!` (LANG-V1 §7.10). Without this
     /// the access reached rustc as a method or field lookup on `Option<T>`.
     E0418_MemberOfNullable,
+    /// E0419 -- An intersection bound names **two classes**
+    /// (`T extends Animal & Machine`, Type system §T.4.6). A class extends
+    /// exactly one class, so no type argument could be both; when one of the
+    /// two extends the other, the more derived one alone says the same thing.
+    /// An intersection holds at most one class, in any position, and any
+    /// number of interfaces.
+    E0419_BoundNamesTwoClasses,
     /// E0420 — `class C extends F` where `F` is declared `final`.
     /// Final classes cannot be subclassed.
     E0420_FinalClassExtended,
@@ -607,6 +614,14 @@ pub enum Code {
     /// reason is named), for an `extends` / `implements` clause whose
     /// inherited members need it, and for a field read that copies one.
     E0457_TypeArgumentLacksCapability,
+    /// E0459 -- A type parameter's `extends` bound names a type **no other
+    /// type can extend** (Type system §T.4.6): a Rust type (`rust.std.Vec`),
+    /// a record, an enum, a primitive or `String`. The only type such a bound
+    /// admits is the bound itself, so the parameter says nothing a plain type
+    /// would not: write the type (`Vec<Pair<K, T>>`) where the parameter was
+    /// used, or bound the parameter by an interface every type you mean to
+    /// accept implements. A `final` Jux class is still a legal bound.
+    E0459_BoundCannotBeExtended,
     /// E0513 -- A function given where a **function pointer** is expected does
     /// not fit it (Layout-ABI §L.6.4): it is a method rather than a free
     /// function, it is generic or overloaded, it declares `throws`, or its
@@ -1379,6 +1394,7 @@ impl Code {
             Code::E0416_PackagePrivateAccess     => "E0416",
             Code::E0417_UnknownType              => "E0417",
             Code::E0418_MemberOfNullable         => "E0418",
+            Code::E0419_BoundNamesTwoClasses     => "E0419",
             Code::E0420_FinalClassExtended       => "E0420",
             Code::E0421_FinalMethodOverridden    => "E0421",
             Code::E0422_SealedClassNotPermitted  => "E0422",
@@ -1430,6 +1446,7 @@ impl Code {
             Code::E0460_MissingReturn            => "E0460",
             Code::E0458_ArrayElementHasNoDefault => "E0458",
             Code::E0457_TypeArgumentLacksCapability => "E0457",
+            Code::E0459_BoundCannotBeExtended    => "E0459",
             Code::E0513_FunctionDoesNotFitPointer => "E0513",
             Code::E0514_CapturingLambdaAsPointer => "E0514",
             Code::E0515_MethodThroughClassPointer => "E0515",

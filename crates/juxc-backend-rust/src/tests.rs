@@ -4134,7 +4134,7 @@ fn equality_op_is_not_rewritten() {
 
 /// `operator<=>` emits `__op_cmp` and an `impl PartialOrd` whose
 /// `partial_cmp` body converts the user's int return into Ordering
-/// via isize's own Ord (`.cmp(&0)` → Less/Equal/Greater).
+/// via isize's own Ord (`Ord::cmp(.., &0)` → Less/Equal/Greater).
 #[test]
 fn operator_cmp_emits_partial_ord_impl() {
     let rust = emit(
@@ -4160,7 +4160,7 @@ fn operator_cmp_emits_partial_ord_impl() {
         "wrong partial_cmp signature: {rust}",
     );
     assert!(
-        rust.contains("Some(self.__op_cmp(other.clone()).cmp(&0))"),
+        rust.contains("Some(std::cmp::Ord::cmp(&self.__op_cmp(other.clone()), &0))"),
         "missing isize→Ordering bridge: {rust}",
     );
 }

@@ -160,6 +160,12 @@ pub(crate) enum IfaceCoercion {
     /// hierarchy (e.g. a `BaseErr` into an `Exception` cause slot) — slice it up
     /// to the parent via the generated `From<Sub> for Parent` with `.into()`.
     IntoBase,
+    /// Source is a value of type parameter `R` flowing into a slot typed by
+    /// another parameter `K` that `R` is bounded by (`<R extends K>`, Type
+    /// system §T.4.6 rule 4: every `R` is usable wherever a `K` is expected).
+    /// Two distinct Rust generics, so `(r).into()`, and the declaration
+    /// acquires `R: Into<K>` (ERRATA E1XX-GAP39).
+    ParamInto { param: String },
     /// The target is `any` / `any?` (§T.1.2): box the value in a
     /// `crate::JuxAny`. Every coercion site routes it through
     /// [`RustEmitter::emit_expr_coerced_to_iface`], which owns the nullable
@@ -1659,9 +1665,22 @@ pub(crate) struct CtorPrefixSeed {
 /// Restricted to fields whose type has no `Default`, which is exactly the
 /// set that fails to compile without this. Widening it would rewrite the
 /// output of constructors that are correct today for no gain.
+///
+/// **Past a `super(...)` call and past statements that cannot see the field**
+/// (ERRATA E1XX-GAP39). `class A<T, U> extends B<Pair<T, U>>` whose
+/// constructor is `super(new Pair<T, U>(t, u)); ts.push(t); this.u = u;` left
+/// the `U u` slot to `U::default()`, which a type parameter does not have. The
+/// `super(...)` call is lifted into the `__parent` slot anyway, and
+/// `ts.push(t)` cannot observe `u`: it names no `this`, calls no method of the
+/// class (`is_method`), and does not mention `u`. So the scan steps over such a
+/// statement and keeps looking, but once it has, it lifts only a value that
+/// cannot have changed in between -- a literal, or a constructor parameter no
+/// stepped-over statement writes -- into a field no stepped-over statement
+/// names. Anything else stops it, as before.
 pub(crate) fn extract_ctor_prefix_seeds(
     ctor: &juxc_ast::ConstructorDecl,
     class_decl: &juxc_ast::ClassDecl,
+    is_method: &dyn Fn(&str) -> bool,
 ) -> Vec<CtorPrefixSeed> {
     // Same shadowing rule the simple-ctor extractor uses: a parameter named
     // like a field hides it, so `this.seed = seed` reads the PARAM and is
@@ -1677,26 +1696,78 @@ pub(crate) fn extract_ctor_prefix_seeds(
         .filter(|n| !param_names.contains(n.as_str()))
         .collect();
 
+    // Every instance field by name, including one a parameter shadows (it is
+    // still reachable as `this.f`).
+    let all_fields: std::collections::HashSet<String> = class_decl
+        .fields
+        .iter()
+        .filter(|f| !f.is_static)
+        .map(|f| f.name.text.clone())
+        .collect();
     let mut seeds: Vec<CtorPrefixSeed> = Vec::new();
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Set once the scan has stepped over a statement it did not lift (the
+    // leading `super(...)`, or one that cannot see the fields), with every
+    // bare name those statements mention.
+    let mut stepped = false;
+    let mut stepped_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut stepped_writes: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (i, stmt) in ctor.body.statements.iter().enumerate() {
-        let Stmt::Assign(a) = stmt else { break };
-        if a.op.is_some() {
-            // A compound assignment reads the slot it writes.
-            break;
+        if i == 0 && matches!(stmt, Stmt::SuperCall(..)) {
+            // Lifted into the `__parent` slot; it cannot see this class's
+            // own fields, which do not exist yet.
+            stepped = true;
+            continue;
         }
         // `this.f = expr`, or the bare `f = expr` Java writes for the same
         // field (a parameter of that name shadows the field, and is not it).
-        let name = match &a.target {
-            Expr::Field(f) if matches!(&*f.object, Expr::This(_)) => f.field.text.clone(),
-            Expr::Path(qn) if qn.segments.len() == 1 && instance_names.contains(&qn.segments[0].text) => {
-                qn.segments[0].text.clone()
+        let assign = match stmt {
+            Stmt::Assign(a) if a.op.is_none() => match &a.target {
+                Expr::Field(f) if matches!(&*f.object, Expr::This(_)) => Some((a, f.field.text.clone())),
+                Expr::Path(qn) if qn.segments.len() == 1 && instance_names.contains(&qn.segments[0].text) => {
+                    Some((a, qn.segments[0].text.clone()))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((a, name)) = assign else {
+            // A compound assignment reads the slot it writes, and anything
+            // that can reach the object may read a field before its write.
+            if stmt_cannot_see_fields(stmt, &all_fields, is_method, &mut stepped_names) {
+                stepped = true;
+                collect_stmt_bare_writes(stmt, &mut stepped_writes);
+                continue;
             }
-            _ => break,
+            break;
         };
         if expr_reads_instance_state(&a.value, &instance_names) {
             break;
+        }
+        if stepped {
+            // Only a value that is the same here as at its own statement,
+            // into a slot nothing stepped over has named.
+            let unchanged = match &a.value {
+                Expr::Literal(_) => true,
+                Expr::Path(qn) => {
+                    qn.segments.len() == 1
+                        && param_names.contains(qn.segments[0].text.as_str())
+                        && !stepped_writes.contains(&qn.segments[0].text)
+                }
+                _ => false,
+            };
+            if !unchanged || stepped_names.contains(&name) {
+                // Stays in the body. It writes `name` and reads its value,
+                // so it is stepped over like any other statement or stops
+                // the scan.
+                if stmt_cannot_see_fields(stmt, &all_fields, is_method, &mut stepped_names) {
+                    collect_stmt_bare_writes(stmt, &mut stepped_writes);
+                    stepped_names.insert(name);
+                    continue;
+                }
+                break;
+            }
         }
         if !taken.insert(name.clone()) {
             // Assigned twice in the prefix: the second write has to stay in
@@ -1725,6 +1796,83 @@ pub(crate) fn extract_ctor_prefix_seeds(
         });
     }
     seeds
+}
+
+/// Every single-segment name `stmt` may write: an assignment's or `++`/`--`'s
+/// bare target, and a local it declares (which shadows a parameter from there
+/// on).
+fn collect_stmt_bare_writes(stmt: &Stmt, out: &mut std::collections::HashSet<String>) {
+    match stmt {
+        Stmt::Assign(a) => {
+            if let Expr::Path(qn) = &a.target {
+                if qn.segments.len() == 1 {
+                    out.insert(qn.segments[0].text.clone());
+                }
+            }
+        }
+        Stmt::VarDecl(v) => {
+            out.insert(v.name.text.clone());
+        }
+        _ => {}
+    }
+    crate::worker::walk_stmt(stmt, &mut |e| {
+        if let Expr::IncDec(i) = e {
+            if let Expr::Path(qn) = &*i.target {
+                if qn.segments.len() == 1 {
+                    out.insert(qn.segments[0].text.clone());
+                }
+            }
+        }
+    });
+}
+
+/// Whether a constructor statement is unable to observe the object being
+/// built: it calls no method of the class (through `this` or an implicit
+/// `this`), hands `this` nowhere, captures nothing in a lambda, and is a plain
+/// statement (no `return`, which would leave a later field write unexecuted).
+/// It may read and write the object's FIELDS, as `this.f` or bare: every one it
+/// names is added to `mentions`, and the caller keeps those out of what it
+/// lifts past it.
+fn stmt_cannot_see_fields(
+    stmt: &Stmt,
+    fields: &std::collections::HashSet<String>,
+    is_method: &dyn Fn(&str) -> bool,
+    mentions: &mut std::collections::HashSet<String>,
+) -> bool {
+    if !matches!(stmt, Stmt::Expr(_) | Stmt::Assign(_) | Stmt::VarDecl(_)) {
+        return false;
+    }
+    let mut sees = false;
+    let mut this_nodes = 0usize;
+    let mut field_reads = 0usize;
+    crate::worker::walk_stmt(stmt, &mut |e| match e {
+        Expr::This(_) => this_nodes += 1,
+        Expr::Super(_) | Expr::MethodRef(_) | Expr::Lambda(_) => sees = true,
+        Expr::Field(f) if matches!(&*f.object, Expr::This(_)) => {
+            if fields.contains(&f.field.text) {
+                field_reads += 1;
+                mentions.insert(f.field.text.clone());
+            }
+        }
+        Expr::Call(c) => {
+            if let Expr::Path(qn) = &*c.callee {
+                if qn.segments.len() == 1 && is_method(&qn.segments[0].text) {
+                    sees = true;
+                }
+            }
+            // A field called as a function may hold a closure over `this`.
+            if let Expr::Field(f) = &*c.callee {
+                if matches!(&*f.object, Expr::This(_)) {
+                    sees = true;
+                }
+            }
+        }
+        Expr::Path(qn) if qn.segments.len() == 1 => {
+            mentions.insert(qn.segments[0].text.clone());
+        }
+        _ => {}
+    });
+    !sees && this_nodes == field_reads
 }
 
 pub(crate) fn extract_simple_ctor_inits(
@@ -4647,20 +4795,28 @@ impl crate::RustEmitter {
                     if let Some(m) = class.methods.get(f.field.text.as_str()) {
                         let pty = m.params.get(arg_idx).map(|p| p.ty.clone());
                         // Build param-name → concrete-arg substitution from the
-                        // class's declared generic params zipped with the
-                        // receiver's inferred args, and apply it. Only matters
-                        // on the FIRST hierarchy level (the receiver's own
-                        // class — the recv_args belong to it); ancestor levels
-                        // would need their own arg mapping, which Phase 1
-                        // doesn't track, so we substitute only at depth 0.
-                        if depth == 0 {
+                        // declaring class's generic params and the arguments
+                        // the receiver binds them to. At the receiver's own
+                        // class those are its inferred args; up the chain they
+                        // are composed through each `extends` clause, so
+                        // `Squad<Person>.add(t)` inherited from `Roster<T>`
+                        // converts its argument to `Person`'s element form
+                        // (ERRATA E1XX-GAP39) -- it used to be left unconverted.
+                        let level: Option<(Vec<juxc_ast::TypeParam>, Vec<juxc_tycheck::Ty>)> = if depth == 0 {
+                            Some((class.generic_params.clone(), recv_args.clone()))
+                        } else {
+                            self.resolve_bare_class_fqn(&cname).and_then(|fqn| {
+                                juxc_tycheck::ty::compose_extends_substitution(name, &recv_args, &fqn, &self.symbols)
+                            })
+                        };
+                        if let Some((level_params, level_args)) = level {
                             if let Some(pty) = pty {
                                 let mut subst: std::collections::HashMap<
                                     String,
                                     juxc_ast::TypeRef,
                                 > = std::collections::HashMap::new();
                                 for (param, arg) in
-                                    class.generic_params.iter().zip(recv_args.iter())
+                                    level_params.iter().zip(level_args.iter())
                                 {
                                     if let Some(arg_ref) = ty_to_type_ref(arg) {
                                         subst.insert(param.name.text.clone(), arg_ref);
@@ -4837,6 +4993,48 @@ impl crate::RustEmitter {
         out
     }
 
+    /// The type parameter `R` whose value `expr` is, when `target_ty` names
+    /// another in-scope parameter `K` that `R` reaches through its `extends`
+    /// bounds (`<R extends K>`). See [`IfaceCoercion::ParamInto`].
+    fn param_into_source(&self, target_ty: &TypeRef, expr: &Expr) -> Option<String> {
+        if !target_ty.generic_args.is_empty()
+            || target_ty.name.segments.len() != 1
+            || target_ty.array_shape.is_some()
+            || target_ty.fn_shape.is_some()
+            || target_ty.ptr_depth > 0
+        {
+            return None;
+        }
+        let k = target_ty.name.segments[0].text.as_str();
+        if !self.current_type_params.contains(k) && !self.type_param_bounds.contains_key(k) {
+            return None;
+        }
+        let r = match self.expr_types.get(&crate::exprs::expr_span_of(expr))? {
+            juxc_tycheck::Ty::Param(r) => r.clone(),
+            _ => return None,
+        };
+        if r == k {
+            return None;
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut queue = vec![r.clone()];
+        while let Some(p) = queue.pop() {
+            if !seen.insert(p.clone()) {
+                continue;
+            }
+            for b in self.type_param_bounds.get(&p).into_iter().flatten() {
+                if b.generic_args.is_empty() && b.name.segments.len() == 1 && b.array_shape.is_none() {
+                    let name = b.name.segments[0].text.clone();
+                    if name == k {
+                        return Some(r);
+                    }
+                    queue.push(name);
+                }
+            }
+        }
+        None
+    }
+
     pub(crate) fn iface_coercion_to(
         &self,
         target_ty: &TypeRef,
@@ -4877,6 +5075,9 @@ impl crate::RustEmitter {
         // up through the same `!= None` guard the dyn cases use.
         if self.needs_base_into_upcast(target_ty, expr) {
             return IfaceCoercion::IntoBase;
+        }
+        if let Some(param) = self.param_into_source(target_ty, expr) {
+            return IfaceCoercion::ParamInto { param };
         }
         // **A conditional is judged by its ARMS.** `Shape? s = c ? null : new
         // Square(7.0);` has no type of its own to compare with the slot, so
@@ -5288,6 +5489,17 @@ impl crate::RustEmitter {
                 if clone_first {
                     self.w.push_str(".clone()");
                 }
+            }
+            IfaceCoercion::ParamInto { param } => {
+                // `R` into its bound `K`: the bound itself is written onto the
+                // declaration once its body is known to need it.
+                self.param_into_used.insert(param);
+                self.w.push('(');
+                self.emit_expr(expr);
+                if matches!(expr, Expr::Path(_)) {
+                    self.w.push_str(".clone()");
+                }
+                self.w.push_str(").into()");
             }
             IfaceCoercion::IntoBase => {
                 // Slicing upcast: `(expr).into()` invokes the generated

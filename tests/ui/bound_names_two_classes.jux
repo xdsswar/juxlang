@@ -1,0 +1,13 @@
+// An intersection holds at most one class (E0419): no class extends two.
+class Animal { }
+class Machine { }
+class Dog extends Animal { }
+interface Named { String name(); }
+
+<T extends Animal & Machine> void both(T t) { }
+class Kennel<T extends Animal & Named & Dog> { }
+
+// The class may come after the interfaces: order is not significant.
+<T extends Named & Animal> String fine(T t) { return t.name(); }
+
+public void main() {}

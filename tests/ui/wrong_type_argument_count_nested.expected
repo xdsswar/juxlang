@@ -1,0 +1,4 @@
+wrong_type_argument_count_nested.jux:11:34: [E0443] error: `Pair` takes 2 type arguments (`K`, `V`), but 3 were written in `Pair<int, int, int>`
+wrong_type_argument_count_nested.jux:14:12: [E0443] error: `Holder` takes 1 type argument (`K`), but 2 were written in `Holder<int, int>`
+wrong_type_argument_count_nested.jux:16:11: [E0443] error: `Pair` takes 2 type arguments (`K`, `V`), but 1 was written in `Pair<String>`
+wrong_type_argument_count_nested.jux:19:30: [E0443] error: `Pair` takes 2 type arguments (`K`, `V`), but 1 was written in `Pair<int>`

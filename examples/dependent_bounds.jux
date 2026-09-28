@@ -1,0 +1,173 @@
+// Recursive and dependent bounds (Type system §T.4.6, ERRATA E1XX-GAP39):
+// F-bounded interfaces, ordering through `operator<=>` (Jux has no
+// `Comparable`: ordering is an operator, JUX-CORE-LIB-ADDENDUM), bounds that
+// name other parameters, and generic methods inside generic classes that use
+// or shadow the class's parameters.
+//
+// Rule 4 of §T.4.6 -- `<R extends K>` means every `R` is usable wherever a
+// `K` is expected -- held only for members reached through `K`; storing an
+// `R` where a `K` goes reached rustc as "expected type parameter `K`, found
+// type parameter `R`". A method's own `<T>` shadowing the class's `T` was
+// typed as the class's and reached rustc as "the name `T` is already used".
+
+import rust.std.Vec;
+import rust.std.HashMap;
+
+// A program's own `Ord` is not the Rust trait of the same name.
+interface Ord<T> { int cmp(T other); }
+interface Named { String name(); }
+
+// F-bounded: an entity comparable to itself.
+interface Entity<E extends Entity<E>> extends Ord<E>, Named {}
+
+class Emp implements Entity<Emp> {
+    String n; int rank;
+    Emp(String n, int rank) { this.n = n; this.rank = rank; }
+    public int cmp(Emp o) { return rank - o.rank; }
+    public String name() { return n; }
+}
+
+<T extends Ord<T>> T maxOf(Vec<T> xs) {
+    T best = xs[0];
+    for (T x : xs) { if (x.cmp(best) > 0) { best = x; } }
+    return best;
+}
+
+<E extends Entity<E>> String topName(Vec<E> xs) { return maxOf(xs).name(); }
+
+// Ordering through the operator.
+class Version {
+    int n;
+    Version(int n) { this.n = n; }
+    public int operator <=>(Version o) { return n <=> o.n; }
+    public String operator string() { return "v" + n; }
+}
+
+T biggest<T>(Vec<T> xs) where T has operator<=>(T) -> int {
+    T b = xs[0];
+    for (T x : xs) { if (x <=> b > 0) { b = x; } }
+    return b;
+}
+
+// Bounds naming other parameters.
+interface Holder<K> { K key(); }
+class KeyBox<K> implements Holder<K> { K k; KeyBox(K k) { this.k = k; } public K key() { return k; } }
+
+class Index<K, V extends Holder<K>> {
+    HashMap<K, V> map = new HashMap<K, V>();
+    void add(V v) { map.insert(v.key(), v); }
+    int size() { return (int) map.len(); }
+    K firstKey(Vec<V> vs) { return vs[0].key(); }
+}
+
+<K, V extends Holder<K>> K keyOf(V v) { return v.key(); }
+
+// Generic methods in a generic class: using, shadowing and extending `T`.
+class Shelf<T> {
+    Vec<T> items = new Vec<T>();
+    void put(T t) { items.push(t); }
+    <R> Vec<R> mapAll((T) -> R f) { Vec<R> out = new Vec<R>(); for (T t : items) { out.push(f(t)); } return out; }
+    <T> T echo(T t) { return t; }
+    <U extends T> void putSub(U u) { items.push(u); }
+    static <S> Shelf<S> of(S a, S b) { Shelf<S> s = new Shelf<S>(); s.put(a); s.put(b); return s; }
+}
+
+// A method parameter bounded by a class parameter, and a class parameter
+// bounded by another.
+class Pet implements Named { String n; Pet(String n) { this.n = n; } public String name() { return n; } }
+class Cat extends Pet { Cat(String n) { super(n); } @Override public String name() { return "cat " + n; } }
+
+class Zoo<A extends Named> {
+    Vec<A> members = new Vec<A>();
+    <R extends A> String admit(R r) { members.push(r); return r.name(); }
+}
+
+class Chain<K, V extends K> {
+    Vec<K> keys = new Vec<K>();
+    void addV(V v) { keys.push(v); }
+    K firstKey() { return keys[0]; }
+}
+
+// The same in a free function and in an interface's default method.
+<K, V extends K> K widen(V v) { return v; }
+<K, V extends K> Vec<K> gather(V a, V b) { Vec<K> out = new Vec<K>(); out.push(a); out.push(b); return out; }
+
+interface Store<K> {
+    Vec<K> items();
+    default <V extends K> int addAll(Vec<V> vs) { for (V v : vs) { items().push(v); } return (int) items().len(); }
+}
+class PetStore implements Store<Pet> {
+    Vec<Pet> ps = new Vec<Pet>();
+    public Vec<Pet> items() { return ps; }
+}
+
+// A generic static factory, and a generic method returning a new shape.
+class Pair<A, B> {
+    public A a; public B b;
+    public Pair(A a, B b) { this.a = a; this.b = b; }
+    public static <X, Y> Pair<X, Y> of(X x, Y y) { return new Pair<X, Y>(x, y); }
+    public <C> Pair<A, C> withB(C c) { return new Pair<A, C>(a, c); }
+}
+
+public void main() {
+    Vec<Emp> es = new Vec<Emp>();
+    es.push(new Emp("a", 3));
+    es.push(new Emp("b", 9));
+    es.push(new Emp("c", 5));
+    print(maxOf(es).name());
+    print(topName(es));
+
+    Vec<Version> vs = new Vec<Version>();
+    vs.push(new Version(2)); vs.push(new Version(7)); vs.push(new Version(4));
+    print(biggest(vs));
+    Vec<int> is = new Vec<int>(); is.push(4); is.push(11); is.push(1);
+    print(biggest(is));
+
+    Index<String, KeyBox<String>> ix = new Index<String, KeyBox<String>>();
+    ix.add(new KeyBox<String>("x"));
+    ix.add(new KeyBox<String>("y"));
+    print(ix.size());
+    Vec<KeyBox<String>> kb = new Vec<KeyBox<String>>();
+    kb.push(new KeyBox<String>("first"));
+    print(ix.firstKey(kb));
+    print(keyOf<String, KeyBox<String>>(new KeyBox<String>("k1")));
+
+    Shelf<int> sh = new Shelf<int>();
+    sh.put(2); sh.put(3);
+    Vec<String> strs = sh.mapAll((int x) -> "n" + x);
+    print(strs.len());
+    print(strs[1]);
+    print(sh.echo("shadow"));
+    sh.putSub(9);
+    print(sh.items.len());
+    Shelf<String> s2 = Shelf.of("p", "q");
+    print(s2.items[1]);
+
+    Zoo<Pet> z = new Zoo<Pet>();
+    print(z.admit(new Cat("tom")));
+    print(z.admit(new Pet("rex")));
+    print(z.members.len());
+    Chain<int, int> ch = new Chain<int, int>();
+    ch.addV(5);
+    print(ch.firstKey());
+
+    Pet p = widen<Pet, Cat>(new Cat("kit"));
+    print(p.name());
+    long l = widen<long, long>(5L);
+    print(l);
+    Vec<Pet> both = gather<Pet, Cat>(new Cat("a"), new Cat("b"));
+    print(both[1].name());
+    PetStore st = new PetStore();
+    Vec<Cat> cats = new Vec<Cat>(); cats.push(new Cat("x")); cats.push(new Cat("y"));
+    print(st.addAll(cats));
+    Vec<Pet> pets = new Vec<Pet>(); pets.push(new Pet("p"));
+    print(st.addAll(pets));
+    print(st.ps[2].name());
+
+    var pr = Pair.of("a", 1);
+    var q = pr.withB(2.5);
+    print(q.a + q.b);
+    Pair<String, Vec<Pair<int, int>>> deep = Pair.of("d", new Vec<Pair<int, int>>());
+    deep.b.push(Pair.of(1, 2));
+    print(deep.b[0].b);
+}

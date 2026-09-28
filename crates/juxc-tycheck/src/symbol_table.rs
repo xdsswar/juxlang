@@ -3495,6 +3495,27 @@ fn check_final_and_sealed_extends(table: &SymbolTable, diagnostics: &mut Vec<Dia
             // Else: unknown name — resolver E0301 covers it.
             continue;
         };
+        // A Rust type is final to Jux (ERRATA E1XX-GAP39): its methods are
+        // the crate's, and there is nothing for a subclass to extend. It used
+        // to be refused as E0429 listing every method of the type as one the
+        // class "doesn't implement".
+        if parent.is_external && !child.is_external {
+            let parent_bare = fqn_bare(parent_name);
+            diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0420_FinalClassExtended,
+                    format!(
+                        "class `{}` cannot extend `{parent_bare}`: `{parent_name}` is a Rust type, and a Rust type cannot be extended",
+                        fqn_bare(child_name),
+                    ),
+                )
+                .with_span(extends.span)
+                .with_help(format!(
+                    "hold a `{parent_bare}` in a field and give the class the methods it needs, delegating to it"
+                )),
+            );
+            continue;
+        }
         if parent.is_final {
             diagnostics.push(
                 Diagnostic::error(
@@ -4314,6 +4335,11 @@ fn check_abstract_methods_implemented(table: &SymbolTable, diagnostics: &mut Vec
             let Some(ancestor) = table.classes.get(ancestor_name) else {
                 break;
             };
+            // A Rust ancestor is refused as E0420; its body-less stub methods
+            // are signatures, not members owed.
+            if ancestor.is_external && !class.is_external {
+                break;
+            }
             for (m_name, m_sig) in &ancestor.methods {
                 if !m_sig.is_abstract || m_sig.is_static {
                     continue;
@@ -4705,7 +4731,26 @@ pub fn polymorphic_base_bare_names(table: &SymbolTable) -> std::collections::Has
 /// type parameters makes that trait not object-safe (rustc `E0038`). Mirrors
 /// the interface object-safety rule E0435.
 fn check_polymorphic_base_generic_methods(table: &SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
-    let bases = polymorphic_base_bare_names(table);
+    let mut bases = polymorphic_base_bare_names(table);
+    // A GENERIC class that is extended dispatches through its `Kind` trait
+    // too (`Shape<T>` with `class Sq extends Shape<double>`), and a generic
+    // method there reached rustc as "cannot find type `R`" (ERRATA
+    // E1XX-GAP39). `polymorphic_base_bare_names` leaves generic classes out
+    // for its other callers, so they are added for this check alone.
+    for (fqn, sig) in &table.classes {
+        let bare = fqn.rsplit('.').next().unwrap_or(fqn);
+        if sig.is_final || sig.is_external || sig.generic_params.is_empty() {
+            continue;
+        }
+        let extended = table.classes.values().any(|c| {
+            c.extends_fqn.as_deref().map(|f| f.rsplit('.').next().unwrap_or(f)) == Some(bare)
+                || (c.extends_fqn.is_none()
+                    && c.extends.as_ref().and_then(|t| t.name.segments.last()).map(|s| s.text.as_str()) == Some(bare))
+        });
+        if extended {
+            bases.insert(bare.to_string());
+        }
+    }
     if bases.is_empty() {
         return;
     }
@@ -4719,7 +4764,9 @@ fn check_polymorphic_base_generic_methods(table: &SymbolTable, diagnostics: &mut
             .methods
             .iter()
             .filter(|(_, m)| !m.is_static && !m.generic_params.is_empty())
-            .filter(|(_, m)| matches!(m.visibility, Visibility::Public | Visibility::Protected))
+            // Every visibility but `private` is reachable through the base's
+            // dispatch trait (package-private included, which was missed).
+            .filter(|(_, m)| !matches!(m.visibility, Visibility::Private))
             .map(|(name, _)| name)
             .collect();
         offenders.sort();
@@ -4728,13 +4775,20 @@ fn check_polymorphic_base_generic_methods(table: &SymbolTable, diagnostics: &mut
                 Diagnostic::error(
                     code::Code::E0438_GenericVirtualMethod,
                     format!(
-                        "class `{bare}` is a polymorphic base (it's extended), so its virtual \
-                         method `{name}` would dispatch through a `dyn` trait object -- but `{name}` \
-                         has generic type parameters, which isn't object-safe; make it non-generic, \
-                         mark it `final`, or seal the hierarchy",
+                        "class `{bare}` is extended, so its method `{name}` is called through \
+                         whichever subclass the object is -- and `{name}` has type parameters of its \
+                         own, which a method reached that way cannot have in this version of Jux",
                     ),
                 )
-                .with_span(sig.span),
+                .with_span(sig.span)
+                // `final` and `sealed` used to be offered here. Neither
+                // changes how the method is reached, so neither helped
+                // (ERRATA E1XX-GAP39).
+                .with_help(format!(
+                    "make `{name}` non-generic (a type parameter of the class can take the place \
+                     of the method's), make it `private`, or make it a `static` method that takes \
+                     the object as a parameter"
+                )),
             );
         }
     }

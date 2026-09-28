@@ -1,0 +1,2 @@
+bound_names_two_classes.jux:7:21: [E0419] error: `T` is bounded by two classes, `Animal` and `Machine`, and no type extends both: a class extends exactly one class (§T.4.6)
+bound_names_two_classes.jux:8:41: [E0419] error: `T` is bounded by two classes, `Animal` and `Dog`, and `Dog` already extends `Animal`

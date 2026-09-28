@@ -1,0 +1,1 @@
+extends_foreign_type.jux:5:21: [E0420] error: class `MyVec` cannot extend `Vec`: `rust.std.Vec` is a Rust type, and a Rust type cannot be extended

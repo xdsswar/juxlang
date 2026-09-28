@@ -1,0 +1,137 @@
+// Generic supertypes (ERRATA E1XX-GAP39): a class that extends a generic
+// class over a nested argument and implements generic interfaces, a generic
+// interface hierarchy, an interface implemented for concrete arguments, and
+// subclasses that fix a parameter.
+//
+// Three of these used to reach rustc:
+// - a constructor that calls `super(...)` and then does something else
+//   before assigning a field of a type parameter (`U::default()`);
+// - an inherited method whose body builds its own class (`new Box<T>(nv)`
+//   copied into `IntBox extends Box<int>` still said `T`);
+// - an inherited method taking a `T` called on a subclass whose argument is
+//   an extended class (`Squad<Person>.add(new Student(..))`).
+
+import rust.std.Vec;
+
+class Pair<K, V> {
+    public K k; public V v;
+    public Pair(K k, V v) { this.k = k; this.v = v; }
+    public String operator string() { return "(" + k + ", " + v + ")"; }
+}
+
+class B<X> {
+    public X x;
+    public B(X x) { this.x = x; }
+    public X getX() { return x; }
+    public String describe() { return "B[" + x + "]"; }
+}
+
+interface I<E> { E sample(); int count(); }
+interface J<U> { U last(); default String tagJ() { return "J:" + last(); } }
+
+class A<T, U> extends B<Pair<T, U>> implements I<Vec<T>>, J<U> {
+    Vec<T> ts = new Vec<T>();
+    U u;
+    public A(T t, U u) { super(new Pair<T, U>(t, u)); ts.push(t); this.u = u; }
+    public Vec<T> sample() { return ts; }
+    public int count() { return (int) ts.len(); }
+    public U last() { return u; }
+    @Override public String describe() { return "A:" + super.describe(); }
+}
+
+// A generic interface hierarchy.
+interface I1<T> { T one(); default String showOne() { return "one=" + one(); } }
+interface I2<T> extends I1<Pair<T, T>> { T left(); }
+interface I3<T, S> extends I2<T> { S extra(); }
+
+class Twin<T> implements I3<T, String> {
+    T a; T b;
+    Twin(T a, T b) { this.a = a; this.b = b; }
+    public Pair<T, T> one() { return new Pair<T, T>(a, b); }
+    public T left() { return a; }
+    public String extra() { return "x"; }
+}
+
+// A generic interface implemented for concrete arguments.
+interface Conv<F, G> { G conv(F f); default G twice(F f) { conv(f); return conv(f); } }
+class IntToStr implements Conv<int, String> {
+    int calls = 0;
+    public String conv(int f) { calls += 1; return "#" + f; }
+}
+
+// Subclasses that fix a parameter.
+class Box<T> {
+    public T v;
+    public Box(T v) { this.v = v; }
+    public T get() { return v; }
+    public Box<T> with(T nv) { return new Box<T>(nv); }
+    public String show() { return "Box(" + v + ")"; }
+}
+class IntBox extends Box<int> {
+    public IntBox(int v) { super(v); }
+    @Override public int get() { return v * 10; }
+    @Override public String show() { return "IntBox(" + v + ")"; }
+    public int plus(int o) { return get() + o; }
+}
+class PairBox<P> extends Box<Pair<P, int>> {
+    public PairBox(P p, int n) { super(new Pair<P, int>(p, n)); }
+    public int num() { return v.v; }
+}
+
+// A method inherited through a generic base, over an extended class.
+class Person { String n; Person(String n) { this.n = n; } public String name() { return n; } }
+class Student extends Person { Student(String n) { super(n); } @Override public String name() { return "st:" + n; } }
+class Roster<T> { Vec<T> xs = new Vec<T>(); void add(T t) { xs.push(t); } T first() { return xs[0]; } }
+class Squad<T> extends Roster<T> { int n() { return (int) xs.len(); } }
+
+String viaB(B<Pair<String, int>> b) { return b.describe() + " x=" + b.getX(); }
+int viaI(I<Vec<String>> i) { return i.count() + (int) i.sample().len(); }
+String viaJ(J<int> j) { return j.tagJ(); }
+double useBox(Box<int> b) { return b.get() + 0.5; }
+
+public void main() {
+    A<String, int> a = new A<String, int>("s", 9);
+    print(a.describe());
+    print(a.getX().k + a.getX().v);
+    print((int) a.sample().len() + a.count());
+    print(a.last() + 1);
+    print(a.tagJ());
+    print(viaB(a));
+    print(viaI(a));
+    print(viaJ(a));
+
+    Twin<int> tw = new Twin<int>(1, 2);
+    print(tw.showOne());
+    print(tw.one().k + tw.one().v + tw.left());
+    I2<int> i2 = tw;
+    print(i2.left());
+    I1<Pair<int, int>> i1 = tw;
+    print(i1.showOne());
+
+    IntToStr c = new IntToStr();
+    print(c.twice(4));
+    print(c.calls);
+    Conv<int, String> cv = c;
+    print(cv.conv(5));
+
+    IntBox ib = new IntBox(3);
+    print(ib.get());
+    print(ib.plus(2));
+    print(ib.show());
+    print(useBox(ib));
+    Box<int> asBox = ib;
+    print(asBox.get());
+    print(asBox.show());
+    print(ib.with(8).get());
+    PairBox<String> pb = new PairBox<String>("p", 5);
+    print(pb.num() + pb.get().v);
+    print(pb.show());
+
+    Squad<Person> s = new Squad<Person>();
+    s.add(new Person("e"));
+    s.add(new Student("f"));
+    print(s.first().name() + s.xs[1].name() + s.n());
+    Roster<Person> rs = s;
+    rs.add(new Student("g"));
+    print(rs.xs[2].name());
+}
