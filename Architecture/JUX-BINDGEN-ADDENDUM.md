@@ -400,6 +400,49 @@ A method whose result borrows its receiver is marked on the stub: `@RustRefOut` 
 
 `Self` in a member signature is replaced by the owning type while the stub is generated. A stub file has no `impl` for `Self` to refer to.
 
+### G.5.4f. Associated Functions and Constants of a Trait Impl
+
+A type has the associated functions and constants of its trait impls as well
+as its inherent ones: `Duration::default()`, `String::from("x")`,
+`u32::from_str("12")`, a crate trait's `Clock::origin()` and `Clock::STEP`.
+Each is a static member of the type's stub, marked with the trait it comes
+from, and called on the type like any static:
+
+```jux
+public class Clock implements Tick {
+    @RustTrait("c3fix::Tick") public static final u32 STEP;
+    @RustTrait("c3fix::Tick") public static Clock origin();
+    @RustTrait("std::default::Default") public static Clock default();
+    @RustTrait("std::str::FromStr") public static Clock from_str(&String s) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static Clock from(u32 t);
+    @RustTrait("std::convert::From<_>") public static Clock from(bool b);
+}
+```
+
+- **Which impls.** One written for the type itself, not a blanket, synthetic
+  or negative impl, of a trait the program's crate can name and means: the
+  crate's own traits, and the standard library's construction and conversion
+  traits `Default`, `From`, `TryFrom` and `FromStr` (the others are marker
+  traits, operating-system extensions or unstable). A third crate's trait is
+  left out, since the program may not depend on it. Only members without a
+  receiver: a trait's instance methods reach the type through `implements`.
+  A name the type's inherent impls declare stays theirs, as in Rust, and a
+  generic associated function (`from_iter<I>`) is left out.
+- **Signatures.** The impl's own: `Self` is the type, and an error that is the
+  impl's associated type (`Result<Self, Self::Err>`) is that type
+  (`throws ParseIntError`), or nothing when it is `Infallible`. One Jux
+  signature is kept per name: `From<&str>` and `From<String>` are both
+  `from(String)`; distinct ones overload.
+- **Primitives.** A primitive's are on its `@RustPrimitive` class, including
+  those `core` implements (`impl FromStr for u32`), and are called on the
+  primitive's name: `u32.from_str("12")`, `u32.from(small)`.
+- **Lowering.** `<Type as Trait>::f(..)` and `<Type as Trait>::CONST`, with
+  `_` for the trait's type arguments (`<String as std::convert::From<_>>::from`),
+  so Rust's own impl selection picks among the overloads.
+- **What the program sees.** The member, under the type's name. The trait's
+  name appears in no diagnostic, hover or completion; the marker is the
+  stub's.
+
 ### G.5.5. Free Functions
 
 A Rust free function (module-level, no associated type) maps to a Jux **free function** (§7.17), preserving the procedural style:

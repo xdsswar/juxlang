@@ -1,0 +1,13 @@
+// A did-you-mean suggests members of the kind the call can reach (sweep C3):
+// a call on a value, only instance members; a call on a type, only statics,
+// including the statics a type has through a trait impl and a primitive's.
+import rust.std.Duration;
+
+void main() {
+    var d = Duration.from_secs(2);
+    print(d.from_sec(1));
+    print(Duration.as_sec());
+    print(Duration.defualt());
+    var n = u32.from_strr("12");
+    var m = u32.nonsense(3);
+}

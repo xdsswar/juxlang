@@ -607,6 +607,11 @@ impl RustEmitter {
     }
 
     pub(crate) fn call_is_foreign_result(&self, call: &CallExpr) -> bool {
+        // `u32.from_str("12")` is the static of the primitive's stub class
+        // (sweep C3), and answers as that call does.
+        if let Some((rewritten, _)) = juxc_tycheck::infer::primitive_static_as_class_call(call, &self.symbols, false) {
+            return self.call_is_foreign_result(&rewritten);
+        }
         match &*call.callee {
             // Free function `f(args)` — exact key, else last-segment match for an
             // imported foreign fn keyed by its full `rust.<crate>.<fn>` path.
@@ -881,6 +886,27 @@ impl RustEmitter {
         self.w.push('}');
     }
 
+    /// The trait a foreign class's static `name` comes from, when the stub
+    /// marks it `@RustTrait("...")` (sweep C3): the overload the checker
+    /// picked for the call at `span`, else the plain member.
+    pub(crate) fn static_trait_impl(&self, class_fqn: &str, name: &str, span: juxc_source::Span) -> Option<String> {
+        let class = self.symbols.classes.get(class_fqn)?;
+        let pick = self.symbols.method_selections.get(&span).copied().unwrap_or(0);
+        let sig = class
+            .method_overloads
+            .get(name)
+            .and_then(|group| group.get(pick))
+            .or_else(|| class.methods.get(name))?;
+        crate::exprs::field::rust_trait_annotation(&sig.annotations)
+    }
+
+    /// The trait a foreign class's static FIELD `name` (an associated
+    /// constant) comes from, when the stub marks it `@RustTrait` (sweep C3).
+    pub(crate) fn static_field_trait_impl(&self, class_fqn: &str, name: &str) -> Option<String> {
+        let field = self.symbols.classes.get(class_fqn)?.fields.get(name)?;
+        crate::exprs::field::rust_trait_annotation(&field.annotations)
+    }
+
     /// Lower `Result.from(f)` (EXCEPTIONS §X.5.4), the compiler intrinsic.
     ///
     /// ```text
@@ -1021,6 +1047,13 @@ impl RustEmitter {
         // a keyword, so no local or class can shadow it.
         if juxc_tycheck::infer::primitive_static_call_type(call).is_some() {
             self.emit_primitive_static_call(call);
+            return;
+        }
+        // `u32.from_str("12")`: the static call of the primitive's stub class,
+        // lowered through its real path (`u32`) like any foreign static
+        // (sweep C3). A primitive's name is a keyword, so nothing shadows it.
+        if let Some((rewritten, _)) = juxc_tycheck::infer::primitive_static_as_class_call(call, &self.symbols, false) {
+            self.emit_call(&rewritten);
             return;
         }
         // A call THROUGH a function pointer (Layout-ABI §L.6.4), recognised by
@@ -2654,16 +2687,31 @@ impl RustEmitter {
                         let lift_to_free_fn = class_is_generic
                             && !f.field.text.starts_with("__")
                             && external_real.is_none();
-                        if let Some(real) = external_real {
-                            self.w.push_str(&real);
+                        // A static the foreign type has only through a trait
+                        // impl (`@RustTrait`, sweep C3) is called through the
+                        // trait: `<std::time::Duration as
+                        // std::default::Default>::default()`. The trait's
+                        // own dispatch picks among its impls (`From<_>`), so
+                        // no overload suffix is written.
+                        let via_trait = external_real
+                            .as_ref()
+                            .and_then(|_| self.static_trait_impl(&class_fqn, &f.field.text, call.span));
+                        if let (Some(real), Some(tr)) = (&external_real, &via_trait) {
+                            self.w.push_str(&format!("<{real} as {tr}>::"));
+                            self.w.push_str(&to_rust_ident(&f.field.text));
+                            let _ = self.take_method_suffix();
                         } else {
-                            self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
-                        }
-                        // Free-fn form joins with `_`; associated form with `::`.
-                        self.w.push_str(if lift_to_free_fn { "_" } else { "::" });
-                        self.w.push_str(&to_rust_ident(&f.field.text));
-                        if let Some(sfx) = self.take_method_suffix() {
-                            self.w.push_str(&sfx);
+                            if let Some(real) = external_real {
+                                self.w.push_str(&real);
+                            } else {
+                                self.emit_fqn_path_in_rust(&class_fqn, qn.segments.len() > 1);
+                            }
+                            // Free-fn form joins with `_`; associated form with `::`.
+                            self.w.push_str(if lift_to_free_fn { "_" } else { "::" });
+                            self.w.push_str(&to_rust_ident(&f.field.text));
+                            if let Some(sfx) = self.take_method_suffix() {
+                                self.w.push_str(&sfx);
+                            }
                         }
                         self.w.push('(');
                         // Args of a regular call consume their values

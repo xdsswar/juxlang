@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 47
+// juxc rust.std stub cache-version 48
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -79,6 +79,9 @@ public class Arc<T, A> implements ToOwned, ToString {
     @RustRefOut public static T? get_mut(&mut Arc this);
     public T downcast<T>() throws Arc;
     public unsafe T downcast_unchecked<T>();
+    @RustTrait("std::default::Default") public static T default();
+    @RustTrait("std::convert::From<_>") public static Arc from(T t);
+    @RustTrait("std::convert::From<_>") public static B from(Cow<B> cow);
 }
 
 /** An iterator over the arguments of a process, yielding a [`String`] value for */
@@ -188,6 +191,8 @@ public class AssertUnwindSafe<T> {
     public T _0;
     @RustTuple public AssertUnwindSafe(T _0);
     @RustDefault public AssertUnwindSafe();
+    @RustTrait("std::default::Default") public static AssertUnwindSafe default();
+    @RustTrait("std::convert::From<_>") public static AssertUnwindSafe from(T value);
 }
 
 /** An ordered map based on a [B-Tree]. */
@@ -238,6 +243,8 @@ public class BTreeMap<K, V, A> implements ToOwned {
     @MutSelf @RustBorrowsSelf @RustBounds("K: Borrow, K: Ord") public CursorMut<K, V, A> lower_bound_mut<Q>(Bound<Q> bound);
     @RustBorrowsSelf @RustBounds("K: Borrow, K: Ord") public Cursor<K, V> upper_bound<Q>(Bound<Q> bound);
     @MutSelf @RustBorrowsSelf @RustBounds("K: Borrow, K: Ord") public CursorMut<K, V, A> upper_bound_mut<Q>(Bound<Q> bound);
+    @RustTrait("std::default::Default") public static BTreeMap<K, V> default();
+    @RustTrait("std::convert::From<_>") public static BTreeMap from((K, V)[] arr);
 }
 
 /** An ordered set based on a B-Tree. */
@@ -276,6 +283,8 @@ public class BTreeSet<T, A> implements ToOwned {
     @RustBorrowsSelf public Iter<T> iter();
     public uint len();
     public bool is_empty();
+    @RustTrait("std::convert::From<_>") public static BTreeSet from(T[] arr);
+    @RustTrait("std::default::Default") public static BTreeSet<T> default();
 }
 
 /** A captured OS thread stack backtrace. */
@@ -341,6 +350,9 @@ public class BinaryHeap<T, A> implements ToOwned {
     public bool is_empty();
     @MutSelf @RustBorrowsSelf public Drain<T, A> drain();
     @MutSelf public void clear();
+    @RustTrait("std::default::Default") public static BinaryHeap<T> default();
+    @RustTrait("std::convert::From<_>") public static BinaryHeap<T, A> from(Vec<T> vec);
+    @RustTrait("std::convert::From<_>") public static BinaryHeap from(T[] arr);
 }
 
 /** A borrowed file descriptor. */
@@ -413,6 +425,8 @@ public class Box<T, A> implements RustIterator, ToOwned, ToString {
     @RustRefOut public static T leak(Box b);
     public static Pin<Box> into_pin(Box boxed);
     @MutSelf public I.Item? next();
+    @RustTrait("std::convert::From<_>") public static Box from(T t);
+    @RustTrait("std::default::Default") public static Box default();
 }
 
 /** A `BufRead` is a type of `Read`er which has an internal buffer, allowing it */
@@ -534,6 +548,11 @@ public class CString implements ToOwned {
     @RustRefOut public ubyte[] to_bytes();
     @RustRefOut public ubyte[] to_bytes_with_nul();
     @RustRefOut public String to_str() throws Utf8Error;
+    @RustTrait("std::default::Default") public static CString default();
+    @RustTrait("std::convert::From<_>") public static CString from(Cow<CStr> s);
+    @RustTrait("std::convert::From<_>") public static CString from(@RustBox CStr s);
+    @RustTrait("std::convert::From<_>") public static CString from(Vec<NonZero<ubyte>> v);
+    @RustTrait("std::str::FromStr") public static CString from_str(&String s) throws NulError;
 }
 
 /** An iterator over the [`char`]s of a string slice, and their positions. */
@@ -581,6 +600,8 @@ public interface ChildExt {
 @RustDebug
 @RustFrom("OwnedFd,OwnedHandle")
 public class ChildStderr implements AsFd, AsHandle, AsRawFd, AsRawHandle, IntoRawFd, IntoRawHandle, Read {
+    @RustTrait("std::convert::From<_>") public static ChildStderr from(OwnedFd fd);
+    @RustTrait("std::convert::From<_>") public static ChildStderr from(OwnedHandle handle);
 }
 
 /** A handle to a child process's standard input (stdin). */
@@ -588,6 +609,8 @@ public class ChildStderr implements AsFd, AsHandle, AsRawFd, AsRawHandle, IntoRa
 @RustDebug
 @RustFrom("OwnedFd,OwnedHandle")
 public class ChildStdin implements AsFd, AsHandle, AsRawFd, AsRawHandle, IntoRawFd, IntoRawHandle, Write {
+    @RustTrait("std::convert::From<_>") public static ChildStdin from(OwnedFd fd);
+    @RustTrait("std::convert::From<_>") public static ChildStdin from(OwnedHandle handle);
 }
 
 /** A handle to a child process's standard output (stdout). */
@@ -595,6 +618,8 @@ public class ChildStdin implements AsFd, AsHandle, AsRawFd, AsRawHandle, IntoRaw
 @RustDebug
 @RustFrom("OwnedFd,OwnedHandle")
 public class ChildStdout implements AsFd, AsHandle, AsRawFd, AsRawHandle, IntoRawFd, IntoRawHandle, Read {
+    @RustTrait("std::convert::From<_>") public static ChildStdout from(OwnedFd fd);
+    @RustTrait("std::convert::From<_>") public static ChildStdout from(OwnedHandle handle);
 }
 
 /** An iterator over slice in (non-overlapping) chunks separated by a predicate. */
@@ -652,6 +677,7 @@ public class ChunksMut<T> implements RustIterator {
 public class Cloned<I> implements RustIterator {
     @RustDefault public Cloned();
     @MutSelf public T? next();
+    @RustTrait("std::default::Default") public static Cloned default();
 }
 
 /** A process builder, providing fine-grained control */
@@ -741,6 +767,7 @@ public class Condvar {
     @RustClosureRefs("2") public (MutexGuard<T>, WaitTimeoutResult) wait_timeout_while<T, F>(MutexGuard<T> guard, Duration dur, (T) -> bool condition) throws PoisonError<T>;
     public void notify_one();
     public void notify_all();
+    @RustTrait("std::default::Default") public static Condvar default();
 }
 
 /** An iterator that copies the elements of an underlying iterator. */
@@ -751,6 +778,7 @@ public class Condvar {
 public class Copied<I> implements RustIterator {
     @RustDefault public Copied();
     @MutSelf public T? next();
+    @RustTrait("std::default::Default") public static Copied default();
 }
 
 /** A clone-on-write smart pointer. */
@@ -846,6 +874,7 @@ public class DecodeUtf16<I> implements RustIterator {
 @RustDefault
 public class DefaultHasher implements ToOwned {
     public DefaultHasher();
+    @RustTrait("std::default::Default") public static DefaultHasher default();
 }
 
 /** A lazy iterator producing elements in the difference of `BTreeSet`s. */
@@ -966,6 +995,7 @@ public class Duration {
     public float div_duration_f32(Duration rhs);
     public static Duration try_from_secs_f32(float secs) throws TryFromFloatSecsError;
     public static Duration try_from_secs_f64(double secs) throws TryFromFloatSecsError;
+    @RustTrait("std::default::Default") public static Duration default();
 }
 
 @rust("std::env::consts::EXE_EXTENSION")
@@ -981,6 +1011,7 @@ public const String EXE_SUFFIX;
 @RustDefault
 public class Empty {
     @RustDefault public Empty();
+    @RustTrait("std::default::Default") public static Empty default();
 }
 
 /** An iterator of [`u16`] over the string encoded as UTF-16. */
@@ -1024,6 +1055,7 @@ public enum Entry<K, V, A> {
 public class Enumerate<I> implements RustIterator {
     @RustDefault public Enumerate();
     @MutSelf public (uint, I.Item)? next();
+    @RustTrait("std::default::Default") public static Enumerate default();
 }
 
 /** The error type for I/O operations of the [`Read`], [`Write`], [`Seek`], and */
@@ -1041,6 +1073,11 @@ public class Error implements ToString {
     public Error? into_inner();
     public E downcast<E>() throws Error;
     public ErrorKind kind();
+    @RustTrait("std::convert::From<_>") public static Error from(TryLockError err);
+    @RustTrait("std::convert::From<_>") public static Error from(IntoInnerError<W> iie);
+    @RustTrait("std::convert::From<_>") public static Error from(NulError _);
+    @RustTrait("std::convert::From<_>") public static Error from(TryReserveError _);
+    @RustTrait("std::convert::From<_>") public static Error from(ErrorKind kind);
 }
 
 /** A list specifying general categories of I/O error. */
@@ -1072,6 +1109,8 @@ public class ExitCode implements ExitCodeExt, Termination, ToOwned {
     public static final ExitCode SUCCESS;
     public static final ExitCode FAILURE;
     @RustDefault public ExitCode();
+    @RustTrait("std::default::Default") public static ExitCode default();
+    @RustTrait("std::convert::From<_>") public static ExitCode from(ubyte code);
 }
 
 /** Describes the result of a process after it has terminated. */
@@ -1085,6 +1124,8 @@ public class ExitStatus implements ExitStatusExt, ToOwned, ToString {
     @RustDefault public ExitStatus();
     public bool success();
     public i32? code();
+    @RustTrait("std::default::Default") public static ExitStatus default();
+    @RustTrait("std::convert::From<_>") public static ExitStatus from(ExitStatusError error);
 }
 
 /** Unix-specific extensions to [`process::ExitStatus`] and */
@@ -1130,6 +1171,8 @@ public class File implements AsFd, AsHandle, AsRawFd, AsRawHandle, FileExt, From
     public void set_permissions(Permissions perm) throws Error;
     public void set_times(FileTimes times) throws Error;
     public void set_modified(SystemTime time) throws Error;
+    @RustTrait("std::convert::From<_>") public static File from(OwnedHandle owned);
+    @RustTrait("std::convert::From<_>") public static File from(OwnedFd owned_fd);
 }
 
 /** Unix-specific extensions to [`fs::File`]. */
@@ -1154,6 +1197,7 @@ public class FileTimes implements FileTimesExt, ToOwned {
     public FileTimes();
     public FileTimes set_accessed(SystemTime t);
     public FileTimes set_modified(SystemTime t);
+    @RustTrait("std::default::Default") public static FileTimes default();
 }
 
 /** OS-specific extensions to [`fs::FileTimes`]. */
@@ -1215,6 +1259,7 @@ public class FlatMap<I, U, F> implements RustIterator {
 public class Flatten<I> implements RustIterator {
     @RustDefault public Flatten();
     @MutSelf public U.Item? next();
+    @RustTrait("std::default::Default") public static Flatten default();
 }
 
 /** A classification of floating point numbers. */
@@ -1316,6 +1361,7 @@ public class FromVecWithNulError implements ToOwned, ToString {
 public class Fuse<I> implements RustIterator {
     @RustDefault public Fuse();
     @MutSelf public I.Item? next();
+    @RustTrait("std::default::Default") public static Fuse default();
 }
 
 /** The error type returned by [`get_disjoint_mut`][`slice::get_disjoint_mut`]. */
@@ -1390,6 +1436,7 @@ public class HashMap<K, V, S, A> implements ToOwned {
     @MutSelf @RustBorrowsSelf @RustRefOut public V try_insert(K key, V value) throws OccupiedError<K, V, A>;
     @MutSelf @RustBounds("K: Borrow") public V? remove<Q>(&Q k);
     @MutSelf @RustBounds("K: Borrow") public (K, V)? remove_entry<Q>(&Q k);
+    @RustTrait("std::default::Default") public static HashMap<K, V> default();
 }
 
 /** A [hash set] implemented as a `HashMap` where the value is `()`. */
@@ -1430,6 +1477,7 @@ public class HashSet<T, S, A> implements ToOwned {
     @MutSelf public T? replace(T value);
     @MutSelf @RustBounds("T: Borrow") public bool remove<Q>(&Q value);
     @MutSelf @RustBounds("T: Borrow") public T? take<Q>(&Q value);
+    @RustTrait("std::default::Default") public static HashSet<T> default();
 }
 
 /** An iterator that infinitely [`accept`]s connections on a [`TcpListener`]. */
@@ -1500,6 +1548,7 @@ public class IntoIter<T, A> implements RustIterator, ToOwned {
     @RustDefault public IntoIter();
     @RustRefOut public A allocator();
     @MutSelf public T? next();
+    @RustTrait("std::default::Default") public static IntoIter default();
 }
 
 @rust("std::collections::IntoIterSorted")
@@ -1517,6 +1566,7 @@ public class IntoIterSorted<T, A> implements RustIterator, ToOwned {
 public class IntoKeys<K, V, A> implements RustIterator {
     @RustDefault public IntoKeys();
     @MutSelf public K? next();
+    @RustTrait("std::default::Default") public static IntoKeys default();
 }
 
 /** A trait to express the ability to consume an object and acquire ownership of */
@@ -1554,6 +1604,7 @@ public class IntoStringError implements ToOwned, ToString {
 public class IntoValues<K, V, A> implements RustIterator {
     @RustDefault public IntoValues();
     @MutSelf public V? next();
+    @RustTrait("std::default::Default") public static IntoValues default();
 }
 
 /** This is the error type used by [`HandleOrInvalid`] when attempting to */
@@ -1917,6 +1968,9 @@ public class Ipv4Addr {
     public bool is_documentation();
     public Ipv6Addr to_ipv6_compatible();
     public Ipv6Addr to_ipv6_mapped();
+    @RustTrait("std::convert::From<_>") public static Ipv4Addr from(u32 ip);
+    @RustTrait("std::convert::From<_>") public static Ipv4Addr from(ubyte[4] octets);
+    @RustTrait("std::str::FromStr") public static Ipv4Addr from_str(&String s) throws AddrParseError;
 }
 
 /** An IPv6 address. */
@@ -1944,6 +1998,10 @@ public class Ipv6Addr {
     public IpAddr to_canonical();
     public ubyte[16] octets();
     public static Ipv6Addr from_octets(ubyte[16] octets);
+    @RustTrait("std::convert::From<_>") public static Ipv6Addr from(u128 ip);
+    @RustTrait("std::convert::From<_>") public static Ipv6Addr from(ubyte[16] octets);
+    @RustTrait("std::convert::From<_>") public static Ipv6Addr from(ushort[8] segments);
+    @RustTrait("std::str::FromStr") public static Ipv6Addr from_str(&String s) throws AddrParseError;
 }
 
 /** Trait to determine if a descriptor/handle refers to a terminal/tty. */
@@ -1960,6 +2018,7 @@ public interface IsTerminal {
 public class Iter<T> implements RustIterator, ToOwned {
     @RustDefault public Iter();
     @MutSelf @RustRefOut public T? next();
+    @RustTrait("std::default::Default") public static Iter default();
 }
 
 /** A mutable iterator over the elements of a `LinkedList`. */
@@ -1969,6 +2028,7 @@ public class Iter<T> implements RustIterator, ToOwned {
 public class IterMut<T> implements RustIterator {
     @RustDefault public IterMut();
     @MutSelf @RustRefOut public T? next();
+    @RustTrait("std::default::Default") public static IterMut default();
 }
 
 /** An owned permission to join on a thread (block on its termination). */
@@ -2001,6 +2061,7 @@ public class JoinPathsError implements ToString {
 public class Keys<K, V> implements RustIterator, ToOwned {
     @RustDefault public Keys();
     @MutSelf @RustRefOut public K? next();
+    @RustTrait("std::default::Default") public static Keys default();
 }
 
 /** Layout of a block of memory. */
@@ -2037,6 +2098,8 @@ public class LazyLock<T, F> {
     @RustRefOut public static T force(&LazyLock<T, F> this);
     @RustRefOut public static T? get_mut(&mut LazyLock<T, F> this);
     @RustRefOut public static T? get(&LazyLock<T, F> this);
+    @RustTrait("std::default::Default") public static LazyLock<T> default();
+    @RustTrait("std::convert::From<_>") public static LazyLock from(T value);
 }
 
 /** Wraps a writer and buffers output to it, flushing whenever a newline */
@@ -2095,6 +2158,8 @@ public class LinkedList<T, A> implements ToOwned {
     @MutSelf public T? pop_back();
     @MutSelf @RustBounds("A: Clone") public LinkedList<T, A> split_off(uint at);
     @MutSelf @RustBorrowsSelf @RustClosureRefs("0") public ExtractIf<T, F, A> extract_if<F>((T) -> bool filter);
+    @RustTrait("std::default::Default") public static LinkedList default();
+    @RustTrait("std::convert::From<_>") public static LinkedList from(T[] arr);
 }
 
 /** A thread local storage (TLS) key which owns its contents. */
@@ -2226,6 +2291,8 @@ public class Mutex<T> {
     public void clear_poison();
     public T into_inner() throws PoisonError<T>;
     @MutSelf @RustRefOut public T get_mut() throws PoisonError<T>;
+    @RustTrait("std::convert::From<_>") public static Mutex from(T t);
+    @RustTrait("std::default::Default") public static Mutex<T> default();
 }
 
 /** An RAII implementation of a "scoped lock" of a mutex. When this structure is */
@@ -2292,6 +2359,7 @@ public class NonNull<T> {
     @RustRefOut public unsafe MaybeUninit<T>[] as_uninit_slice_mut();
     public unsafe NonNull<T> get_unchecked_mut(uint index);
     public unsafe NonNull<T[]> get_unchecked_mut(RangeFull index);
+    @RustTrait("std::convert::From<_>") public static NonNull from(&mut T r);
 }
 
 /** A value that is known not to equal zero. */
@@ -2712,6 +2780,8 @@ public class OnceLock<T> implements ToOwned {
     @RustRefOut public T get_or_init<F>(() -> T f);
     public T? into_inner();
     @MutSelf public T? take();
+    @RustTrait("std::default::Default") public static OnceLock<T> default();
+    @RustTrait("std::convert::From<_>") public static OnceLock from(T value);
 }
 
 /** State yielded to [`Once::call_once_force()`]’s closure parameter. The state */
@@ -2844,6 +2914,13 @@ public class OsString implements OsStringExt, ToOwned, Write {
     public bool is_ascii();
     public bool eq_ignore_ascii_case<S>(S other);
     @RustBorrowsSelf public Display display();
+    @RustTrait("std::convert::From<_>") public static OsString from(String s);
+    @RustTrait("std::convert::From<_>") public static OsString from(&T s);
+    @RustTrait("std::default::Default") public static OsString default();
+    @RustTrait("std::convert::From<_>") public static OsString from(@RustBox OsStr boxed);
+    @RustTrait("std::convert::From<_>") public static OsString from(Cow<OsStr> s);
+    @RustTrait("std::str::FromStr") public static OsString from_str(&String s);
+    @RustTrait("std::convert::From<_>") public static OsString from(PathBuf path_buf);
 }
 
 /** Platform-specific extensions to [`OsString`]. */
@@ -2870,6 +2947,19 @@ public class Output implements ToOwned {
 @RustFrom("ChildStderr,ChildStdin,ChildStdout,File,PidFd,PipeReader,PipeWriter,TcpListener,TcpStream,UdpSocket,UnixDatagram,UnixListener,UnixStream")
 public class OwnedFd implements AsFd, AsRawFd, FromRawFd, IntoRawFd, IsTerminal {
     public OwnedFd try_clone() throws Error;
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(UnixDatagram unix_datagram);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(UnixListener listener);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(UnixStream unix_stream);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(ChildStdin child_stdin);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(ChildStdout child_stdout);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(ChildStderr child_stderr);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(PidFd pid_fd);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(File file);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(TcpStream tcp_stream);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(TcpListener tcp_listener);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(UdpSocket udp_socket);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(PipeReader pipe);
+    @RustTrait("std::convert::From<_>") public static OwnedFd from(PipeWriter pipe);
 }
 
 /** An owned handle. */
@@ -2878,6 +2968,17 @@ public class OwnedFd implements AsFd, AsRawFd, FromRawFd, IntoRawFd, IsTerminal 
 @RustFrom("Child,ChildStderr,ChildStdin,ChildStdout,Dir,File,JoinHandle,PipeReader,PipeWriter")
 public class OwnedHandle implements AsHandle, AsRawHandle, FromRawHandle, IntoRawHandle, IsTerminal {
     public OwnedHandle try_clone() throws Error;
+    @RustTrait("std::convert::TryFrom<_>") public static OwnedHandle try_from(HandleOrNull handle_or_null) throws NullHandleError;
+    @RustTrait("std::convert::TryFrom<_>") public static OwnedHandle try_from(HandleOrInvalid handle_or_invalid) throws InvalidHandleError;
+    @RustTrait("std::convert::From<_>") public static OwnedHandle from(File file);
+    @RustTrait("std::convert::From<_>") public static OwnedHandle from(ChildStdin child_stdin);
+    @RustTrait("std::convert::From<_>") public static OwnedHandle from(ChildStdout child_stdout);
+    @RustTrait("std::convert::From<_>") public static OwnedHandle from(ChildStderr child_stderr);
+    @RustTrait("std::convert::From<_>") public static OwnedHandle from(JoinHandle<T> join_handle);
+    @RustTrait("std::convert::From<_>") public static OwnedHandle from(PipeReader pipe);
+    @RustTrait("std::convert::From<_>") public static OwnedHandle from(PipeWriter pipe);
+    @RustTrait("std::convert::From<_>") public static OwnedHandle from(Child child);
+    @RustTrait("std::convert::From<_>") public static OwnedHandle from(Dir value);
 }
 
 /** An owned socket. */
@@ -2886,6 +2987,9 @@ public class OwnedHandle implements AsHandle, AsRawHandle, FromRawHandle, IntoRa
 @RustFrom("TcpListener,TcpStream,UdpSocket")
 public class OwnedSocket implements AsRawSocket, AsSocket, FromRawSocket, IntoRawSocket {
     public OwnedSocket try_clone() throws Error;
+    @RustTrait("std::convert::From<_>") public static OwnedSocket from(TcpStream tcp_stream);
+    @RustTrait("std::convert::From<_>") public static OwnedSocket from(TcpListener tcp_listener);
+    @RustTrait("std::convert::From<_>") public static OwnedSocket from(UdpSocket udp_socket);
 }
 
 /** A struct providing information about a panic. */
@@ -3027,6 +3131,13 @@ public class PathBuf implements ToOwned {
     public bool is_dir();
     public bool is_symlink();
     public PathBuf into_path_buf();
+    @RustTrait("std::convert::From<_>") public static PathBuf from(@RustBox Path boxed);
+    @RustTrait("std::convert::From<_>") public static PathBuf from(&T s);
+    @RustTrait("std::convert::From<_>") public static PathBuf from(OsString s);
+    @RustTrait("std::convert::From<_>") public static PathBuf from(String s);
+    @RustTrait("std::str::FromStr") public static PathBuf from_str(&String s);
+    @RustTrait("std::default::Default") public static PathBuf default();
+    @RustTrait("std::convert::From<_>") public static PathBuf from(Cow<Path> p);
 }
 
 /** Structure wrapping a mutable reference to the greatest item on a */
@@ -3077,6 +3188,7 @@ public class PidFd implements AsFd, AsRawFd, FromRawFd, IntoRawFd {
     public void kill() throws Error;
     public ExitStatus wait() throws Error;
     public ExitStatus? try_wait() throws Error;
+    @RustTrait("std::convert::From<_>") public static PidFd from(OwnedFd fd);
 }
 
 /** A pointer which pins its pointee in place. */
@@ -3110,6 +3222,8 @@ public class Pin<Ptr> {
 @RustFrom("OwnedFd,OwnedHandle")
 public class PipeReader implements AsFd, AsHandle, AsRawFd, AsRawHandle, FromRawFd, FromRawHandle, IntoRawFd, IntoRawHandle, Read {
     public PipeReader try_clone() throws Error;
+    @RustTrait("std::convert::From<_>") public static PipeReader from(OwnedHandle owned_handle);
+    @RustTrait("std::convert::From<_>") public static PipeReader from(OwnedFd owned_fd);
 }
 
 /** Write end of an anonymous pipe. */
@@ -3118,6 +3232,8 @@ public class PipeReader implements AsFd, AsHandle, AsRawFd, AsRawHandle, FromRaw
 @RustFrom("OwnedFd,OwnedHandle")
 public class PipeWriter implements AsFd, AsHandle, AsRawFd, AsRawHandle, FromRawFd, FromRawHandle, IntoRawFd, IntoRawHandle, Write {
     public PipeWriter try_clone() throws Error;
+    @RustTrait("std::convert::From<_>") public static PipeWriter from(OwnedHandle owned_handle);
+    @RustTrait("std::convert::From<_>") public static PipeWriter from(OwnedFd owned_fd);
 }
 
 /** Windows path prefixes, e.g., `C:` or `\\server\share`. */
@@ -3221,6 +3337,7 @@ public class RSplitTerminator<P> implements RustIterator {
 @RustDefault
 public class RandomState implements ToOwned {
     public RandomState();
+    @RustTrait("std::default::Default") public static RandomState default();
 }
 
 /** An iterator over a sub-range of entries in a `BTreeMap`. */
@@ -3231,6 +3348,7 @@ public class RandomState implements ToOwned {
 public class Range<K, V> implements RustIterator, ToOwned {
     @RustDefault public Range();
     @MutSelf public (K, V)? next();
+    @RustTrait("std::default::Default") public static Range default();
 }
 
 /** An unbounded range (`..`). */
@@ -3242,6 +3360,7 @@ public class Range<K, V> implements RustIterator, ToOwned {
 @RustHash
 public class RangeFull {
     @RustDefault public RangeFull();
+    @RustTrait("std::default::Default") public static RangeFull default();
 }
 
 /** A mutable iterator over a sub-range of entries in a `BTreeMap`. */
@@ -3251,6 +3370,7 @@ public class RangeFull {
 public class RangeMut<K, V> implements RustIterator {
     @RustDefault public RangeMut();
     @MutSelf public (K, V)? next();
+    @RustTrait("std::default::Default") public static RangeMut default();
 }
 
 public type RawPthread = pthread_t;
@@ -3294,6 +3414,9 @@ public class Rc<T, A> implements ToOwned, ToString {
     public static T unwrap_or_clone(Rc this);
     public T downcast<T>() throws Rc;
     public unsafe T downcast_unchecked<T>();
+    @RustTrait("std::default::Default") public static Rc default();
+    @RustTrait("std::convert::From<_>") public static Rc from(T t);
+    @RustTrait("std::convert::From<_>") public static B from(Cow<B> cow);
 }
 
 /** The `Read` trait allows for reading bytes from a source. */
@@ -3364,6 +3487,7 @@ public class Repeat {
 public class Rev<T> implements RustIterator {
     @RustDefault public Rev();
     @MutSelf public I.Item? next();
+    @RustTrait("std::default::Default") public static Rev default();
 }
 
 /** A trait for dealing with iterators. */
@@ -3462,6 +3586,8 @@ public class RwLock<T> {
     public void clear_poison();
     public T into_inner() throws PoisonError<T>;
     @MutSelf @RustRefOut public T get_mut() throws PoisonError<T>;
+    @RustTrait("std::default::Default") public static RwLock<T> default();
+    @RustTrait("std::convert::From<_>") public static RwLock from(T t);
 }
 
 /** RAII structure used to release the shared read access of a lock when */
@@ -3528,6 +3654,7 @@ public class Saturating<T> {
     public bool is_positive();
     public bool is_negative();
     public bool is_power_of_two();
+    @RustTrait("std::default::Default") public static Saturating<T> default();
 }
 
 /** An iterator to maintain state while iterating another iterator. */
@@ -3621,6 +3748,7 @@ public enum Shutdown implements ToOwned {
 @RustDefault
 public class Sink {
     @RustDefault public Sink();
+    @RustTrait("std::default::Default") public static Sink default();
 }
 
 /** An iterator that skips over `n` elements of `iter`. */
@@ -3672,6 +3800,7 @@ public class SocketAddrV4 {
     @MutSelf public void set_ip(Ipv4Addr new_ip);
     public ushort port();
     @MutSelf public void set_port(ushort new_port);
+    @RustTrait("std::str::FromStr") public static SocketAddrV4 from_str(&String s) throws AddrParseError;
 }
 
 /** An IPv6 socket address. */
@@ -3690,6 +3819,7 @@ public class SocketAddrV6 {
     @MutSelf public void set_flowinfo(u32 new_flowinfo);
     public u32 scope_id();
     @MutSelf public void set_scope_id(u32 new_scope_id);
+    @RustTrait("std::str::FromStr") public static SocketAddrV6 from_str(&String s) throws AddrParseError;
 }
 
 /** A Unix socket Ancillary data struct. */
@@ -3815,6 +3945,16 @@ public class Stdio implements FromRawFd, FromRawHandle {
     public static Stdio piped();
     public static Stdio inherit();
     public static Stdio null();
+    @RustTrait("std::convert::From<_>") public static Stdio from(OwnedFd fd);
+    @RustTrait("std::convert::From<_>") public static Stdio from(OwnedHandle handle);
+    @RustTrait("std::convert::From<_>") public static Stdio from(ChildStdin child);
+    @RustTrait("std::convert::From<_>") public static Stdio from(ChildStdout child);
+    @RustTrait("std::convert::From<_>") public static Stdio from(ChildStderr child);
+    @RustTrait("std::convert::From<_>") public static Stdio from(File file);
+    @RustTrait("std::convert::From<_>") public static Stdio from(Stdout inherit);
+    @RustTrait("std::convert::From<_>") public static Stdio from(Stderr inherit);
+    @RustTrait("std::convert::From<_>") public static Stdio from(PipeWriter pipe);
+    @RustTrait("std::convert::From<_>") public static Stdio from(PipeReader pipe);
 }
 
 @rust("std::os::unix::io::StdioExt")
@@ -3970,6 +4110,15 @@ public class String implements ToOwned, ToString, Write {
     @RustRefOut public unsafe String get_unchecked(RangeFull i);
     @MutSelf @RustRefOut public unsafe String get_unchecked_mut(RangeFull i);
     public float parse() throws Error;
+    @RustTrait("std::convert::TryFrom<_>") public static String try_from(ByteString s) throws FromUtf8Error;
+    @RustTrait("std::convert::TryFrom<_>") public static String try_from(&ByteStr s) throws Utf8Error;
+    @RustTrait("std::convert::TryFrom<_>") public static String try_from(CString value) throws IntoStringError;
+    @RustTrait("std::default::Default") public static String default();
+    @RustTrait("std::str::FromStr") public static String from_str(&String s);
+    @RustTrait("std::convert::From<_>") public static String from(&String s);
+    @RustTrait("std::convert::From<_>") public static String from(Cow<String> s);
+    @RustTrait("std::convert::TryFrom<_>") public static String try_from(Vec<ubyte> bytes) throws FromUtf8Error;
+    @RustTrait("std::convert::From<_>") public static String from(char c);
 }
 
 /** An error returned from [`Path::strip_prefix`] if the prefix was not found. */
@@ -4004,6 +4153,7 @@ public class SyncSender<T> implements ToOwned {
 @RustDefault
 public class System implements ToOwned {
     @RustDefault public System();
+    @RustTrait("std::default::Default") public static System default();
 }
 
 /** The system random number generator. */
@@ -4013,6 +4163,7 @@ public class System implements ToOwned {
 @RustDefault
 public class SystemRng implements ToOwned {
     @RustDefault public SystemRng();
+    @RustTrait("std::default::Default") public static SystemRng default();
 }
 
 /** A measurement of the system clock, useful for talking to */
@@ -4064,6 +4215,8 @@ public class TcpListener implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRa
     @Deprecated(message = "this option can only be set before the socket is bound") public bool only_v6() throws Error;
     public Error? take_error() throws Error;
     public void set_nonblocking(bool nonblocking) throws Error;
+    @RustTrait("std::convert::From<_>") public static TcpListener from(OwnedSocket owned);
+    @RustTrait("std::convert::From<_>") public static TcpListener from(OwnedFd owned_fd);
 }
 
 /** A TCP stream between a local and a remote socket. */
@@ -4090,6 +4243,8 @@ public class TcpStream implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRawF
     public u32 ttl() throws Error;
     public Error? take_error() throws Error;
     public void set_nonblocking(bool nonblocking) throws Error;
+    @RustTrait("std::convert::From<_>") public static TcpStream from(OwnedSocket owned);
+    @RustTrait("std::convert::From<_>") public static TcpStream from(OwnedFd owned_fd);
 }
 
 /** Os-specific extensions for [`TcpStream`] */
@@ -4198,6 +4353,8 @@ public class TryFromFloatSecsError {
 @RustFrom("Infallible")
 public class TryFromIntError {
     @RustRefOut public IntErrorKind kind();
+    @RustTrait("std::convert::From<_>") public static TryFromIntError from(Infallible x);
+    @RustTrait("std::convert::From<_>") public static TryFromIntError from(never never);
 }
 
 /** An enumeration of possible errors which can occur while trying to acquire a lock */
@@ -4224,6 +4381,7 @@ public enum TryRecvError implements ToOwned, ToString {
 @RustPartialEq
 @RustFrom("TryReserveErrorKind")
 public class TryReserveError implements ToOwned, ToString {
+    @RustTrait("std::convert::From<_>") public static TryReserveError from(TryReserveErrorKind kind);
 }
 
 /** This enumeration is the list of the possible error outcomes for the */
@@ -4275,6 +4433,8 @@ public class UdpSocket implements AsFd, AsRawFd, AsRawSocket, AsSocket, FromRawF
     public uint recv(&mut ubyte[] buf) throws Error;
     public uint peek(&mut ubyte[] buf) throws Error;
     public void set_nonblocking(bool nonblocking) throws Error;
+    @RustTrait("std::convert::From<_>") public static UdpSocket from(OwnedSocket owned);
+    @RustTrait("std::convert::From<_>") public static UdpSocket from(OwnedFd owned_fd);
 }
 
 /** A lazy iterator producing elements in the union of `BTreeSet`s. */
@@ -4318,6 +4478,7 @@ public class UnixDatagram implements AsFd, AsRawFd, FromRawFd, IntoRawFd, UnixSo
     public void shutdown(Shutdown how) throws Error;
     public uint peek(&mut ubyte[] buf) throws Error;
     public (uint, SocketAddr) peek_from(&mut ubyte[] buf) throws Error;
+    @RustTrait("std::convert::From<_>") public static UnixDatagram from(OwnedFd owned);
 }
 
 /** A structure representing a Unix domain socket server. */
@@ -4333,6 +4494,7 @@ public class UnixListener implements AsFd, AsRawFd, FromRawFd, IntoRawFd {
     public void set_nonblocking(bool nonblocking) throws Error;
     public Error? take_error() throws Error;
     @RustBorrowsSelf public Incoming incoming();
+    @RustTrait("std::convert::From<_>") public static UnixListener from(OwnedFd fd);
 }
 
 /** Linux-specific functionality for `AF_UNIX` sockets [`UnixDatagram`] */
@@ -4364,6 +4526,7 @@ public class UnixStream implements AsFd, AsRawFd, FromRawFd, IntoRawFd, Read, Un
     public uint peek(&mut ubyte[] buf) throws Error;
     public uint recv_vectored_with_ancillary(&mut IoSliceMut[] bufs, &mut SocketAncillary ancillary) throws Error;
     public uint send_vectored_with_ancillary(IoSlice[] bufs, &mut SocketAncillary ancillary) throws Error;
+    @RustTrait("std::convert::From<_>") public static UnixStream from(OwnedFd owned);
 }
 
 /** An iterator used to decode a slice of mostly UTF-8 bytes to string slices */
@@ -4402,6 +4565,7 @@ public class VacantEntry<K, V, A> {
 public class Values<K, V> implements RustIterator, ToOwned {
     @RustDefault public Values();
     @MutSelf @RustRefOut public V? next();
+    @RustTrait("std::default::Default") public static Values default();
 }
 
 /** A mutable iterator over the values of a `BTreeMap`. */
@@ -4411,6 +4575,7 @@ public class Values<K, V> implements RustIterator, ToOwned {
 public class ValuesMut<K, V> implements RustIterator {
     @RustDefault public ValuesMut();
     @MutSelf @RustRefOut public V? next();
+    @RustTrait("std::default::Default") public static ValuesMut default();
 }
 
 /** The error type for operations interacting with environment variables. */
@@ -4634,6 +4799,11 @@ public class Vec<T, A> implements ToOwned {
     @MutSelf public unsafe void assume_init_drop();
     @RustRefOut public unsafe T[] assume_init_ref();
     @MutSelf @RustRefOut public unsafe T[] assume_init_mut();
+    @RustTrait("std::convert::From<_>") public static Vec<T> from(BinaryHeap<T, A> heap);
+    @RustTrait("std::convert::From<_>") public static Vec from(VecDeque<T, A> other);
+    @RustTrait("std::default::Default") public static Vec<T> default();
+    @RustTrait("std::convert::From<_>") public static Vec<T> from(T[] s);
+    @RustTrait("std::convert::From<_>") public static Vec<T> from(Cow<T[]> s);
 }
 
 /** A double-ended queue implemented with a growable ring buffer. */
@@ -4700,6 +4870,9 @@ public class VecDeque<T, A> implements ToOwned {
     @RustClosureRefs("1") @RustClosureShared("1:0") public uint binary_search_by_key<B, F>(&B b, (T) -> B f) throws Error;
     @RustClosureRefs("0") @RustClosureShared("0:0") public uint partition_point<P>((T) -> bool pred);
     @MutSelf public void resize(uint new_len, T value);
+    @RustTrait("std::default::Default") public static VecDeque<T> default();
+    @RustTrait("std::convert::From<_>") public static VecDeque from(Vec<T> other);
+    @RustTrait("std::convert::From<_>") public static VecDeque from(T[] arr);
 }
 
 /** A type indicating whether a timed wait on a condition variable returned */
@@ -4747,6 +4920,7 @@ public class Weak<T, A> implements ToOwned {
     public uint strong_count();
     public uint weak_count();
     public bool ptr_eq(&Weak other);
+    @RustTrait("std::default::Default") public static Weak<T> default();
 }
 
 /** An iterator over overlapping subslices of length `size`. */
@@ -4779,6 +4953,7 @@ public class Wrapping<T> {
     public Wrapping<int> signum();
     public bool is_positive();
     public bool is_negative();
+    @RustTrait("std::default::Default") public static Wrapping<T> default();
 }
 
 /** A trait for objects which are byte-oriented sinks. */
@@ -4870,6 +5045,18 @@ public type blksize_t = ulong;
 public class bool_methods {
     public T? then_some<T>(T t);
     public T? then<T, F>(() -> T f);
+    @RustTrait("std::convert::TryFrom<_>") public static bool try_from(u128 i) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static bool try_from(ulong i) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static bool try_from(u32 i) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static bool try_from(ushort i) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static bool try_from(ubyte i) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static bool try_from(i128 i) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static bool try_from(long i) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static bool try_from(i32 i) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static bool try_from(short i) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static bool try_from(byte i) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static bool default();
+    @RustTrait("std::str::FromStr") public static bool from_str(&String s) throws ParseBoolError;
 }
 
 /** Equivalent to C's `void` type when used as a [pointer]. */
@@ -4930,6 +5117,11 @@ public class char_methods {
     public bool is_ascii_graphic();
     public bool is_ascii_whitespace();
     public bool is_ascii_control();
+    @RustTrait("std::default::Default") public static char default();
+    @RustTrait("std::convert::From<_>") public static char from(AsciiChar chr);
+    @RustTrait("std::convert::From<_>") public static char from(ubyte i);
+    @RustTrait("std::str::FromStr") public static char from_str(&String s) throws ParseCharError;
+    @RustTrait("std::convert::TryFrom<_>") public static char try_from(u32 i) throws CharTryFromError;
 }
 
 @rust("std::os::unix::fs::chown")
@@ -5059,6 +5251,14 @@ public class f32_methods {
     public float abs();
     public float signum();
     public float copysign(float sign);
+    @RustTrait("std::str::FromStr") public static float from_str(&String src) throws ParseFloatError;
+    @RustTrait("std::convert::From<_>") public static float from(byte small);
+    @RustTrait("std::convert::From<_>") public static float from(short small);
+    @RustTrait("std::convert::From<_>") public static float from(ubyte small);
+    @RustTrait("std::convert::From<_>") public static float from(ushort small);
+    @RustTrait("std::convert::From<_>") public static float from(f16 small);
+    @RustTrait("std::convert::From<_>") public static float from(bool small);
+    @RustTrait("std::default::Default") public static float default();
 }
 
 @rust("f64")
@@ -5131,6 +5331,17 @@ public class f64_methods {
     public double abs();
     public double signum();
     public double copysign(double sign);
+    @RustTrait("std::str::FromStr") public static double from_str(&String src) throws ParseFloatError;
+    @RustTrait("std::convert::From<_>") public static double from(byte small);
+    @RustTrait("std::convert::From<_>") public static double from(short small);
+    @RustTrait("std::convert::From<_>") public static double from(i32 small);
+    @RustTrait("std::convert::From<_>") public static double from(ubyte small);
+    @RustTrait("std::convert::From<_>") public static double from(ushort small);
+    @RustTrait("std::convert::From<_>") public static double from(u32 small);
+    @RustTrait("std::convert::From<_>") public static double from(f16 small);
+    @RustTrait("std::convert::From<_>") public static double from(float small);
+    @RustTrait("std::convert::From<_>") public static double from(bool small);
+    @RustTrait("std::default::Default") public static double default();
 }
 
 @rust("std::os::unix::fs::fchown")
@@ -5281,6 +5492,20 @@ public class i16_methods {
     public unsafe T unchecked_cast<T>();
     public short midpoint(short rhs);
     public static short from_str_radix(&String src, u32 radix) throws ParseIntError;
+    @RustTrait("std::str::FromStr") public static short from_str(&String src) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static short from(bool b);
+    @RustTrait("std::convert::From<_>") public static short from(byte small);
+    @RustTrait("std::convert::From<_>") public static short from(ubyte small);
+    @RustTrait("std::convert::TryFrom<_>") public static short try_from(i32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static short try_from(long u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static short try_from(i128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static short try_from(ushort u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static short try_from(u32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static short try_from(ulong u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static short try_from(u128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static short try_from(uint u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static short try_from(int u) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static short default();
 }
 
 @rust("i32")
@@ -5410,6 +5635,20 @@ public class i32_methods {
     public unsafe T unchecked_cast<T>();
     public i32 midpoint(i32 rhs);
     public static i32 from_str_radix(&String src, u32 radix) throws ParseIntError;
+    @RustTrait("std::str::FromStr") public static i32 from_str(&String src) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static i32 from(bool b);
+    @RustTrait("std::convert::From<_>") public static i32 from(byte small);
+    @RustTrait("std::convert::From<_>") public static i32 from(short small);
+    @RustTrait("std::convert::From<_>") public static i32 from(ubyte small);
+    @RustTrait("std::convert::From<_>") public static i32 from(ushort small);
+    @RustTrait("std::convert::TryFrom<_>") public static i32 try_from(long u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static i32 try_from(i128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static i32 try_from(u32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static i32 try_from(ulong u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static i32 try_from(u128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static i32 try_from(uint u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static i32 try_from(int u) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static i32 default();
 }
 
 @rust("i64")
@@ -5539,6 +5778,20 @@ public class i64_methods {
     public unsafe T unchecked_cast<T>();
     public long midpoint(long rhs);
     public static long from_str_radix(&String src, u32 radix) throws ParseIntError;
+    @RustTrait("std::str::FromStr") public static long from_str(&String src) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static long from(bool b);
+    @RustTrait("std::convert::From<_>") public static long from(byte small);
+    @RustTrait("std::convert::From<_>") public static long from(short small);
+    @RustTrait("std::convert::From<_>") public static long from(i32 small);
+    @RustTrait("std::convert::From<_>") public static long from(ubyte small);
+    @RustTrait("std::convert::From<_>") public static long from(ushort small);
+    @RustTrait("std::convert::From<_>") public static long from(u32 small);
+    @RustTrait("std::convert::TryFrom<_>") public static long try_from(i128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static long try_from(ulong u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static long try_from(u128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static long try_from(uint u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static long try_from(int value) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static long default();
 }
 
 @rust("i8")
@@ -5668,6 +5921,20 @@ public class i8_methods {
     public unsafe T unchecked_cast<T>();
     public byte midpoint(byte rhs);
     public static byte from_str_radix(&String src, u32 radix) throws ParseIntError;
+    @RustTrait("std::str::FromStr") public static byte from_str(&String src) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static byte from(bool b);
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(short u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(i32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(long u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(i128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(ubyte u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(ushort u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(u32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(ulong u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(u128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(uint u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static byte try_from(int u) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static byte default();
 }
 
 @rust("std::process::id")
@@ -5806,6 +6073,20 @@ public class isize_methods {
     public unsafe T unchecked_cast<T>();
     public int midpoint(int rhs);
     public static int from_str_radix(&String src, u32 radix) throws ParseIntError;
+    @RustTrait("std::str::FromStr") public static int from_str(&String src) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static int from(bool b);
+    @RustTrait("std::convert::From<_>") public static int from(byte small);
+    @RustTrait("std::convert::From<_>") public static int from(ubyte small);
+    @RustTrait("std::convert::From<_>") public static int from(short small);
+    @RustTrait("std::convert::TryFrom<_>") public static int try_from(uint u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static int try_from(ushort value) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static int try_from(u32 value) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static int try_from(ulong u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static int try_from(u128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static int try_from(i32 value) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static int try_from(long value) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static int try_from(i128 u) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static int default();
 }
 
 @rust("std::env::join_paths")
@@ -6116,6 +6397,22 @@ public class u16_methods {
     public unsafe T unchecked_cast<T>();
     public ushort midpoint(ushort rhs);
     public static ushort from_str_radix(&String src, u32 radix) throws ParseIntError;
+    @RustTrait("std::str::FromStr") public static ushort from_str(&String src) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static ushort from(bool b);
+    @RustTrait("std::convert::From<_>") public static ushort from(ubyte small);
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(u32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(ulong u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(u128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(byte u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(short u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(i32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(long u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(i128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(uint u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(int u) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static ushort default();
+    @RustTrait("std::convert::From<_>") public static ushort from(AsciiChar chr);
+    @RustTrait("std::convert::TryFrom<_>") public static ushort try_from(char c) throws TryFromCharError;
 }
 
 @rust("u32")
@@ -6244,6 +6541,23 @@ public class u32_methods {
     public unsafe T unchecked_cast<T>();
     public u32 midpoint(u32 rhs);
     public static u32 from_str_radix(&String src, u32 radix) throws ParseIntError;
+    @RustTrait("std::str::FromStr") public static u32 from_str(&String src) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static u32 from(bool b);
+    @RustTrait("std::convert::From<_>") public static u32 from(ubyte small);
+    @RustTrait("std::convert::From<_>") public static u32 from(ushort small);
+    @RustTrait("std::convert::TryFrom<_>") public static u32 try_from(ulong u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static u32 try_from(u128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static u32 try_from(byte u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static u32 try_from(short u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static u32 try_from(i32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static u32 try_from(long u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static u32 try_from(i128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static u32 try_from(uint u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static u32 try_from(int u) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static u32 default();
+    @RustTrait("std::convert::From<_>") public static u32 from(AsciiChar chr);
+    @RustTrait("std::convert::From<_>") public static u32 from(char c);
+    @RustTrait("std::convert::From<_>") public static u32 from(Ipv4Addr ip);
 }
 
 @rust("u64")
@@ -6372,6 +6686,22 @@ public class u64_methods {
     public unsafe T unchecked_cast<T>();
     public ulong midpoint(ulong rhs);
     public static ulong from_str_radix(&String src, u32 radix) throws ParseIntError;
+    @RustTrait("std::str::FromStr") public static ulong from_str(&String src) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static ulong from(bool b);
+    @RustTrait("std::convert::From<_>") public static ulong from(ubyte small);
+    @RustTrait("std::convert::From<_>") public static ulong from(ushort small);
+    @RustTrait("std::convert::From<_>") public static ulong from(u32 small);
+    @RustTrait("std::convert::TryFrom<_>") public static ulong try_from(u128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ulong try_from(byte u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ulong try_from(short u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ulong try_from(i32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ulong try_from(long u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ulong try_from(i128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ulong try_from(uint value) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ulong try_from(int u) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static ulong default();
+    @RustTrait("std::convert::From<_>") public static ulong from(AsciiChar chr);
+    @RustTrait("std::convert::From<_>") public static ulong from(char c);
 }
 
 @rust("u8")
@@ -6517,6 +6847,22 @@ public class u8_methods {
     public bool is_ascii_control();
     public EscapeDefault escape_ascii();
     public static ubyte from_str_radix(&String src, u32 radix) throws ParseIntError;
+    @RustTrait("std::str::FromStr") public static ubyte from_str(&String src) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static ubyte from(bool b);
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(ushort u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(u32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(ulong u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(u128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(byte u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(short u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(i32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(long u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(i128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(uint u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(int u) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static ubyte default();
+    @RustTrait("std::convert::From<_>") public static ubyte from(AsciiChar chr);
+    @RustTrait("std::convert::TryFrom<_>") public static ubyte try_from(char c) throws TryFromCharError;
 }
 
 public type uid_t = u32;
@@ -6648,6 +6994,22 @@ public class usize_methods {
     public unsafe T unchecked_cast<T>();
     public uint midpoint(uint rhs);
     public static uint from_str_radix(&String src, u32 radix) throws ParseIntError;
+    @RustTrait("std::str::FromStr") public static uint from_str(&String src) throws ParseIntError;
+    @RustTrait("std::convert::From<_>") public static uint from(Alignment align);
+    @RustTrait("std::convert::From<_>") public static uint from(bool b);
+    @RustTrait("std::convert::From<_>") public static uint from(ubyte small);
+    @RustTrait("std::convert::From<_>") public static uint from(ushort small);
+    @RustTrait("std::convert::TryFrom<_>") public static uint try_from(int u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static uint try_from(u32 value) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static uint try_from(ulong value) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static uint try_from(u128 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static uint try_from(byte u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static uint try_from(short u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static uint try_from(i32 u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static uint try_from(long u) throws TryFromIntError;
+    @RustTrait("std::convert::TryFrom<_>") public static uint try_from(i128 u) throws TryFromIntError;
+    @RustTrait("std::default::Default") public static uint default();
+    @RustTrait("std::convert::TryFrom<_>") public static uint try_from(char c) throws TryFromCharError;
 }
 
 @rust("std::env::var")

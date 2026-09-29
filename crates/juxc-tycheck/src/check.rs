@@ -10041,19 +10041,34 @@ impl<'a> Checker<'a> {
     /// deliberately generous on a shared PREFIX, because the misses that
     /// matter are a Rust name the user shortened (`sort` for
     /// `sort_unstable`) or a Java name that has a differently-spelled twin.
+    ///
+    /// Only INSTANCE members are candidates: this answers a call on a value,
+    /// and a static named there would be a second mistake (`d.asSecs()`
+    /// offered `from_secs`, sweep C3). A name any overload of which takes a
+    /// receiver counts.
     fn nearest_method_hint(&self, type_name: &str, wanted: &str) -> String {
+        use crate::symbol_table::MethodSig;
+        fn instance(methods: &HashMap<String, MethodSig>) -> impl Iterator<Item = &str> {
+            methods.iter().filter(|(_, m)| !m.is_static).map(|(k, _)| k.as_str())
+        }
         let mut names: Vec<&str> = Vec::new();
         if let Some(cls) = self.symbols.classes.get(type_name) {
-            names.extend(cls.methods.keys().map(|k| k.as_str()));
+            names.extend(instance(&cls.methods));
+            names.extend(
+                cls.method_overloads
+                    .iter()
+                    .filter(|(_, ms)| ms.iter().any(|m| !m.is_static))
+                    .map(|(k, _)| k.as_str()),
+            );
         }
         if let Some(iface) = self.symbols.interfaces.get(type_name) {
-            names.extend(iface.methods.keys().map(|k| k.as_str()));
+            names.extend(instance(&iface.methods));
         }
         if let Some(rec) = self.symbols.records.get(type_name) {
-            names.extend(rec.methods.keys().map(|k| k.as_str()));
+            names.extend(instance(&rec.methods));
         }
         if let Some(en) = self.symbols.enums.get(type_name) {
-            names.extend(en.methods.keys().map(|k| k.as_str()));
+            names.extend(instance(&en.methods));
         }
         nearest_name_hint(names, wanted)
     }
@@ -10113,6 +10128,18 @@ fn nearest_name_hint(mut names: Vec<&str>, wanted: &str) -> String {
             1 => format!(" -- did you mean {}?", picks[0]),
             _ => format!(" -- did you mean {}?", picks.join(", ")),
         }
+    }
+}
+
+/// The primitive type name as the call wrote it (`u32`, `int`), for a
+/// diagnostic about a static on it.
+fn jux_primitive_spelling(c: &CallExpr, rust_name: &str) -> String {
+    match c.callee.as_ref() {
+        Expr::Field(f) => match f.object.as_ref() {
+            Expr::Path(qn) if qn.segments.len() == 1 => qn.segments[0].text.clone(),
+            _ => rust_name.to_string(),
+        },
+        _ => rust_name.to_string(),
     }
 }
 
@@ -12562,6 +12589,37 @@ impl Checker<'_> {
         // function of that name is declared.
         if self.is_builtin_transmute(c) {
             self.check_transmute(c);
+            return;
+        }
+        // `u32.from_str("12")`, `u32.from_str_radix("ff", 16)`: a static of
+        // the primitive's Rust surface, checked as the static call of the
+        // stub class that declares it (sweep C3). Anything else it does not
+        // have is `E0413` here; it used to pass and reach rustc as a field
+        // read of a type (`u32.from_str`, rustc E0423).
+        let shadowed = matches!(c.callee.as_ref(), Expr::Field(f) if matches!(f.object.as_ref(),
+            Expr::Path(qn) if qn.segments.len() == 1 && self.env.lookup(&qn.segments[0].text).is_some()));
+        if let Some((call, rust_name)) = crate::infer::primitive_static_as_class_call(c, self.symbols, shadowed) {
+            let Expr::Field(f) = call.callee.as_ref() else { return };
+            let Expr::Path(qn) = f.object.as_ref() else { return };
+            let class = qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+            let method = f.field.text.as_str();
+            let has = self.static_member_names(&class, true).iter().any(|m| m == method);
+            if has {
+                self.check_call(&call);
+            } else {
+                let names = self.static_member_names(&class, true);
+                let hint = nearest_name_hint(names.iter().map(String::as_str).collect(), method);
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0413_UnresolvedMethod,
+                        format!("no static method `{method}` on `{}`{hint}", jux_primitive_spelling(c, rust_name)),
+                    )
+                    .with_span(c.span),
+                );
+                for arg in &c.args {
+                    self.check_expr(arg);
+                }
+            }
             return;
         }
         // `Math.abs(x)` / `Integer.parseInt(s)`: a static-looking call whose

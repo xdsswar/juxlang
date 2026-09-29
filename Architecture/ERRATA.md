@@ -6388,6 +6388,83 @@ compiles, and what it does is covered by the examples.
 the sharing rule; `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0702` row is
 narrowed. E27's resolution and E144 resolution 5 are superseded.
 
+## E151. A foreign type's trait-impl statics, and a did-you-mean of the right kind
+
+**Conflict.** E149's known boundary: a static a foreign type has only through
+a trait impl was missing from its stub, so a valid call was reported unknown.
+`Duration.default()`, `u32.from_str("12")` and a crate trait's
+`Clock.origin()` / `Clock.STEP` were `E0413` / `E0412`; `String.from("x")`
+passed only because nothing checked `String`'s statics against anything. A
+primitive's statics were worse: `u32.from_str_radix("ff", 16)`, which the
+stub does declare, and `u32.nonsense(3)` both passed the checker and reached
+rustc as a field read of a type (rustc `E0423`). And the instance-method
+did-you-mean drew from every method of the type, statics included, so
+`d.asSecs()` offered `from_secs`, a name the call cannot reach.
+
+**Resolution.**
+
+- **Bindgen writes a type's trait-impl statics onto its stub** (Bindgen
+  §G.5.4f), marked `@RustTrait("<trait path>")`: the associated functions
+  (no receiver) and constants of every impl written for the type itself, not
+  blanket, synthetic or negative, of the crate's own traits and of the standard
+  library's `Default`, `From`, `TryFrom` and `FromStr`. The impl's signature
+  is the member's, with `Self` the type and an error that is the impl's
+  associated type (`Self::Err`) thrown as that type (nothing for
+  `Infallible`). One Jux signature per name; an inherent member of the name
+  wins; a generic associated function is left out. A primitive's include
+  `core`'s impls (`impl FromStr for u32`), pooled across the ingest the way a
+  deref target's methods are. The trait's path is its public one
+  (`std::str::FromStr`, not the definition's `core::str::traits::FromStr`).
+- **The backend calls through the trait**: `<std::time::Duration as
+  std::default::Default>::default()`, `<String as std::convert::From<_>>::from(
+  ..)`, `<c3fix::Clock as c3fix::Tick>::STEP`, with `_` for the trait's type
+  arguments so Rust's impl selection picks among the overloads, and no
+  overload suffix. A foreign error one throws is the Jux exception it
+  surfaces as (E134).
+- **A primitive's statics are checked and lowered** as the statics of its
+  `@RustPrimitive` stub class (`infer::primitive_static_as_class_call`):
+  `u32.from_str("12")` is `<u32 as std::str::FromStr>::from_str(..)`, a name
+  the class does not have is `E0413` ("no static method `nonsense` on
+  `u32`") with the statics it does have. The §K.11 built-ins
+  (`double.fromBits`) are unchanged.
+- **Leak-free.** The member is shown under the type's name; no hover,
+  signature help, completion or diagnostic names the trait (the marker is the
+  stub's, and signatures never render annotations). No doc is taken from the
+  impl.
+- **A did-you-mean is of the call's kind.** An instance call suggests only
+  instance members (a name any overload of which takes a receiver); a static
+  call only statics, a type's trait-impl statics and an enum's variants
+  included. Changed by hand: `tests/ui/foreign_instance_method_unknown.expected`
+  (`asSecs` now suggests `as_secs` alone; its header comment grew a line, so
+  every line number moved by one). No other pinned output changed.
+- **Stubs.** `STD_STUB_CACHE_VERSION` is 48 and `CRATE_STUB_CACHE_VERSION` 24.
+  The vendored `rust-std.jux.d` snapshot keeps its surface and gains the 362
+  trait-impl members the regeneration found, in 90 classes: regenerating it
+  wholesale on this machine's nightly would also have moved members that have
+  nothing to do with this change.
+
+**Tests.** `crates/juxc-bindgen/tests/sweepc3_fixture.rs` (real rustdoc JSON
+of `fixtures/sweepc3-src/lib.rs`: a crate trait's associated function and
+constant, `Default`, `FromStr`, two `From` impls; no marker, auto or blanket
+trait's member); `bin/juxc/tests/trait_statics.rs` builds and runs a program
+against that crate (`Clock.origin()`, `Clock.STEP`, `Clock.default()`,
+`Clock.from_str(..)`, `Clock.from(..)` twice, a failed parse caught as
+`NumberFormatException`) and checks the unknown-static message names no
+trait; `examples/trait_statics.jux` (`Duration.default()`,
+`String.from(..)`, `u32.from(..)`, `u32.from_str(..)`,
+`u32.from_str_radix(..)`, a failed `from_str` and a failed `try_from` caught
+as Jux exceptions), also in the forced-safe slice;
+`tests/ui/foreign_hint_member_kind`; in `crates/juxc-lsp/src/analysis.rs`,
+`a_trait_impl_static_shows_no_trait`.
+
+**Known boundary.** A standard-library trait outside the four is not
+surfaced (a type's `FromIterator::from_iter` is generic anyway); a third
+crate's trait is not either. A blanket impl's statics (`impl<T: Display>
+Named for T`) are not written onto each type it covers.
+
+**Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.5.4f is new. E149's known
+boundary is closed. GAPS.md gap 45 is closed.
+
 ---
 When you edit any addendum that touches one of the items above,
 either:

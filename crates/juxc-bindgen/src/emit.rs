@@ -270,9 +270,11 @@ fn render_field(out: &mut String, f: &StubField) {
     if !f.ty.is_spellable() {
         return;
     }
-    // An associated constant is a `static final` field (`Color32.RED`).
+    // An associated constant is a `static final` field (`Color32.RED`); one a
+    // trait impl gives the type is marked with the trait (sweep C3).
     let modifiers = if f.is_static { "static final " } else { "" };
-    let _ = writeln!(out, "    {}{modifiers}{} {};", f.visibility.prefix(), f.ty, f.name);
+    let marker = f.trait_impl.as_deref().map(|t| format!("@RustTrait(\"{t}\") ")).unwrap_or_default();
+    let _ = writeln!(out, "    {marker}{}{modifiers}{} {};", f.visibility.prefix(), f.ty, f.name);
 }
 
 fn render_ctor(out: &mut String, c: &StubCtor) {
@@ -362,6 +364,11 @@ fn render_fn(f: &StubFn, in_interface: bool) -> String {
     // `sort`), so the checker can report an unmet bound in Jux terms.
     if !f.bounds.is_empty() {
         s.push_str(&format!("@RustBounds(\"{}\") ", f.bounds.join(", ")));
+    }
+    // An associated function the type has only through a trait impl, called
+    // as `<Type as Trait>::f(..)` (sweep C3).
+    if let Some(t) = &f.trait_impl {
+        s.push_str(&format!("@RustTrait(\"{t}\") "));
     }
     s.push_str(f.visibility.prefix());
     // `static` is valid on a *class* stub method (no body needed there), but on
@@ -519,6 +526,7 @@ mod tests {
             throws: None,
         });
         hm.methods.push(StubFn {
+            trait_impl: None,
             visibility: Vis::Public,
             is_static: false,
             is_default: false,
@@ -544,6 +552,7 @@ mod tests {
             deprecated: None,
         });
         hm.methods.push(StubFn {
+            trait_impl: None,
             visibility: Vis::Public,
             is_static: false,
             is_default: false,
@@ -584,6 +593,7 @@ mod tests {
     #[test]
     fn renders_throws_and_enum() {
         let f = StubFn {
+            trait_impl: None,
             visibility: Vis::Public,
             is_static: false,
             is_default: false,
@@ -643,6 +653,7 @@ mod tests {
     #[test]
     fn renders_rust_path_on_free_fn() {
         let f = StubFn {
+            trait_impl: None,
             visibility: Vis::Public,
             is_static: false,
             is_default: false,
@@ -684,6 +695,7 @@ mod tests {
     #[test]
     fn renders_unsafe_modifier() {
         let f = StubFn {
+            trait_impl: None,
             visibility: Vis::Public,
             is_static: false,
             is_default: false,

@@ -797,6 +797,33 @@ version = \"0.1.0\"
         assert_eq!(help.label, "draw(Canvas c, String label)");
     }
 
+    /// A static a foreign type has only through a trait impl (sweep C3) is
+    /// shown as the type's own: its hover signature and its signature help
+    /// name no trait and carry no `@RustTrait` marker.
+    #[test]
+    fn a_trait_impl_static_shows_no_trait() {
+        const STUB: &str = "package fam;\n\
+            public class Clock {\n\
+                @RustTrait(\"fam::Tick\") public static final int STEP;\n\
+                @RustTrait(\"std::default::Default\") public static Clock default();\n\
+                @RustTrait(\"std::convert::From<_>\") public static Clock from(int t);\n\
+            }\n";
+        let (analysis, _uri, _rope) = analyze_one("trait_statics", "Clock.jux", STUB);
+        let recv = Ty::User { name: "fam.Clock".to_string(), generic_args: vec![] };
+        for member in ["default", "from", "STEP"] {
+            let resolved = crate::intel::resolve_member(&analysis.symbols, &recv, member)
+                .unwrap_or_else(|| panic!("`{member}` must resolve on Clock"));
+            let sig = resolved.signature();
+            for leak in ["Default", "From", "Tick", "RustTrait", "std::", "<_>"] {
+                assert!(!sig.contains(leak), "`{leak}` in the hover of `{member}`: {sig}");
+            }
+            if let crate::intel::Resolved::Method(_, m) = resolved {
+                let help = crate::calls::signature_info(member, &m.params);
+                assert!(!help.label.contains("From") && !help.label.contains("Default"), "{}", help.label);
+            }
+        }
+    }
+
     // ====================================================================
     // FEATURE 2 — receiver members come from the receiver's type only
     // ====================================================================

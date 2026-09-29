@@ -1389,6 +1389,12 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
     if let Some(ty) = primitive_static_call_type(c) {
         return ty;
     }
+    // `u32.from_str("12")`: the static of the primitive's stub class.
+    let shadowed = matches!(c.callee.as_ref(), Expr::Field(f) if matches!(f.object.as_ref(),
+        Expr::Path(qn) if qn.segments.len() == 1 && env.lookup(&qn.segments[0].text).is_some()));
+    if let Some((call, _)) = primitive_static_as_class_call(c, symbols, shadowed) {
+        return infer_call(&call, env, symbols);
+    }
     // `operator()` (§O.2.4): a callee whose type declares the call
     // overload produces the overload's return type. Checked before
     // the named-function path so a callable LOCAL wins over a
@@ -3770,6 +3776,34 @@ pub fn range_component_type(range: &str, element: &Ty, field: &str) -> Option<Ty
 
 /// The result type of a §K.11 static built-in called on a primitive type name,
 /// or `None` when `c` is not one.
+/// A static call on a primitive type NAME that is not one of the §K.11
+/// built-ins (`u32.from_str("12")`, `u32.from_str_radix("ff", 16)`,
+/// `u32.from(b)`), rewritten as the same call on the class the scanned
+/// `rust.std` stub declares the primitive's Rust surface on
+/// (`rust.std.u32_methods`, `@RustPrimitive("u32")`), so the checker, the
+/// type inference and the backend treat it as the static call of a foreign
+/// class it is (sweep C3). `None` when the call is not of that shape, the
+/// name is shadowed by a local (`shadowed`), or no stub declares the
+/// primitive. The class may still not have the method: that is the caller's
+/// question.
+pub fn primitive_static_as_class_call(c: &CallExpr, symbols: &SymbolTable, shadowed: bool) -> Option<(CallExpr, &'static str)> {
+    let Expr::Field(f) = c.callee.as_ref() else { return None };
+    let Expr::Path(qn) = f.object.as_ref() else { return None };
+    if qn.segments.len() != 1 || shadowed || primitive_static_call_type(c).is_some() {
+        return None;
+    }
+    let prim = primitive_from_name(&qn.segments[0].text)?;
+    let class = symbols.primitive_methods_class(prim.rust_name())?;
+    let span = qn.span;
+    let segments = class
+        .split('.')
+        .map(|s| juxc_ast::Ident { text: s.to_string(), span })
+        .collect();
+    let mut callee = f.clone();
+    callee.object = Box::new(Expr::Path(juxc_ast::QualifiedName { segments, span }));
+    Some((CallExpr { callee: Box::new(Expr::Field(callee)), ..c.clone() }, prim.rust_name()))
+}
+
 pub fn primitive_static_call_type(c: &CallExpr) -> Option<Ty> {
     let Expr::Field(f) = &*c.callee else { return None };
     let Expr::Path(qn) = &*f.object else { return None };

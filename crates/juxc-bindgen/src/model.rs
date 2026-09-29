@@ -316,6 +316,8 @@ impl StubType {
 /// A field declaration (no initializer — stubs are signature-only).
 #[derive(Debug, Clone)]
 pub struct StubField {
+    /// See [`StubFn::trait_impl`]: an associated constant of a trait impl.
+    pub trait_impl: Option<String>,
     pub visibility: Vis,
     pub name: String,
     pub ty: JuxType,
@@ -348,6 +350,14 @@ pub struct StubCtor {
 /// A method / free-function stub.
 #[derive(Debug, Clone)]
 pub struct StubFn {
+    /// The Rust trait whose impl gives the type this member, as the path a
+    /// qualified call names it by (`std::convert::From<_>`), for an associated
+    /// function or constant the type has only through a trait impl
+    /// (`Default::default`, `FromStr::from_str`, a crate trait's own).
+    /// Rendered as `@RustTrait("...")`; the backend calls it as
+    /// `<Type as Trait>::f(..)` (Bindgen G.5.4f, ERRATA E151). The
+    /// trait's name never reaches the program's view of the member.
+    pub trait_impl: Option<String>,
     pub visibility: Vis,
     pub is_static: bool,
     /// Interface `default` method (§G.6.4).

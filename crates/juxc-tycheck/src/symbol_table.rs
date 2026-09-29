@@ -1557,6 +1557,9 @@ pub struct PropertySig {
 pub struct FieldSig {
     /// Field visibility.
     pub visibility: Visibility,
+    /// The annotations written on the field. A foreign stub's associated
+    /// constant a trait impl gives its type carries `@RustTrait` (sweep C3).
+    pub annotations: Vec<juxc_ast::Annotation>,
     /// True if the field is declared `static` (class-scoped, not
     /// per-instance). Drives the `ClassName.FIELD` vs `obj.field`
     /// resolution split.
@@ -6030,6 +6033,7 @@ fn field_sig(field: &FieldDecl) -> FieldSig {
         ty: resolve_decl_type(field.ty.as_ref(), field.default.as_ref(), field.span),
         default: field.default.clone(),
         span: field.span,
+        annotations: field.annotations.clone(),
     }
 }
 

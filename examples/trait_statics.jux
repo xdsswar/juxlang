@@ -1,0 +1,38 @@
+// A Rust type's statics include what it has through a trait impl (Bindgen
+// G.5.4f, sweep C3): `Default::default()`, `From::from(x)`,
+// `FromStr::from_str(s)`, `TryFrom::try_from(x)`. A Jux program calls them on
+// the type, as any static, and never names the trait. A primitive's Rust
+// statics are reached the same way, on its type name.
+import rust.std.Duration;
+
+void main() {
+    // Default: the zero duration.
+    var d = Duration.default();
+    print(d.as_secs());
+
+    // From: a String from another string, a u32 from a smaller integer.
+    var s = String.from("copied");
+    print(s);
+    ushort small = 12;
+    print(u32.from(small) + 1);
+
+    // FromStr, and an inherent static beside it.
+    var n = u32.from_str("41");
+    print(n + 1);
+    print(u32.from_str_radix("ff", 16));
+
+    // A failure is the Jux exception the library's error surfaces as.
+    try {
+        print(u32.from_str("4x"));
+    } catch (NumberFormatException e) {
+        print($"not a number: ${e.getMessage()}");
+    }
+    long big = 5000000000;
+    try {
+        print(u32.try_from(big));
+    } catch (ArithmeticException e) {
+        print($"out of range: ${e.getMessage()}");
+    }
+    long fits = 7;
+    print(u32.try_from(fits));
+}

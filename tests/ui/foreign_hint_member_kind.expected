@@ -1,0 +1,5 @@
+foreign_hint_member_kind.jux:8:11: [E0413] error: no method `from_sec` on type `rust.std.Duration`
+foreign_hint_member_kind.jux:9:11: [E0413] error: no static method `as_sec` on class `rust.std.Duration`
+foreign_hint_member_kind.jux:10:11: [E0413] error: no static method `defualt` on class `rust.std.Duration` -- did you mean `default`?
+foreign_hint_member_kind.jux:11:13: [E0413] error: no static method `from_strr` on `u32` -- did you mean `from`, `from_str`, `from_str_radix`?
+foreign_hint_member_kind.jux:12:13: [E0413] error: no static method `nonsense` on `u32`
