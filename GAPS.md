@@ -629,6 +629,20 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `Timer.fromSecs(3)` through `import ... Clock as Timer` | `E0413` | `E0413` -- did you mean `from_secs`? |
 | a signature naming another package's type, its root lost (hook `path`) | not rescued | heals |
 
+### Sweep C3 (added 2026-09-29)
+
+**45. CLOSED 2026-09-29 (ERRATA E1XX-SWEEPC3).** ~~A static a foreign type has through a trait impl was unknown, a primitive's static was unchecked, and an instance did-you-mean offered statics.~~ Bindgen writes the associated functions and constants of a type's trait impls onto its stub (the crate's own traits, and `Default`, `From`, `TryFrom`, `FromStr`; a primitive's including `core`'s), marked `@RustTrait`, and the backend calls them as `<Type as Trait>::f(..)`. A primitive's statics (`u32.from_str`, `u32.from_str_radix`) are checked and lowered as its stub class's; an unknown one is `E0413`, where it used to reach rustc (E0423). Instance-call suggestions come only from instance members, static-call ones only from statics. No trait name reaches a hover, completion or diagnostic. Std stub cache version 48, crate stub 24; the vendored snapshot gained the 362 new members and nothing else. Tests: `crates/juxc-bindgen/tests/sweepc3_fixture.rs` (real rustdoc JSON), `bin/juxc/tests/trait_statics.rs` (built and run against the fixture crate), `examples/trait_statics.jux`, `tests/ui/foreign_hint_member_kind`, `tests/ui/foreign_instance_method_unknown` (updated by hand), `a_trait_impl_static_shows_no_trait`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `Duration.default()` | `E0413` | the zero duration |
+| `u32.from_str("12")` | E0900 (rustc E0423) | `12`; a bad string throws `NumberFormatException` |
+| `u32.from_str_radix("ff", 16)` | E0900 (rustc E0423) | `255` |
+| `u32.nonsense(3)` | E0900 (rustc E0423) | `E0413` |
+| `u32.try_from(5000000000L)` | E0900 | throws `ArithmeticException` |
+| a crate trait's `Clock.origin()`, `Clock.STEP` | `E0413`, `E0412` | through `<c3fix::Clock as c3fix::Tick>` |
+| `d.asSecs()` | did you mean `as_secs`, `from_secs`? | did you mean `as_secs`? |
+
 ---
 
 ## 4. Three streams stopped mid-flight
