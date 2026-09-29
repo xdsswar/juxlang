@@ -232,6 +232,12 @@ private fun PsiBuilder.parseAngleList(listType: IElementType, typeParams: Boolea
                     atSegmentHead = false
                 }
                 t === T.IDENTIFIER -> { parseTypeRefName(); atSegmentHead = false; afterTypeName = true }
+                // `Task<void>` (§18.1.4): `void` is a type argument like any
+                // other, so the argument list keeps its place.
+                t === T.VOID_KW && !typeParams -> {
+                    val r = mark(); advanceLexer(); r.done(E.TYPE_REFERENCE)
+                    afterTypeName = true
+                }
                 else -> advanceLexer()
             }
         }

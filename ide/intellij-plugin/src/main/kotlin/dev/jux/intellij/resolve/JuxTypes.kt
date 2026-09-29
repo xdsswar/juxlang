@@ -203,8 +203,55 @@ object JuxTypeEngine {
             // `start..end` on a user type calls its `operator..` (§O.2.4) and
             // has that operator's return type; a primitive range stays unknown.
             E.RANGE_EXPRESSION -> JuxOperators.resolve(expr)?.let { returnType(it) } ?: primitiveRangeType(expr)
+            E.LAMBDA_EXPRESSION -> lambdaType(expr)
             else -> JuxType.Unknown
         }
+    }
+
+    /**
+     * A lambda's own function type (LANG-V1 §7.9, ERRATA E145): each
+     * parameter's type -- the written one, else what the slot the lambda is
+     * given to says, else unknown -- and what the body produces: an expression
+     * body's value, a block body's first returned value, else `void`. It is
+     * what `var gv = () -> v;` takes, so `gv()` has a type and `gv().` completes.
+     */
+    private fun lambdaType(lambda: PsiElement): JuxType.FunctionType {
+        val params = lambdaParameters(lambda).map { declaredType(it) }
+        val block = lambda.node.findChildByType(E.CODE_BLOCK)?.psi
+        val ret = if (block == null) {
+            // The body is the expression after `->`; a parameter never is one.
+            lambda.children.lastOrNull { isExpression(it) && it.elementType !== E.PARAMETER }
+                ?.let { typeOf(it) } ?: JuxType.Unknown
+        } else {
+            firstReturnIn(block)?.let { ret -> firstExpressionChild(ret)?.let { typeOf(it) } ?: VOID }
+                ?: VOID
+        }
+        return JuxType.FunctionType(params, ret)
+    }
+
+    private val VOID = JuxType.Primitive("void")
+
+    /** A lambda's parameters in order: the bare `x` of `x -> ..`, or the `(..)` list's. */
+    fun lambdaParameters(lambda: PsiElement): List<PsiElement> {
+        val list = lambda.children.firstOrNull { it.elementType === E.PARAMETER_LIST }
+        return (list?.children?.toList() ?: lambda.children.toList()).filter { it.elementType === E.PARAMETER }
+    }
+
+    /** The first `return` of [block] that belongs to it, not to a lambda or class nested in it. */
+    private fun firstReturnIn(block: PsiElement): PsiElement? {
+        var found: PsiElement? = null
+        fun walk(e: PsiElement) {
+            for (c in e.children) {
+                if (found != null) return
+                when {
+                    c.elementType === E.RETURN_STATEMENT -> { found = c; return }
+                    c.elementType === E.LAMBDA_EXPRESSION || c is JuxTypeDeclaration -> {}
+                    else -> walk(c)
+                }
+            }
+        }
+        walk(block)
+        return found
     }
 
     /**
@@ -356,7 +403,7 @@ object JuxTypeEngine {
         val arg = call.node.findChildByType(E.ARGUMENT_LIST)?.psi?.let { firstExpressionChild(it) }
         val value = when (arg?.elementType) {
             null -> JuxType.Unknown
-            E.LAMBDA_EXPRESSION -> expressionChildren(arg).lastOrNull()?.let { typeOf(it) } ?: JuxType.Unknown
+            E.LAMBDA_EXPRESSION -> lambdaType(arg).ret
             else -> typeOf(arg)
         }
         return JuxType.ClassType(task, listOf(value))

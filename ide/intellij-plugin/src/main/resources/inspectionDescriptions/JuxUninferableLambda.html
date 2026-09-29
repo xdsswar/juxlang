@@ -1,0 +1,15 @@
+<html>
+<body>
+Reports a <code>var</code> lambda with a parameter written without a type that nothing uses,
+so nothing gives the parameter a type (<b>E0453</b>).
+<!-- tooltip end -->
+<p>A <code>var</code> lambda has the function type its parameters and body give it. A parameter
+written without a type takes one from a use: a call (<code>add(1, 2)</code>), or a
+function-typed slot the lambda is passed to. A lambda that is never named again has no use to
+take it from:</p>
+<pre><code>var unused = (x) -&gt; x + 1;   // E0453
+var called = (x) -&gt; x * 2;   // fine: called(4) gives x a type
+print(called(4));</code></pre>
+<p>Write the parameter's type, <code>(int x) -&gt; x + 1</code>, or remove the lambda.</p>
+</body>
+</html>

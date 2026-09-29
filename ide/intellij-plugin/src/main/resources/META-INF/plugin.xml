@@ -842,6 +842,16 @@
         enabledByDefault="true"
         level="ERROR"
         implementationClass="dev.jux.intellij.inspections.JuxTypeArgumentCountInspection"/>
+    <!-- 0.1.10: a `var` lambda whose untyped parameter nothing gives a type
+         to (E0453, LANG-V1 sec. 7.9, ERRATA E145). -->
+    <localInspection
+        language="Jux"
+        shortName="JuxUninferableLambda"
+        displayName="Lambda parameter type cannot be inferred (E0453)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxUninferableLambdaInspection"/>
     <localInspection
         language="Jux"
         shortName="JuxDeprecatedUsage"
@@ -1119,7 +1129,9 @@
     <!-- 0.1.5: `ref` bindings (MISSING-DEFS sec. M.13, ERRATA E84) — the
          deferred `ref` return type (E0523), nesting (E0524), a `ref` generic
          argument (E0526), a pointless `ref` on an already-shared type (W0490),
-         and a `ref` captured by a `Worker.spawn` closure (E0702). -->
+         and a `ref` captured by a `Worker.spawn` closure (E0702). 0.1.10: a
+         captured collection or array written inside the closure (E0702,
+         ERRATA E144). -->
     <localInspection
         language="Jux"
         shortName="JuxRefBinding"

@@ -6,12 +6,21 @@
  * `Task<T>` (ERRATA E136): `spawn` and `Worker.spawn` both return it, and a
  * written `Task<T>` names it as a field, a parameter, a return or an element.
  * Copies of a task name the same task, and whichever is awaited first takes
- * the result: `await t`, `blockingGet()`, `join()`, `map` and `flatMap` each
- * take it.
+ * the result: `await t`, `await()`, `blockingGet()`, `join()`, `map` and
+ * `flatMap` each take it.
+ *
+ * A time span (`Task.delay`) is a count of milliseconds or Rust's `Duration`
+ * (§18.1.9, ERRATA E58), exactly the two the checker accepts (E0487); hence
+ * the two `delay` overloads.
  */
 package jux.std.concurrent;
 
+import rust.std.Duration;
+
 public class Task<T> {
+    /** Suspends until the task settles and takes its value: `await task` spelled as a call. */
+    public async T await() { throw new UnsupportedOperationException("intrinsic"); }
+
     /** Blocks the calling thread until the task settles; rethrows its failure. */
     public T blockingGet() { throw new UnsupportedOperationException("intrinsic"); }
 
@@ -38,6 +47,12 @@ public class Task<T> {
 
     /** A task settled at birth with the failure `error`; awaiting it rethrows `error`. */
     public static <T> Task<T> failed(Exception error) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** A timer task that settles, with no value, `millis` milliseconds from now. */
+    public static Task<void> delay(long millis) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** A timer task that settles, with no value, once `d` has passed. */
+    public static Task<void> delay(Duration d) { throw new UnsupportedOperationException("intrinsic"); }
 
     /** Resolves when every task resolves, with their values in order; fails on the first failure. */
     public static <T> Task<Vec<T>> all(Task<T>... tasks) { throw new UnsupportedOperationException("intrinsic"); }
