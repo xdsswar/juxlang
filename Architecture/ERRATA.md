@@ -4669,7 +4669,8 @@ seen was silently used.
 **Known boundary.** Two items of one simple name inside ONE crate (naga's
 several `Error`s) still collapse to the first, as §G.4.1 always said, and a
 reference to the other is written as the one kept. Names inside bindgen's
-string markers (`@RustFrom("...")`, `implements`) stay simple.
+string markers (`@RustFrom("...")`, `implements`) stay simple. Both are
+closed by E1XX-SWEEPB.
 
 **Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.6.2.4 (nested packages, exact
 names) and new §G.5.8 (deprecated items); `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4
@@ -4904,7 +4905,8 @@ callback reaches the runtime's handler as before. A foreign error whose Jux
 exception is not listed above is a `LibraryException` even when a closer Jux
 class exists; the table grows by adding a row. A foreign value inside a Jux
 `Result`, printed through `Debug`, shows its structure in the record form
-under its own type name (`ParseIntError(kind: InvalidDigit)`).
+under its own type name (`ParseIntError(kind: InvalidDigit)`). All three are
+closed by E1XX-SWEEPB.
 
 **Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.5.4's "Catching a Rust error"
 is replaced by the rule above; `JUX-EXCEPTIONS-ADDENDUM.md` §X.1.2 lists
@@ -5806,6 +5808,199 @@ nullable, `Box`, `Rc`; Java differential case 156),
 §18.2, `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10, and
 `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 (`E0438` retired, `E0453`, `E0620`,
 `E0702`) are amended. GAPS.md gap 40b is closed.
+
+---
+
+## E1XX-SWEEPB. What the crate-boundary work left: an error's closest class, its text, one crate's same-name items, marker names, a crate thread's stack
+
+**Conflict.** E128, E132 and E134 each closed with a known boundary, and all
+five still let Rust, or the wrong type, reach a Jux programmer:
+
+1. **A crate's error with no row in E134's table** was a `LibraryException`
+   even when a closer Jux exception existed: a crate error wrapping an
+   `io::Error`, a failed parse, a data-format error, a timeout, a missing
+   key. `std::io::Error` knew two kinds (`NotFound`, anything else).
+2. **A library's error value, printed**, showed its Rust structure under
+   its Rust type name inside a Jux `Result` (`Err(ParseIntError(kind:
+   InvalidDigit))`), and a caught one printed its bare message where the
+   uncaught report named the Jux class. A `Result` holding an error type with
+   no `Clone` (`io::Error`, most crates' errors) printed `<Result>`.
+3. **Two items of one simple name inside ONE crate** (naga's several
+   `Error`s, §G.4.1) collapsed to the first, and every signature naming another
+   one was written as the one kept (E132's known boundary).
+4. **Names inside bindgen's string markers** (`@RustFrom("...")`,
+   `@RustBlanket`, `@RustImplementedBy`, `@RustOwnedAs`, `@RustDerefs`,
+   `@RustIndexOutput`, `@RustBounds`) and the `implements` clauses stayed
+   simple, so they bound to whichever type of the name the reader found: in a
+   crate with its own `de::Error` trait, every error type was written
+   `implements Error` for `std::error::Error`, which named the crate's trait.
+5. **A stack overflow on a crate's own thread running a Jux callback**
+   (Linux, macOS) reached Rust's report (`thread '<name>' has overflowed its
+   stack`), since only `main` and `Worker` threads recorded their stacks
+   (E134's known boundary).
+
+**Resolution.**
+
+1. **A library's error is classified by what it is, not by a table.**
+   `jux_error_class` in the prelude asks, in order:
+   - an `io::Error`, by its kind: `NotFound` is a `FileNotFoundException`,
+     `PermissionDenied` an `AccessDeniedException`, `AlreadyExists` a
+     `FileAlreadyExistsException`, `TimedOut` a `SocketTimeoutException`,
+     `Interrupted` an `InterruptedIOException`, `UnexpectedEof` an
+     `EOFException`, `InvalidData` a `FormatException` (all `IOException`s),
+     `InvalidInput` an `IllegalArgumentException`, `Unsupported` an
+     `UnsupportedOperationException`, any other kind an `IOException`;
+   - Rust's own errors by what they are: E134's rows, plus
+     `TryFromFloatSecsError`, `TryFromSliceError`, `NulError`,
+     `StripPrefixError`, `LayoutError`, `SystemTimeError` and the char
+     conversion errors as `IllegalArgumentException`, and `VarError`
+     (`NotPresent` a `NoSuchElementException`, `NotUnicode` an
+     `EncodingException`);
+   - a crate's error by the SHAPE bindgen read off its rustdoc (below), an
+     enum by the variant its `Debug` form starts with, and an `IOException`
+     refined by the `io::Error` the value wraps;
+   - the errors the value wraps (`source()`, walked): the first `io::Error`,
+     number or UTF-8 error there;
+   - otherwise a `LibraryException`.
+
+   **The shape** (`@RustError("<class>")`, `@RustTypeName("<definition
+   path>")`, `@RustErrorVariants("Variant:Class;...")` on each error type of a
+   crate stub, from what it implements and how it is built; no crate or type
+   name is listed anywhere): a timeout (its name says `Timeout`/`TimedOut`,
+   or tokio's `Elapsed`) is a `TimeoutException`; an error implementing a
+   serde-shaped `de::Error`/`ser::Error` trait, or named for decoding,
+   (de)serializing, syntax or format, a `FormatException`; a parse error (some
+   `impl FromStr`'s `Err`, or a name ending in `ParseError`) a
+   `NumberFormatException` when what failed to parse is a number (a word of
+   its name: `Int`, `Float`, `Decimal`, `Number`, ...) and an
+   `IllegalArgumentException` otherwise; a name saying `NotFound` a
+   `NoSuchElementException`; an error with `impl From<io::Error>` an
+   `IOException`. An enum's variants refine it: `...NotFound`, `NoSuch...`,
+   `Missing...` are `NoSuchElementException`, a timeout variant a
+   `TimeoutException`, `Unsupported...` an `UnsupportedOperationException`,
+   one holding an `io::Error` an `IOException`, a `ParseIntError`/
+   `ParseFloatError` a `NumberFormatException`, a `Utf8Error`/`FromUtf8Error`
+   an `EncodingException`. The running program finds a thrown value's entry
+   by `std::any::type_name`, which is the definition path the marker records.
+
+   **New classes** (§X.1.2), each Java's: `AccessDeniedException`,
+   `FileAlreadyExistsException`, `InterruptedIOException`,
+   `SocketTimeoutException` (an `InterruptedIOException`), `EOFException`,
+   and `FormatException` (data not in the format its reader expects; an
+   `IOException`, as a JSON library's is in Java, so a `catch (IOException e)`
+   around reading and decoding takes it). An I/O error that is really a bad
+   argument is an `IllegalArgumentException`, as in Java.
+2. **A library's error is shown as the Jux exception it is**,
+   `NumberFormatException: invalid digit found in string` (the message
+   without ` (os error N)`): printed, interpolated, joined to a string, and
+   inside a `Result` or any generic code. The show tiers recognise a library's
+   error by its type's NAME, which the value carries at run time, generic code
+   included: Rust's own errors (a `std`/`core`/`alloc` type whose name ends in
+   `Error`) and every error type a crate stub records (an error whose shape
+   says nothing is recorded with an empty class). A trait tier asking for
+   `std::error::Error` was tried and not kept: method resolution picks a tier
+   before the value's type is inferred, and it chose that one for an integer
+   (`gen {}` in `examples/async_streams.jux`, rustc E0277). The text a thrown
+   error was shown as is remembered by its type name and its `Display` or
+   `Debug` form, so the value prints the same wherever it is held, and the
+   `Debug`-only tier of generic code finds it. A generic enum's
+   `Display` no longer needs `Clone` of its parameters, so a `Result` holding
+   an error with no `Clone` prints. A caught Jux exception (`catch (Exception
+   e)`) still prints its message (§O.7.1); the `Class: message` form is the
+   Rust value's, which has no message of its own to show.
+3. **Every item of a shared name in one crate is nameable** (§G.4.1,
+   §G.6.2.4). The family plan keeps EVERY candidate of a simple name, whether
+   the others are in another member or in another module of the same crate.
+   The most general (the shortest public path, as before) keeps the plain name
+   in the host's package; each other is declared in the nested package of its
+   module path, `rust.naga.front.wgsl.Error`, with its methods. References are
+   matched to candidates by definition path, which rustdoc records the same
+   way in every crate that mentions the type, so every signature names the
+   exact one (`describe_parse_error(&rust.naga.front.wgsl.Error error)`). A
+   free function or constant sharing its name with another of the crate is
+   declared in its module's nested package as well
+   (`rust.naga.front.wgsl.parse`), and the most general also keeps the plain
+   name. A type of Rust's own library whose simple name the family declares is
+   written `rust.std.<Name>` (`io::Error` beside naga's `Error`s). Importing
+   two of them by simple name, or using one two wildcards bring, is `E0303`,
+   exactly as for gap 37's family names. `CRATE_STUB_CACHE_VERSION` is 23.
+4. **Marker names are qualified like signatures.** Every name bindgen writes
+   into a string marker or an `implements` clause goes through the same
+   qualifier as signatures: `Diagnostic`'s
+   `@RustFrom("rust.naga.front.spv.Error,rust.naga.front.wgsl.Error")`, a type
+   implementing the crate's own trait `implements rust.naga.Error`. A trait
+   from outside the family (`std::error::Error`) is no longer taken for the
+   family's trait of that name. The consumers resolve qualified names: the
+   checker's generic-slot conversions and trait satisfaction (an `implements`
+   clause naming a trait qualified must name that very trait), trait reach
+   through `@RustImplementedBy`/`@RustBlanket`, `@RustIndexOutput`, and the
+   backend's owned form of a borrowed view. (`@RustClosureRefs`,
+   `@RustClosureShared` and `@RustStructVariants` hold positions and field
+   names, no type names.)
+5. **A crate's thread running a Jux callback reports a stack overflow in Jux
+   terms** (Linux and macOS, x86_64 and aarch64). Every closure the backend
+   hands to a crate starts with `jux_enter_callback()`, which records the
+   thread's stack (and gives it an alternate signal stack) the first time it
+   runs Jux code; after that it is one thread-local read, and on Windows,
+   whose vectored handler covers every thread, nothing. `jux_enter_thread` is
+   idempotent. For a thread nobody recorded (the crate's code overflowing
+   before it reaches a callback, or a named Jux function passed as a fn
+   item), the `SIGSEGV`/`SIGBUS` handler reads the faulting thread's stack
+   pointer from the signal's `ucontext_t` (the layout spelled out per target)
+   and treats a fault within 64 KiB of it as the stack running out: memory
+   that close to the stack pointer is the stack, which never faults, or its
+   guard. This is a plain memory read. Asking `pthread` for the faulting
+   thread's stack inside the handler was considered and not taken: glibc's
+   `pthread_getattr_np` allocates (and reads `/proc/self/maps` for the main
+   thread) and macOS's `pthread_get_stacksize_np` may take the thread-list
+   lock, neither of which is async-signal-safe.
+
+**Found along the way, and fixed** (each a crate-boundary failure the nested
+packages make common): a fully-qualified call of a crate function
+(`rust.naga.front.wgsl.parse(src)`) and a fully-qualified foreign enum variant
+reached rustc as `crate::rust::...` (E0900); an argument whose parameter type
+is a qualified class (`&rust.naga.front.wgsl.Error`) was read by its last
+segment as the crate's trait `Error` and wrapped as a trait object; a borrowed
+argument of a foreign static method was cloned before it was lent (a crate
+error has no `Clone`); a foreign free function was looked up by its last
+segment, so `write` could mean `rust.std.write`; a `catch` naming a crate's
+error ENUM never matched.
+
+**Tests.** `crates/juxc-bindgen/tests/sweepb_fixture.rs` over REAL rustdoc
+JSON of a fixture crate in naga's shape (`fixtures/sweepb-src`, four `Error`s,
+two `parse` functions, a `Diagnostic` converting from two of the `Error`s, and
+error types of every shape). `bin/juxc/tests/crate_errors.rs` generates its
+stub as the driver does, then builds and RUNS programs against the real
+crate: every `Error` named by its module path, by a fully-qualified name and
+under an alias; `E0303` for two single-type imports and for a use of a name two
+wildcards bring; each error caught as the class its shape says and shown as
+it; an uncaught one reported as its Jux exception with the `.jux` line.
+`crates/juxc-backend-rust/src/tests.rs`
+(`foreign_errors_are_classified_by_their_shape`) compiles the classifier on
+its own over every I/O kind and the other rules.
+`examples/foreign_errors_by_shape.jux` (`rust.std` only: `AlreadyExists`,
+`InvalidInput`, `InvalidData`, `VarError`, a `Result` and every show site),
+`examples/runtime_library_error_by_shape.jux` and
+`examples/runtime_stack_overflow_crate_thread.jux` with
+`bin/jux/tests/runtime_failures.rs`. The stack-overflow examples (main thread
+and a `std::thread::Builder` thread) were RUN on Linux (WSL, a static musl
+build) and on Windows, each reporting in Jux terms with status 101, and once
+with the callback registration removed to check the stack-pointer path on its
+own; the emitted crates type-check for `x86_64`/`aarch64` Linux (gnu, musl)
+and macOS, which were not run.
+
+**Known boundary.** `rust.std` stays one flat package (§G.6.2.1): its items
+of one simple name (`std::io::Error`, `std::fmt::Error`, the many `Iter`s)
+still keep one per name there, the rule being for crate stubs. The
+stack-pointer rule for an unrecorded thread assumes a frame no larger than
+64 KiB; a recorded thread (every one that ran a Jux callback) is judged by its
+exact bounds. Other Unix targets keep the runtime's report.
+
+**Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.4.1 (same-name items of one
+crate), §G.5.4 (the classification replaces the table), §G.6.2.4 (candidates
+by definition path, values in nested packages, `rust.std.<Name>`, marker
+names) and `JUX-EXCEPTIONS-ADDENDUM.md` §X.1.2 (the six new classes) are
+amended. No diagnostic code is added. GAPS.md "Sweep B" is closed.
 
 ---
 When you edit any addendum that touches one of the items above,

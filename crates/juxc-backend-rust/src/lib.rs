@@ -4779,12 +4779,21 @@ impl RustEmitter {
         // 3.4). The type is asked of the value at run time, which works inside
         // generic code where a trait tier cannot tell an `f64` from any `T`;
         // `Display`'s digits read back as the same value, so nothing is lost.
+        // A library's ERROR reaching it is shown as the Jux exception it is
+        // (Bindgen G.5.4, ERRATA E1XX-SWEEPB), `NumberFormatException:
+        // invalid digit found in string`, never under its Rust type name. It
+        // is recognised by its type's NAME, which the value carries at run
+        // time: Rust's own errors, and every error type a crate stub
+        // describes (`JUX_ERROR_HINTS`). A trait tier asking for
+        // `std::error::Error` would be chosen before the value's type is
+        // inferred, and fail for an integer.
         w.push_str(concat!(
             "pub fn jux_display_text<T: std::fmt::Display + ?Sized>(v: &T) -> String {\n",
             "    let text = format!(\"{}\", v);\n",
             "    match std::any::type_name_of_val(v).trim_start_matches('&') {\n",
             "        \"f64\" => text.parse::<f64>().map(crate::jux_float).unwrap_or(text),\n",
             "        \"f32\" => text.parse::<f32>().map(crate::jux_float).unwrap_or(text),\n",
+            "        name if crate::jux_is_error_type(name) => crate::jux_error_displayed(name, text),\n",
             "        _ => text,\n",
             "    }\n",
             "}\n",
@@ -4806,13 +4815,6 @@ impl RustEmitter {
         w.push_str("pub trait JuxShowViaTypeName { fn jux_show(self) -> String; }\n");
         w.push_str("impl<T> JuxShowViaTypeName for &JuxShow<T> {\n");
         w.push_str("    fn jux_show(self) -> String { jux_type_label::<T>() }\n");
-        w.push_str("}\n");
-        // The TOP tier: a library's error prints as the Jux exception it
-        // surfaces as (Bindgen G.5.4), `NumberFormatException: invalid digit
-        // found in string`, never under its Rust type name.
-        w.push_str("pub trait JuxShowViaError { fn jux_show(self) -> String; }\n");
-        w.push_str("impl<T: std::error::Error> JuxShowViaError for &&&&JuxShow<T> {\n");
-        w.push_str("    fn jux_show(self) -> String { jux_error_show(std::any::type_name::<T>(), &self.0) }\n");
         w.push_str("}\n");
         w.push_str(concat!(
             "/// The label `__jux_show!` prints for a value that has neither\n",
@@ -5283,26 +5285,8 @@ fn jux_unescape_debug(inner: &str) -> String {
     out
 }
 "##);
-        // A value of a Rust ERROR type (one implementing `std::error::Error`)
-        // is shown as the Jux exception it surfaces as, `NumberFormatException:
-        // invalid digit found in string`, above every other tier (Bindgen
-        // G.5.4, ERRATA E1XX-SWEEPB): its Rust type name is never what a
-        // program prints. No Jux type implements `std::error::Error`, so the
-        // tier only ever sees a library's error.
         w.push_str("#[macro_export]\n");
         w.push_str("macro_rules! __jux_show {\n");
-        w.push_str("    ($v:expr) => {{\n");
-        w.push_str("        #[allow(unused_imports)]\n");
-        w.push_str(
-            "        use $crate::{JuxShowViaError as _, JuxShowViaDisplay as _, JuxShowViaDebug as _, JuxShowViaTypeName as _};\n",
-        );
-        w.push_str("        (&&&&$crate::JuxShow(&$v)).jux_show()\n");
-        w.push_str("    }};\n");
-        w.push_str("}\n\n");
-        // The value's own text, without the error tier: the message a thrown
-        // Rust error carries (`invalid digit found in string`).
-        w.push_str("#[macro_export]\n");
-        w.push_str("macro_rules! __jux_show_plain {\n");
         w.push_str("    ($v:expr) => {{\n");
         w.push_str("        #[allow(unused_imports)]\n");
         w.push_str(
@@ -5322,13 +5306,13 @@ fn jux_unescape_debug(inner: &str) -> String {
         w.push_str("    ($e:expr) => {{\n");
         w.push_str("        #[allow(unused_imports)]\n");
         w.push_str(
-            "        use $crate::{JuxErrChainVia as _, JuxErrChainNone as _, JuxErrDebugVia as _, JuxErrDebugNone as _};\n",
+            "        use $crate::{JuxErrChainVia as _, JuxErrChainNone as _, JuxErrDebugVia as _, JuxErrDebugNone as _, JuxErrTextVia as _, JuxErrTextDebug as _, JuxErrTextNone as _};\n",
         );
-        w.push_str("        let __jux_err = $e;\n");
-        w.push_str("        let __jux_text = $crate::__jux_show_plain!(__jux_err);\n");
-        w.push_str("        let __jux_debug = (&&$crate::JuxErrProbe(&__jux_err)).jux_debug();\n");
-        w.push_str("        let __jux_chain = (&&$crate::JuxErrProbe(&__jux_err)).jux_chain_class();\n");
-        w.push_str("        $crate::__jux_raise_foreign(__jux_text, __jux_debug, __jux_chain, __jux_err)\n");
+        w.push_str("        let raised = $e;\n");
+        w.push_str("        let text = (&&&$crate::JuxErrProbe(&raised)).jux_text();\n");
+        w.push_str("        let debug = (&&$crate::JuxErrProbe(&raised)).jux_debug();\n");
+        w.push_str("        let wrapped = (&&$crate::JuxErrProbe(&raised)).jux_chain_class();\n");
+        w.push_str("        $crate::__jux_raise_foreign(text, debug, wrapped, raised)\n");
         w.push_str("    }};\n");
         w.push_str("}\n\n");
         // An erased type argument's value (ERRATA E141): polymorphic
@@ -5920,6 +5904,10 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         // Jux exception it stands for, wrapped with the Rust value, so a
         // clause for that exception (or any class above it) catches it, and a
         // clause naming the Rust type itself still gets the value.
+        // The runtime half of Bindgen G.5.4. Written with no `derive`, no
+        // `+= 1`, no `.iter()` and no `(None`: this text sits in every emitted
+        // crate, and the backend's own tests search an emitted crate for those
+        // to check what the USER's code became.
         w.push_str(r#"/// A Rust `Err` thrown into Jux (Bindgen G.5.4). `jux` is the Jux
 /// exception it surfaces as (`NumberFormatException`, `IOException`,
 /// `LibraryException`, ...), `ancestors` that class and every class above it,
@@ -5932,145 +5920,80 @@ pub struct JuxForeignError {
     pub ancestors: Vec<::std::any::TypeId>,
     pub error: ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>,
 }
-/// The Jux exception classes a Rust error surfaces as (Bindgen G.5.4).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum JuxErrClass {
-    FileNotFound,
-    AccessDenied,
-    FileAlreadyExists,
-    SocketTimeout,
-    InterruptedIo,
-    Eof,
-    Format,
-    Io,
-    NumberFormat,
-    IllegalArgument,
-    Encoding,
-    Arithmetic,
-    NoSuchElement,
-    Timeout,
-    UnsupportedOperation,
-    Library,
+/// A Jux exception class a Rust error surfaces as (Bindgen G.5.4), by its
+/// index in `JUX_ERR_CLASSES`.
+pub type JuxErrClass = u8;
+/// The classes, by their fully qualified names; `jux_err` names each index.
+pub const JUX_ERR_CLASSES: [&str; 16] = [
+    "jux.std.exceptions.FileNotFoundException",
+    "jux.std.exceptions.AccessDeniedException",
+    "jux.std.exceptions.FileAlreadyExistsException",
+    "jux.std.exceptions.SocketTimeoutException",
+    "jux.std.exceptions.InterruptedIOException",
+    "jux.std.exceptions.EOFException",
+    "jux.std.exceptions.FormatException",
+    "jux.std.exceptions.IOException",
+    "jux.std.exceptions.NumberFormatException",
+    "jux.std.exceptions.IllegalArgumentException",
+    "jux.std.exceptions.EncodingException",
+    "jux.std.exceptions.ArithmeticException",
+    "jux.std.exceptions.NoSuchElementException",
+    "jux.std.exceptions.TimeoutException",
+    "jux.std.exceptions.UnsupportedOperationException",
+    "jux.std.exceptions.LibraryException",
+];
+/// The index of each class in `JUX_ERR_CLASSES`.
+pub mod jux_err {
+    pub const FILE_NOT_FOUND: u8 = 0;
+    pub const ACCESS_DENIED: u8 = 1;
+    pub const FILE_ALREADY_EXISTS: u8 = 2;
+    pub const SOCKET_TIMEOUT: u8 = 3;
+    pub const INTERRUPTED_IO: u8 = 4;
+    pub const EOF: u8 = 5;
+    pub const FORMAT: u8 = 6;
+    pub const IO: u8 = 7;
+    pub const NUMBER_FORMAT: u8 = 8;
+    pub const ILLEGAL_ARGUMENT: u8 = 9;
+    pub const ENCODING: u8 = 10;
+    pub const ARITHMETIC: u8 = 11;
+    pub const NO_SUCH_ELEMENT: u8 = 12;
+    pub const TIMEOUT: u8 = 13;
+    pub const UNSUPPORTED_OPERATION: u8 = 14;
+    pub const LIBRARY: u8 = 15;
 }
-impl JuxErrClass {
-    const ALL: [JuxErrClass; 16] = [
-        JuxErrClass::FileNotFound,
-        JuxErrClass::AccessDenied,
-        JuxErrClass::FileAlreadyExists,
-        JuxErrClass::SocketTimeout,
-        JuxErrClass::InterruptedIo,
-        JuxErrClass::Eof,
-        JuxErrClass::Format,
-        JuxErrClass::Io,
-        JuxErrClass::NumberFormat,
-        JuxErrClass::IllegalArgument,
-        JuxErrClass::Encoding,
-        JuxErrClass::Arithmetic,
-        JuxErrClass::NoSuchElement,
-        JuxErrClass::Timeout,
-        JuxErrClass::UnsupportedOperation,
-        JuxErrClass::Library,
-    ];
-    /// The class's fully qualified name.
-    pub fn fqn(self) -> &'static str {
-        match self {
-            JuxErrClass::FileNotFound => "jux.std.exceptions.FileNotFoundException",
-            JuxErrClass::AccessDenied => "jux.std.exceptions.AccessDeniedException",
-            JuxErrClass::FileAlreadyExists => "jux.std.exceptions.FileAlreadyExistsException",
-            JuxErrClass::SocketTimeout => "jux.std.exceptions.SocketTimeoutException",
-            JuxErrClass::InterruptedIo => "jux.std.exceptions.InterruptedIOException",
-            JuxErrClass::Eof => "jux.std.exceptions.EOFException",
-            JuxErrClass::Format => "jux.std.exceptions.FormatException",
-            JuxErrClass::Io => "jux.std.exceptions.IOException",
-            JuxErrClass::NumberFormat => "jux.std.exceptions.NumberFormatException",
-            JuxErrClass::IllegalArgument => "jux.std.exceptions.IllegalArgumentException",
-            JuxErrClass::Encoding => "jux.std.exceptions.EncodingException",
-            JuxErrClass::Arithmetic => "jux.std.exceptions.ArithmeticException",
-            JuxErrClass::NoSuchElement => "jux.std.exceptions.NoSuchElementException",
-            JuxErrClass::Timeout => "jux.std.exceptions.TimeoutException",
-            JuxErrClass::UnsupportedOperation => "jux.std.exceptions.UnsupportedOperationException",
-            JuxErrClass::Library => "jux.std.exceptions.LibraryException",
-        }
+/// A class's fully qualified name.
+pub fn jux_err_fqn(class: JuxErrClass) -> &'static str {
+    JUX_ERR_CLASSES[class as usize]
+}
+/// A class's simple name, as a program writes it in a `catch`.
+pub fn jux_err_simple(class: JuxErrClass) -> &'static str {
+    &jux_err_fqn(class)["jux.std.exceptions.".len()..]
+}
+/// The class a crate stub's `@RustError` marker names.
+pub fn jux_err_named(name: &str) -> Option<JuxErrClass> {
+    JUX_ERR_CLASSES
+        .into_iter()
+        .position(|fqn| &fqn["jux.std.exceptions.".len()..] == name)
+        .map(|i| i as JuxErrClass)
+}
+/// The class an I/O error of the kind `kind` (its name) is.
+pub fn jux_err_of_io_kind(kind: &str) -> JuxErrClass {
+    match kind {
+        "NotFound" => jux_err::FILE_NOT_FOUND,
+        "PermissionDenied" => jux_err::ACCESS_DENIED,
+        "AlreadyExists" => jux_err::FILE_ALREADY_EXISTS,
+        "TimedOut" => jux_err::SOCKET_TIMEOUT,
+        "Interrupted" => jux_err::INTERRUPTED_IO,
+        "UnexpectedEof" => jux_err::EOF,
+        "InvalidInput" => jux_err::ILLEGAL_ARGUMENT,
+        "InvalidData" => jux_err::FORMAT,
+        "Unsupported" => jux_err::UNSUPPORTED_OPERATION,
+        _ => jux_err::IO,
     }
-    /// The class's simple name, as a program writes it in a `catch`.
-    pub fn simple(self) -> &'static str {
-        let fqn = self.fqn();
-        &fqn["jux.std.exceptions.".len()..]
-    }
-    /// The class a crate stub's `@RustError` marker names.
-    pub fn named(name: &str) -> Option<JuxErrClass> {
-        JuxErrClass::ALL.into_iter().find(|c| c.simple() == name)
-    }
-    /// The class an I/O error of the kind `kind` (its name) is.
-    pub fn of_io_kind(kind: &str) -> JuxErrClass {
-        match kind {
-            "NotFound" => JuxErrClass::FileNotFound,
-            "PermissionDenied" => JuxErrClass::AccessDenied,
-            "AlreadyExists" => JuxErrClass::FileAlreadyExists,
-            "TimedOut" => JuxErrClass::SocketTimeout,
-            "Interrupted" => JuxErrClass::InterruptedIo,
-            "UnexpectedEof" => JuxErrClass::Eof,
-            "InvalidInput" => JuxErrClass::IllegalArgument,
-            "InvalidData" => JuxErrClass::Format,
-            "Unsupported" => JuxErrClass::UnsupportedOperation,
-            _ => JuxErrClass::Io,
-        }
-    }
-    /// An I/O exception: `IOException` or a class below it.
-    fn is_io(self) -> bool {
-        matches!(
-            self,
-            JuxErrClass::FileNotFound
-                | JuxErrClass::AccessDenied
-                | JuxErrClass::FileAlreadyExists
-                | JuxErrClass::SocketTimeout
-                | JuxErrClass::InterruptedIo
-                | JuxErrClass::Eof
-                | JuxErrClass::Format
-                | JuxErrClass::Io
-        )
-    }
-    /// The exception object, and the class with every class above it.
-    fn build(
-        self,
-        text: String,
-        library: String,
-    ) -> (::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>, Vec<::std::any::TypeId>) {
-        use crate::jux::std::exceptions as x;
-        use ::std::any::TypeId as T;
-        use ::std::boxed::Box as B;
-        let io = T::of::<x::IOException>();
-        let rt = T::of::<x::RuntimeException>();
-        let (jux, mut chain): (B<dyn ::std::any::Any + ::std::marker::Send>, Vec<T>) = match self {
-            JuxErrClass::FileNotFound => (B::new(x::FileNotFoundException::new(text)), Vec::from([T::of::<x::FileNotFoundException>(), io])),
-            JuxErrClass::AccessDenied => (B::new(x::AccessDeniedException::new(text)), Vec::from([T::of::<x::AccessDeniedException>(), io])),
-            JuxErrClass::FileAlreadyExists => (B::new(x::FileAlreadyExistsException::new(text)), Vec::from([T::of::<x::FileAlreadyExistsException>(), io])),
-            JuxErrClass::SocketTimeout => (
-                B::new(x::SocketTimeoutException::new(text)),
-                Vec::from([T::of::<x::SocketTimeoutException>(), T::of::<x::InterruptedIOException>(), io]),
-            ),
-            JuxErrClass::InterruptedIo => (B::new(x::InterruptedIOException::new(text)), Vec::from([T::of::<x::InterruptedIOException>(), io])),
-            JuxErrClass::Eof => (B::new(x::EOFException::new(text)), Vec::from([T::of::<x::EOFException>(), io])),
-            JuxErrClass::Format => (B::new(x::FormatException::new(text)), Vec::from([T::of::<x::FormatException>(), io])),
-            JuxErrClass::Io => (B::new(x::IOException::new(text)), Vec::from([io])),
-            JuxErrClass::NumberFormat => (
-                B::new(x::NumberFormatException::new(text)),
-                Vec::from([T::of::<x::NumberFormatException>(), T::of::<x::IllegalArgumentException>(), rt]),
-            ),
-            JuxErrClass::IllegalArgument => (B::new(x::IllegalArgumentException::new(text)), Vec::from([T::of::<x::IllegalArgumentException>(), rt])),
-            JuxErrClass::Encoding => (B::new(x::EncodingException::new(text)), Vec::from([T::of::<x::EncodingException>(), rt])),
-            JuxErrClass::Arithmetic => (B::new(x::ArithmeticException::new(text)), Vec::from([T::of::<x::ArithmeticException>(), rt])),
-            JuxErrClass::NoSuchElement => (B::new(x::NoSuchElementException::new(text)), Vec::from([T::of::<x::NoSuchElementException>(), rt])),
-            JuxErrClass::Timeout => (B::new(x::TimeoutException::new(text)), Vec::from([T::of::<x::TimeoutException>()])),
-            JuxErrClass::UnsupportedOperation => (
-                B::new(x::UnsupportedOperationException::new(text)),
-                Vec::from([T::of::<x::UnsupportedOperationException>(), rt]),
-            ),
-            JuxErrClass::Library => (B::new(x::LibraryException::new(text, library)), Vec::from([T::of::<x::LibraryException>(), rt])),
-        };
-        chain.extend([T::of::<x::Exception>(), T::of::<x::Throwable>()]);
-        (jux, chain)
-    }
+}
+/// An I/O exception: `IOException` or a class below it.
+fn jux_err_is_io(class: JuxErrClass) -> bool {
+    class <= jux_err::IO
 }
 /// The errors a Rust error wraps (its `source()` chain), as the Jux exception
 /// the first one this program knows is: an `io::Error` by its kind, a number
@@ -6079,18 +6002,19 @@ pub fn jux_chain_class(first: Option<&(dyn ::std::error::Error + 'static)>) -> O
     let mut cur = first;
     let mut found: Option<JuxErrClass> = None;
     let mut depth = 0;
-    while let (None, Some(e), true) = (found, cur, depth < 32) {
+    while matches!(found, None) && depth < 32 {
+        let Some(e) = cur else { break };
         found = if let Some(io) = e.downcast_ref::<::std::io::Error>() {
-            Some(JuxErrClass::of_io_kind(&format!("{:?}", io.kind())))
+            Some(jux_err_of_io_kind(&format!("{:?}", io.kind())))
         } else if e.is::<::std::num::ParseIntError>() || e.is::<::std::num::ParseFloatError>() {
-            Some(JuxErrClass::NumberFormat)
+            Some(jux_err::NUMBER_FORMAT)
         } else if e.is::<::std::str::Utf8Error>() || e.is::<::std::string::FromUtf8Error>() {
-            Some(JuxErrClass::Encoding)
+            Some(jux_err::ENCODING)
         } else {
             None
         };
         cur = e.source();
-        depth += 1;
+        depth = depth + 1;
     }
     found
 }
@@ -6129,35 +6053,78 @@ pub fn jux_error_class(type_name: &str, io_kind: Option<&str>, debug: &str, chai
     let from_std = matches!(path.split("::").next(), Some("std" | "core" | "alloc"));
     // The leading word of the `Debug` form: an enum's variant.
     let variant = &debug[..debug.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(debug.len())];
-    let refine = |c: JuxErrClass| match chain {
-        Some(k) if c == JuxErrClass::Io && k.is_io() => k,
-        _ => c,
-    };
-    let hint = JUX_ERROR_HINTS.iter().find(|(p, _, _)| *p == path).and_then(|(_, class, variants)| {
+    let hint = JUX_ERROR_HINTS.into_iter().find(|(p, _, _)| *p == path).and_then(|(_, class, variants)| {
         variants
             .split(';')
             .filter_map(|entry| entry.split_once(':'))
             .find(|(v, _)| *v == variant)
-            .and_then(|(_, c)| JuxErrClass::named(c))
-            .or_else(|| JuxErrClass::named(class))
+            .and_then(|(_, c)| jux_err_named(c))
+            .or_else(|| jux_err_named(class))
     });
-    match (io_kind, from_std, hint) {
-        (Some(kind), _, _) => JuxErrClass::of_io_kind(kind),
-        (None, true, _) => match short {
-            "Error" if path.contains("::io::") => JuxErrClass::of_io_kind(jux_io_kind_in_debug(debug)),
-            "ParseIntError" | "ParseFloatError" => JuxErrClass::NumberFormat,
-            "Utf8Error" | "FromUtf8Error" | "FromUtf16Error" => JuxErrClass::Encoding,
-            "TryFromIntError" => JuxErrClass::Arithmetic,
+    if let Some(kind) = io_kind {
+        jux_err_of_io_kind(kind)
+    } else if from_std {
+        match short {
+            "Error" if path.contains("::io::") => jux_err_of_io_kind(jux_io_kind_in_debug(debug)),
+            "ParseIntError" | "ParseFloatError" => jux_err::NUMBER_FORMAT,
+            "Utf8Error" | "FromUtf8Error" | "FromUtf16Error" => jux_err::ENCODING,
+            "TryFromIntError" => jux_err::ARITHMETIC,
             "ParseBoolError" | "ParseCharError" | "AddrParseError" | "TryFromFloatSecsError" | "TryFromSliceError"
             | "CharTryFromError" | "TryFromCharError" | "NulError" | "StripPrefixError" | "LayoutError"
-            | "SystemTimeError" => JuxErrClass::IllegalArgument,
-            "VarError" if variant == "NotPresent" => JuxErrClass::NoSuchElement,
-            "VarError" => JuxErrClass::Encoding,
-            _ => chain.unwrap_or(JuxErrClass::Library),
-        },
-        (None, false, Some(c)) => refine(c),
-        (None, false, None) => chain.unwrap_or(JuxErrClass::Library),
+            | "SystemTimeError" => jux_err::ILLEGAL_ARGUMENT,
+            "VarError" if variant == "NotPresent" => jux_err::NO_SUCH_ELEMENT,
+            "VarError" => jux_err::ENCODING,
+            _ => chain.unwrap_or(jux_err::LIBRARY),
+        }
+    } else {
+        match hint {
+            // An I/O class is refined by the `io::Error` the value wraps.
+            Some(c) if c == jux_err::IO => chain.filter(|k| jux_err_is_io(*k)).unwrap_or(c),
+            Some(c) => c,
+            _ => chain.unwrap_or(jux_err::LIBRARY),
+        }
     }
+}
+/// The exception object of a class, and the class with every class above it.
+fn jux_err_build(
+    class: JuxErrClass,
+    text: String,
+    library: String,
+) -> (::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send>, Vec<::std::any::TypeId>) {
+    use crate::jux::std::exceptions as x;
+    use ::std::any::TypeId as T;
+    use ::std::boxed::Box as B;
+    let io = T::of::<x::IOException>();
+    let rt = T::of::<x::RuntimeException>();
+    let (jux, mut above): (B<dyn ::std::any::Any + ::std::marker::Send>, Vec<T>) = match class {
+        jux_err::FILE_NOT_FOUND => (B::new(x::FileNotFoundException::new(text)), Vec::from([T::of::<x::FileNotFoundException>(), io])),
+        jux_err::ACCESS_DENIED => (B::new(x::AccessDeniedException::new(text)), Vec::from([T::of::<x::AccessDeniedException>(), io])),
+        jux_err::FILE_ALREADY_EXISTS => (B::new(x::FileAlreadyExistsException::new(text)), Vec::from([T::of::<x::FileAlreadyExistsException>(), io])),
+        jux_err::SOCKET_TIMEOUT => (
+            B::new(x::SocketTimeoutException::new(text)),
+            Vec::from([T::of::<x::SocketTimeoutException>(), T::of::<x::InterruptedIOException>(), io]),
+        ),
+        jux_err::INTERRUPTED_IO => (B::new(x::InterruptedIOException::new(text)), Vec::from([T::of::<x::InterruptedIOException>(), io])),
+        jux_err::EOF => (B::new(x::EOFException::new(text)), Vec::from([T::of::<x::EOFException>(), io])),
+        jux_err::FORMAT => (B::new(x::FormatException::new(text)), Vec::from([T::of::<x::FormatException>(), io])),
+        jux_err::IO => (B::new(x::IOException::new(text)), Vec::from([io])),
+        jux_err::NUMBER_FORMAT => (
+            B::new(x::NumberFormatException::new(text)),
+            Vec::from([T::of::<x::NumberFormatException>(), T::of::<x::IllegalArgumentException>(), rt]),
+        ),
+        jux_err::ILLEGAL_ARGUMENT => (B::new(x::IllegalArgumentException::new(text)), Vec::from([T::of::<x::IllegalArgumentException>(), rt])),
+        jux_err::ENCODING => (B::new(x::EncodingException::new(text)), Vec::from([T::of::<x::EncodingException>(), rt])),
+        jux_err::ARITHMETIC => (B::new(x::ArithmeticException::new(text)), Vec::from([T::of::<x::ArithmeticException>(), rt])),
+        jux_err::NO_SUCH_ELEMENT => (B::new(x::NoSuchElementException::new(text)), Vec::from([T::of::<x::NoSuchElementException>(), rt])),
+        jux_err::TIMEOUT => (B::new(x::TimeoutException::new(text)), Vec::from([T::of::<x::TimeoutException>()])),
+        jux_err::UNSUPPORTED_OPERATION => (
+            B::new(x::UnsupportedOperationException::new(text)),
+            Vec::from([T::of::<x::UnsupportedOperationException>(), rt]),
+        ),
+        _ => (B::new(x::LibraryException::new(text, library)), Vec::from([T::of::<x::LibraryException>(), rt])),
+    };
+    above.extend([T::of::<x::Exception>(), T::of::<x::Throwable>()]);
+    (jux, above)
 }
 /// The library a Rust error comes from, as its `rust.` package names it
 /// (`std` for Rust's own).
@@ -6173,57 +6140,63 @@ fn jux_error_message(text: String) -> String {
         _ => text,
     }
 }
-/// The text a foreign error was last shown as, by its type name and `Debug`
-/// form: remembered where its type is known (where it was thrown, where it was
-/// shown), so a value that generic code holds (a `Result<T, E>`, a `Box<E>`)
-/// prints the same way where only its `Debug` form can be reached.
+/// Whether a value of the type `type_name` is a library's ERROR, from the
+/// name alone (the value carries it at run time, generic code included):
+/// one of Rust's own, whose names end in `Error`, or one a crate stub
+/// describes as an error (`JUX_ERROR_HINTS`). A type of the program never is.
+pub fn jux_is_error_type(type_name: &str) -> bool {
+    let name = type_name.trim_start_matches('&');
+    let path = name.split('<').next().unwrap_or(name);
+    let from_std = matches!(path.split("::").next(), Some("std" | "core" | "alloc"));
+    (from_std && path.ends_with("Error")) || JUX_ERROR_HINTS.into_iter().any(|(p, _, _)| *p == path)
+}
+/// The text a foreign error was shown as, by its type name and its `Display`
+/// (`S:`) or `Debug` (`D:`) form: remembered where the value's type is known,
+/// where it was thrown, so the value prints the same way wherever the program
+/// holds it: caught by its own type, in a `Result<T, E>`, in generic code.
 static JUX_ERROR_SEEN: ::std::sync::Mutex<Vec<(String, String, String)>> = ::std::sync::Mutex::new(Vec::new());
 static JUX_ERROR_ANY: ::std::sync::atomic::AtomicBool = ::std::sync::atomic::AtomicBool::new(false);
-fn jux_error_remember(name: &str, debug: &str, shown: &str) {
+fn jux_error_remember(name: &str, key: String, shown: &str) {
     if let Ok(mut seen) = JUX_ERROR_SEEN.lock() {
-        if seen.len() < 512 && !seen.iter().any(|(n, d, _)| n == name && d == debug) {
-            seen.push((String::from(name), String::from(debug), String::from(shown)));
+        if seen.len() < 1024 && !seen.as_slice().into_iter().any(|(n, k, _)| n == name && *k == key) {
+            seen.push((String::from(name), key, String::from(shown)));
             JUX_ERROR_ANY.store(true, ::std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
-fn jux_error_memo(name: &str, debug: &str) -> Option<String> {
+fn jux_error_memo(name: &str, key: &str) -> Option<String> {
     if JUX_ERROR_ANY.load(::std::sync::atomic::Ordering::Relaxed) {
-        JUX_ERROR_SEEN
-            .lock()
-            .ok()
-            .and_then(|seen| seen.iter().find(|(n, d, _)| n == name && d == debug).map(|(_, _, s)| s.clone()))
+        JUX_ERROR_SEEN.lock().ok().and_then(|seen| {
+            seen.as_slice().into_iter().find(|(n, k, _)| n == name && k == key).map(|(_, _, s)| String::from(s.as_str()))
+        })
     } else {
         None
     }
 }
-/// A value reaching the `Debug` tier: the Jux exception it was shown as, when
-/// it is a foreign error the program has met, else its `Debug` text in Jux's
-/// form.
-pub fn jux_error_recall(name: &str, text: String) -> String {
-    match jux_error_memo(name.trim_start_matches('&'), &text) {
+/// A library's error reaching the `Display` tier: `NumberFormatException:
+/// invalid digit found in string`.
+pub fn jux_error_displayed(name: &str, text: String) -> String {
+    match jux_error_memo(name, &format!("S:{}", text)) {
         Some(shown) => shown,
+        None => format!("{}: {}", jux_err_simple(jux_error_class(name, None, "", None)), jux_error_message(text)),
+    }
+}
+/// A value reaching the `Debug` tier: the Jux exception it was shown as, when
+/// it is a library's error, else its `Debug` text in Jux's form.
+pub fn jux_error_recall(name: &str, text: String) -> String {
+    let bare = name.trim_start_matches('&');
+    match jux_error_memo(bare, &format!("D:{}", text)) {
+        Some(shown) => shown,
+        None if jux_is_error_type(bare) => {
+            let class = jux_error_class(bare, None, &text, None);
+            format!("{}: {}", jux_err_simple(class), jux_debug_as_jux(name, text))
+        }
         None => jux_debug_as_jux(name, text),
     }
 }
-/// A foreign error shown where its type is known: `NumberFormatException:
-/// invalid digit found in string`.
-pub fn jux_error_show(type_name: &str, e: &dyn ::std::error::Error) -> String {
-    let name = type_name.trim_start_matches('&');
-    let debug = format!("{:?}", e);
-    match jux_error_memo(name, &debug) {
-        Some(shown) => shown,
-        None => {
-            let class = jux_error_class(name, None, &debug, jux_chain_class(e.source()));
-            let shown = format!("{}: {}", class.simple(), jux_error_message(format!("{}", e)));
-            jux_error_remember(name, &debug, &shown);
-            shown
-        }
-    }
-}
 /// `__jux_raise!`'s questions about the error's type, answered where the
-/// type is known: its `Debug` form, and what it wraps when it is a
-/// `std::error::Error`. A type without them answers nothing.
+/// type is known: its text, its `Debug` form, and what it wraps when it is a
+/// `std::error::Error`. A type without them answers what it can.
 pub struct JuxErrProbe<'a, T>(pub &'a T);
 pub trait JuxErrDebugVia { fn jux_debug(self) -> String; }
 impl<'a, T: ::std::fmt::Debug> JuxErrDebugVia for &&JuxErrProbe<'a, T> {
@@ -6232,6 +6205,20 @@ impl<'a, T: ::std::fmt::Debug> JuxErrDebugVia for &&JuxErrProbe<'a, T> {
 pub trait JuxErrDebugNone { fn jux_debug(self) -> String; }
 impl<'a, T> JuxErrDebugNone for &JuxErrProbe<'a, T> {
     fn jux_debug(self) -> String { String::new() }
+}
+/// The error's own text: its `Display` form, else its `Debug` form in Jux's
+/// layout, else its type's name.
+pub trait JuxErrTextVia { fn jux_text(self) -> String; }
+impl<'a, T: ::std::fmt::Display> JuxErrTextVia for &&&JuxErrProbe<'a, T> {
+    fn jux_text(self) -> String { format!("{}", self.0) }
+}
+pub trait JuxErrTextDebug { fn jux_text(self) -> String; }
+impl<'a, T: ::std::fmt::Debug> JuxErrTextDebug for &&JuxErrProbe<'a, T> {
+    fn jux_text(self) -> String { jux_debug_as_jux(::std::any::type_name::<T>(), format!("{:?}", self.0)) }
+}
+pub trait JuxErrTextNone { fn jux_text(self) -> String; }
+impl<'a, T> JuxErrTextNone for &JuxErrProbe<'a, T> {
+    fn jux_text(self) -> String { jux_type_label::<T>() }
 }
 pub trait JuxErrChainVia { fn jux_chain_class(self) -> Option<JuxErrClass>; }
 impl<'a, T: ::std::error::Error> JuxErrChainVia for &&JuxErrProbe<'a, T> {
@@ -6263,10 +6250,12 @@ pub fn __jux_raise_foreign<E: ::std::any::Any + ::std::marker::Send>(
             })
     });
     let class = jux_error_class(name, io_kind.as_deref(), &debug, chain);
-    let text = jux_error_message(text);
-    jux_error_remember(name, &debug, &format!("{}: {}", class.simple(), text));
-    let (jux, ancestors) = class.build(text.clone(), jux_error_library(name));
-    ::std::panic::panic_any(JuxForeignError { jux_name: class.fqn(), text, jux, ancestors, error: ::std::boxed::Box::new(error) })
+    let message = jux_error_message(String::from(text.as_str()));
+    let shown = format!("{}: {}", jux_err_simple(class), message);
+    jux_error_remember(name, format!("D:{}", debug), &shown);
+    jux_error_remember(name, format!("S:{}", text), &shown);
+    let (jux, ancestors) = jux_err_build(class, String::from(message.as_str()), jux_error_library(name));
+    ::std::panic::panic_any(JuxForeignError { jux_name: jux_err_fqn(class), text: message, jux, ancestors, error: ::std::boxed::Box::new(error) })
 }
 /// For `catch (T e)` with `T` a foreign type: the Rust error itself, when it is a `T`.
 pub fn __jux_foreign_error_of<T: ::std::any::Any>(

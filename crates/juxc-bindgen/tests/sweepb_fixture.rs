@@ -150,7 +150,12 @@ fn error_types_carry_the_jux_exception_their_shape_says() {
         &writer,
         "@RustErrorVariants(\"UnsupportedCapability:UnsupportedOperationException;EntryPointNotFound:NoSuchElementException;TimedOut:TimeoutException\")",
     );
-    // Nothing about these says more than "an error": a `LibraryException`.
-    assert!(!decl(&host, "class Refusal").contains("@RustError"), "{}", decl(&host, "class Refusal"));
-    assert!(!decl(&nested("rust.sbfix.front.wgsl"), "class Error").contains("@RustError"));
+    // Nothing about these says more than "an error": a `LibraryException`,
+    // recorded all the same so the program knows a value of it is an error.
+    let refusal = decl(&host, "class Refusal");
+    assert_has(&refusal, "@RustError(\"\")");
+    assert_has(&refusal, "@RustTypeName(\"sbfix::Refusal\")");
+    assert_has(&decl(&nested("rust.sbfix.front.wgsl"), "class Error"), "@RustError(\"\")");
+    // A type that is no error says nothing.
+    assert!(!decl(&host, "class Module").contains("@RustError"), "{}", decl(&host, "class Module"));
 }

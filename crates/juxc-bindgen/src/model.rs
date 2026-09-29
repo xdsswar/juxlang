@@ -253,7 +253,8 @@ pub struct StubType {
     /// What an error of this type is to a Jux program when a call throws it
     /// (Bindgen G.5.4): the Jux exception its shape says it is, read off what
     /// it implements and how it is built. `None` for a type that is not an
-    /// error, or whose shape says nothing (a `LibraryException`).
+    /// error; an error whose shape says nothing has an empty class (a
+    /// `LibraryException`).
     pub error: Option<ErrorShape>,
 }
 

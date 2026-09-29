@@ -226,7 +226,7 @@ Keeping Rust names verbatim means a Jux call into a Rust crate is the same ident
 
 ### G.4.1. Collisions
 
-Because names are kept verbatim, distinct Rust names stay distinct (the identity transform can't introduce a collision). Where one crate genuinely re-exports the same name from two paths, `bindgen` keeps the first in declaration order (§G.12). The user may pin an explicit Jux name in the `bindgen` config (§G.11).
+Because names are kept verbatim, distinct Rust names stay distinct (the identity transform can't introduce a collision). A crate may still declare two items of one simple name in different modules (naga's `front::wgsl::Error` and `back::spv::Error`). Every one of them is nameable (ERRATA E1XX-SWEEPB): the most general (the shortest public path) keeps the plain name in the crate's package, and each other is declared in the nested package of its module path, `rust.naga.back.spv.Error`, exactly as a crate family's shared names are (§G.6.2.4). Every signature and every marker names the exact one. A free function or constant sharing its name with another of the crate is declared in its module's nested package as well (`rust.naga.front.wgsl.parse_str`), the most general also keeping the plain name. Importing two of them by their simple name is `E0303`. The one exception is `rust.std`, which stays flat (§G.6.2.1): there the first in declaration order keeps the name. The user may pin an explicit Jux name in the `bindgen` config (§G.11).
 
 ### G.4.2. Keyword-Named Members
 
@@ -300,17 +300,43 @@ In exception-disabled profiles the compiler lowers `throws E` back to `Result<T,
 **`Result<T, ()>` carries the opaque `Error`.** A unit error type says only that the call can fail, and there is no Jux type spelled `void` in a `throws` position, so the clause reads `throws Error`: the same stand-in a one-argument crate alias gets.
 
 
-**A Rust error is a Jux exception** (ERRATA E134). The `Err` value is thrown as the Jux exception it
-stands for, so a Jux programmer catches, reads and reports it in Jux terms and never under the library's type name:
+**A Rust error is a Jux exception** (ERRATA E134, E1XX-SWEEPB). The `Err` value is thrown as the closest Jux
+exception there is, so a Jux programmer catches, reads and reports it in Jux terms and never under the library's
+type name. What it is decides, not a list of names; the first rule that answers wins:
 
-| Rust error | Jux exception |
+| The error | Jux exception |
 |---|---|
+| an `io::Error` of kind `NotFound` / `PermissionDenied` / `AlreadyExists` | `FileNotFoundException` / `AccessDeniedException` / `FileAlreadyExistsException` |
+| an `io::Error` of kind `TimedOut` / `Interrupted` / `UnexpectedEof` / `InvalidData` | `SocketTimeoutException` / `InterruptedIOException` / `EOFException` / `FormatException` |
+| an `io::Error` of kind `InvalidInput` / `Unsupported` / any other | `IllegalArgumentException` / `UnsupportedOperationException` / `IOException` (every message without ` (os error N)`) |
 | `ParseIntError`, `ParseFloatError` | `NumberFormatException` |
-| `io::Error` of kind `NotFound` / any other kind | `FileNotFoundException` / `IOException` (the message without ` (os error N)`) |
-| `Utf8Error`, `FromUtf8Error`, `FromUtf16Error` | `EncodingException` |
+| `Utf8Error`, `FromUtf8Error`, `FromUtf16Error`; `VarError::NotUnicode` | `EncodingException` |
 | `TryFromIntError` | `ArithmeticException` |
-| `ParseBoolError`, `ParseCharError`, `AddrParseError` | `IllegalArgumentException` |
-| any other error of any crate | `LibraryException`: `getMessage()` is the error's text (its `Display` form, or `Debug` without one), `getLibrary()` the crate (`std` for Rust's own) |
+| `ParseBoolError`, `ParseCharError`, `AddrParseError`, `TryFromFloatSecsError`, `TryFromSliceError`, `NulError`, `StripPrefixError`, `LayoutError`, `SystemTimeError`, the char conversion errors | `IllegalArgumentException` |
+| `VarError::NotPresent` | `NoSuchElementException` |
+| a crate's error, by the shape its stub records (below); an enum by its variant; an `IOException` refined by the `io::Error` the value wraps | as recorded |
+| an error wrapping (`source()`) an `io::Error`, a number or a UTF-8 error | the first one's class, as above |
+| anything else, from any crate | `LibraryException`: `getMessage()` is the error's text (its `Display` form, or `Debug` without one), `getLibrary()` the crate (`std` for Rust's own) |
+
+A crate's error type carries its SHAPE, read off its rustdoc: `@RustError("<class>")`,
+`@RustTypeName("<definition path>")` (what `std::any::type_name` reports, so the running program finds the entry),
+and for an enum `@RustErrorVariants("Variant:Class;...")`. Every error type (every type implementing
+`std::error::Error`, and every `FromStr` error) carries them, with an empty class when its shape says nothing: the
+running program recognises a library's error by its type's name, to show it as a Jux exception.
+
+| The type | Jux exception |
+|---|---|
+| a timeout: its name says `Timeout` or `TimedOut`, or it is `Elapsed` | `TimeoutException` |
+| a data-format error: it implements a `de::Error` or `ser::Error` trait (serde's shape), or its name says decode, (de)serialize, syntax or format | `FormatException` |
+| a parse error: some `impl FromStr`'s `Err`, or a name ending in `ParseError` | `NumberFormatException` when what failed to parse is a number (a word of its name: `Int`, `Float`, `Decimal`, `Number`, ...), else `IllegalArgumentException` |
+| a name saying `NotFound` | `NoSuchElementException` |
+| built from an `io::Error` (`impl From<io::Error>`) | `IOException` |
+| a variant `...NotFound`, `NoSuch...`, `Missing...` / a timeout variant / `Unsupported...` | `NoSuchElementException` / `TimeoutException` / `UnsupportedOperationException` |
+| a variant holding an `io::Error` / a `ParseIntError` or `ParseFloatError` / a `Utf8Error` or `FromUtf8Error` | `IOException` / `NumberFormatException` / `EncodingException` |
+
+**A library's error is shown as the Jux exception it is**: `NumberFormatException: invalid digit found in string`,
+printed, interpolated, joined to a string, inside a `Result` (`Err(NumberFormatException: ...)`) and in generic code.
+A caught Jux exception (`catch (Exception e)`) prints its message, as every exception does (§O.7.1).
 
 A clause for that class or any class above it catches the error: `catch (NumberFormatException e)`,
 `catch (IllegalArgumentException e)`, `catch (Exception e)`, `catch (Throwable e)`. A clause for an unrelated class
@@ -468,6 +494,8 @@ A crate's public API is routinely made of other crates: `eframe` is `pub use egu
 - **Members.** The crates it re-exports from, and then, for up to two rounds, the crates that define a type the stub mentions without declaring, as far as the host publishes them (reached through at most two module re-exports, or re-exported by name). A graphics backend's own dependencies stay out even when a signature deep inside mentions them.
 - **Shared names.** A name several members declare means the definition the family PUBLISHES under it (`egui` re-exports `emath::Rect`, so `accesskit::Rect` does not win), then the member closest to the host. That one keeps the simple name in the host's package; the others keep theirs in a nested package (below). Every signature naming any of them writes its qualified name, so none can mean the wrong one: egui's `Panel::frame(Frame)` is `frame(rust.eframe.egui.Frame frame)` and eframe's `run_ui_native` closure takes `(Ui, rust.eframe.Frame)`. A type that lost its name and that the host publishes no path to has no Jux name, and a member mentioning it is left out.
 - **Nested packages.** Each module the host publishes a member's items under is a Jux package nested in the host's, named after the item's SHORTEST public path through the host: `eframe::egui::Frame` is `rust.eframe.egui.Frame`, `eframe::egui::memory::Areas` is `rust.eframe.egui.memory.Areas`. A type the host's package declares is an alias there (`public type Ui = rust.eframe.Ui;`), so `import rust.eframe.egui.*;` reaches all of egui; a type that lost a shared name is declared there. A nested package imports the host's package. Its stub is `.jux-stubs/rust/<host>/<nested package>.jux.d`, generated, loaded and kept with the host's stub (ERRATA E132).
+- **Every candidate, by definition path.** Two items of one simple name in ONE member (naga's `front::wgsl::Error` and `back::spv::Error`) are shared names too (§G.4.1): each type of the name is a candidate, the family's winner keeps the plain name, and every other is declared in its nested package. A reference is matched to its candidate by the item's definition path, which rustdoc records the same way in every crate that mentions it. A free function or constant sharing its name with another of the crate is declared in its module's nested package as well. A type of Rust's own library whose simple name the family declares is written `rust.std.<Name>` (ERRATA E1XX-SWEEPB).
+- **Marker names.** Every type or trait name inside a string marker (`@RustFrom`, `@RustFromInto`, `@RustBlanket`, `@RustImplementedBy`, `@RustOwnedAs`, `@RustDerefs`, `@RustIndexOutput`, `@RustBounds`) and in an `implements` clause is written the way a signature writes it, qualified when the family shares its simple name (`@RustFrom("rust.naga.front.spv.Error,rust.naga.front.wgsl.Error")`), and a reader resolves a qualified entry to that one type. A trait from outside the family (`std::error::Error`) is never written as the family's trait of the same name.
 - **Paths.** Every `@rust` path is written through the host: `eframe::egui::Color32`.
 - **One Rust type, one Jux type.** A member the program also binds in its own right (`rust.egui` beside `rust.eframe`) is declared once, by the dependency whose family holding it is smallest, and every other stub declares its types as aliases of that declaration (`public type Ui = rust.egui.Ui;`). An `import` of such an alias is a `use` of the real path.
 

@@ -3222,8 +3222,10 @@ fn from_str_errors(krate: &Crate) -> HashMap<Id, String> {
 /// `EncodingException`.
 ///
 /// `None` for a type that is not an error (implements no
-/// `std::error::Error` and is no `FromStr` error), or whose shape says
-/// nothing; such an error is a `LibraryException`.
+/// `std::error::Error` and is no `FromStr` error). An error whose shape says
+/// nothing has an empty class, and is a `LibraryException`; it is still
+/// recorded, since the running program recognises a library's error by its
+/// type's name to show it as a Jux exception.
 fn error_shape(
     krate: &Crate,
     id: Id,
@@ -3337,9 +3339,6 @@ fn error_shape(
         if vclass != class {
             by_variant.push((vname.clone(), vclass.to_string()));
         }
-    }
-    if class.is_empty() && by_variant.is_empty() {
-        return None;
     }
     let type_name = krate
         .paths

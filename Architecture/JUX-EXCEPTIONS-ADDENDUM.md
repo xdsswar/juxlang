@@ -76,6 +76,13 @@ Stack trace capture happens at construction time (per `JUX-SEMANTICS-ADDENDUM.md
 // "Recoverable" errors — programmer is expected to catch and handle.
 public class RuntimeException extends Exception { ... }       -- usually NOT caught
 public class IOException extends Exception { ... }
+public class FileNotFoundException extends IOException { ... }
+public class AccessDeniedException extends IOException { ... }       -- permission denied (ERRATA E1XX-SWEEPB)
+public class FileAlreadyExistsException extends IOException { ... }  -- the file to create is there
+public class InterruptedIOException extends IOException { ... }      -- an I/O operation interrupted
+public class SocketTimeoutException extends InterruptedIOException { ... }  -- an I/O time limit passed
+public class EOFException extends IOException { ... }                -- input ended too soon
+public class FormatException extends IOException { ... }             -- data not in the format its reader expects
 public class IllegalArgumentException extends Exception { ... }
 public class IllegalStateException extends Exception { ... }
 public class NumberFormatException extends IllegalArgumentException { ... }  -- text that is not a number (ERRATA E134)
@@ -101,6 +108,15 @@ public final class ExceptionInInitializerError extends RuntimeException { ... }
 public final class ExecutionException extends Exception { ... }     -- task failed
 public final class MultipleDropException extends RuntimeException { ... }   -- §S.5.3
 ```
+
+A class belongs here when a failure the runtime or a library reports needs a class of its own to be caught
+precisely, and then it takes the name and the place Java gives the same failure. The six I/O classes (ERRATA
+E1XX-SWEEPB) are what a Rust `io::Error`'s kind says (Bindgen G.5.4): `java.nio.file`'s
+`AccessDeniedException` and `FileAlreadyExistsException`, `java.io`'s `InterruptedIOException` and
+`EOFException`, `java.net`'s `SocketTimeoutException` (Java's class for a read or connect that timed out). Java has
+no general class for malformed data; `FormatException` is one, an `IOException` as a JSON library's error is in
+Java (`JsonProcessingException`), and it is also what a library's serialization error surfaces as. A library's
+error is unchecked whatever its class (Bindgen G.5.4).
 
 ### X.1.3. Checked vs Unchecked
 

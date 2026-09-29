@@ -564,6 +564,21 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `BTreeMap<T, int>` keyed by an erased or generic `T` | E0900 (rustc E0277) | works, matches Java |
 | 10,000 pushes and reads through an erased function | quadratic | about 60 ms (debug build) |
 
+### Crate-boundary sweep B (added 2026-09-28)
+
+**Sweep B. CLOSED 2026-09-28 (ERRATA E1XX-SWEEPB).** ~~The leftovers of the crate-boundary work (E128, E132, E134).~~ A library's error is the closest Jux exception by what it is, not by a table: an `io::Error` by its kind (`AccessDeniedException`, `FileAlreadyExistsException`, `SocketTimeoutException`, `InterruptedIOException`, `EOFException`, `FormatException`, all new `IOException`s, Java's names; `IllegalArgumentException`, `UnsupportedOperationException`), Rust's own errors by type, a crate's error by the shape bindgen reads off its rustdoc (a timeout, a serde-shaped or format error, a `FromStr` error of a number or of anything else, a not-found name, one built from an `io::Error`, and per enum variant), then by the errors it wraps; `LibraryException` only when nothing is closer. A library's error value prints as that exception (`NumberFormatException: invalid digit found in string`) wherever it is shown: printed, interpolated, joined, inside a `Result` (which now prints for an error with no `Clone` too) and in generic code. Two items of one simple name inside one crate (naga's `Error`s) are each declared in the nested package of their module (`rust.naga.front.wgsl.Error`), every signature names the exact one, and two imports of them are `E0303`. The names inside bindgen's string markers and `implements` clauses are qualified the way signatures are, and their readers resolve qualified names. A stack overflow on a crate's own thread running a Jux callback is Jux's report on Linux and macOS (the callback records its thread; an unrecorded thread is judged by its stack pointer at the fault), run on Linux (WSL, static musl) and Windows, type-checked for macOS and aarch64. Found and fixed on the way: a fully-qualified crate function call or foreign enum variant (`crate::rust::...`, E0900), a qualified class slot read as the trait of its last segment, a borrowed static-call argument cloned, a foreign free function looked up by last segment, a `catch` of a crate's error enum that never matched. `rust.std` stays flat (§G.6.2.1). Tests: `crates/juxc-bindgen/tests/sweepb_fixture.rs` (real rustdoc JSON of a fixture crate in naga's shape), `bin/juxc/tests/crate_errors.rs` (built and run against that crate), `foreign_errors_are_classified_by_their_shape`, `examples/foreign_errors_by_shape.jux`, `examples/runtime_library_error_by_shape.jux`, `examples/runtime_stack_overflow_crate_thread.jux`, `bin/jux/tests/runtime_failures.rs`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `catch (AccessDeniedException e)` around a crate write whose error wraps a `PermissionDenied` `io::Error` | `LibraryException` | caught |
+| a crate's `FromStr` error of a `Decimal` / of a `Version` | `LibraryException` | `NumberFormatException` / `IllegalArgumentException` |
+| a crate's `enum LookupError { KeyNotFound(..), Poisoned }` | `LibraryException` | `NoSuchElementException` / `LibraryException` |
+| `print(parse("x1"))` for a `Result<int, ParseIntError>` | `Err(ParseIntError(kind: InvalidDigit))` | `Err(NumberFormatException: invalid digit found in string)` |
+| `print($"${r}")` for a `Result<String, rust.std.Error>` | `<Result>` | `Err(FileNotFoundException: ...)` |
+| `Module.describe_parse_error(e)` taking naga-shaped `front::wgsl::Error` | the signature took the first `Error` | `&rust.sbfix.front.wgsl.Error` |
+| `rust.sbfix.front.spv.parse(words)`, `rust.sbfix.front.spv.Error.Truncated` | E0900 | work |
+| a lambda recursing forever on a `std::thread::Builder` thread (Linux) | `thread 'library' has overflowed its stack`, status 134 | `panic: stack overflow: ...`, status 101 |
+
 ---
 
 ## 4. Three streams stopped mid-flight
