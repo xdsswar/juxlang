@@ -5808,6 +5808,160 @@ nullable, `Box`, `Rc`; Java differential case 156),
 `E0702`) are amended. GAPS.md gap 40b is closed.
 
 ---
+
+## E1XX-SWEEPC. Sweep C: `Result.from`, `E0327` wherever the build says it, `task.await()`, and the safe level for the type and trait families
+
+**Conflict.** Four things the specification states did not hold:
+
+1. **`Result.from(() -> ...)` (EXCEPTIONS §X.5.4) was not provided.** E131
+   left it a clean `E0413` because a generic `static` on the library's
+   `Result` enum would be one more candidate for every `Result` call the
+   checker infers, a risk to every program for one form.
+2. **`jux check` of an empty file said `check ok`.** `E0327` (a binary with
+   no entry point, E131) was raised only by the build, from rustc's `E0601`;
+   `jux check`, `juxc --check` and the language server said nothing, so the
+   editor showed a clean file that `jux build` refused.
+3. **`task.await()`** (ASYNC §18.1.4 declares `public async T await()`,
+   "same as `await task` syntax") was `E0413`: the checker's list of `Task`
+   members left it out.
+4. **The safe lowering level (E130) covered only ownership, borrowing and
+   inference.** A backend bug in the type and trait families (a missing
+   derived bound, rustc `E0277`/`E0599`; a relative type path, `E0433`; a
+   mismatched type outside a `match` arm, `E0308`) failed at both levels and
+   the user got the `E0900`. E130's own second known case, `$v` over a
+   generic `T` (`E0277`), was of that kind.
+
+**Resolution.**
+
+1. **`Result.from` is a compiler intrinsic**, not a method of the enum.
+   `Result.from(f)` runs `f` (no parameters, a value) under the dispatch a
+   `catch (E e)` clause uses (`assertThrows<E>`'s, every known subclass tried
+   by name and sliced to its `E` part, a library's error first turned into the
+   Jux exception it surfaces as, E134): what `f` returns is `Ok(value)`, an
+   `E` it throws is `Err(e)`, anything else propagates. Its type is decided at
+   the call alone, `Result<T, E>`: `T` what `f` produces; `E` the error type
+   of the `Result<T, E>` the call is written against (a `return` in a function
+   declaring it, a local or field declared with it: a syntactic pass,
+   `juxc_tycheck::result_from`, writes it onto the call as its type argument
+   before anything is inferred), else the type argument written on the call
+   (`Result.from<E>(...)`), else `Exception`. Nothing is added to the `Result`
+   enum, so no other call's inference changes. `E` must be `Exception` or a
+   subclass (`E0446`); `f` must take no parameters (`E0411`) and produce a
+   value (`E0410`); one argument (`E0411`) and at most one type argument
+   (`E0443`). The `E0413` help for `from` is gone; `ok`/`err` keep theirs.
+2. **`E0327` is raised by the rule the build applies, wherever the build
+   would raise it.** The build facts say whether the sources are one binary's
+   (`CfgFacts::binary`): a loose file or directory given to `jux`/`juxc`, a
+   `[[bin]]`, an example; not a `[lib]`. When they are, and the program has no
+   other error (the build stops at the first error, so a broken program is not
+   also told it has nothing to run), a program with no free `main`, class
+   `static main` or `@entry` function (top-level statements make a `main`) is
+   `E0327`, placed at the start of the target's entry file. `jux check`,
+   `juxc --check`, the build and the language server all ask it; the editor
+   treats a file no manifest governs as a program, and a package's set as a
+   binary's when it holds one of its `[[bin]]` entries, so a library member
+   stays clean. rustc's `E0601` still maps to `E0327` as a backstop.
+3. **`task.await()` is `await task`.** The checker accepts it on a `Task`
+   (and lists it in the `E0413` message's members), types it `T`, counts it as
+   taking the task (`E0707` on a later use), and outside an async function,
+   method or lambda reports `E0700` as the keyword does, naming `blockingGet()`
+   for sync code; with arguments it is `E0411`. After checking, the driver
+   rewrites each accepted call as the `await` expression
+   (`expand::apply_task_awaits`), so every suspension analysis and the
+   lowering see one form.
+4. **Six safe switches for the type and trait families**, each replacing a
+   judgement of the backend's with its general answer
+   (`crates/juxc-backend-rust/src/lowering_level.rs`):
+
+   | switch | safe level | rustc errors it removes |
+   |---|---|---|
+   | derived bounds | a safe member of a relaxed generic declaration states `Clone + Debug` for every relaxed parameter that every instantiation the program builds binds to a surely-`Clone + Debug` type (not for a member that implements or overrides another, whose trait fixes its clause); a safe generic free function's own parameters take `Eq + Hash + Ord` where every recorded call binds a type with a total order | `E0277`, `E0599` (no `clone`/`cmp`/`hash` on a parameter), `E0369` |
+   | method names | the overload suffix (`__ovK`) of a method name is read from the checker's pick for the call being written (a stack of calls), not from state carried through emission | `E0061`, `E0308`, `E0599` |
+   | numeric boundaries | every operand's primitive type comes from the checker's record first, so each promotion and widening cast the checker typed is written | `E0308`, `E0277` (`cannot add f64 to isize`) |
+   | type paths | every program type the FQN writer or a `new` names is rooted at `crate::` | `E0433`, `E0412`, `E0425` |
+   | generic calls | a generic free function's call carries a turbofish from the checker's record of its type arguments: the written ones, and each inferred one no parameter type can carry (`_` for the rest) | `E0282`, `E0283` |
+   | `let` bindings | every local is `mut` | `E0596`, `E0384` |
+
+   Under `JUX_SELFCHECK=1` any fallback is still an `E0900`; the fast path is
+   still fixed at source. `JUX_FORCE_SAFE=1` lowers everything safe.
+5. **The regression harness.** `JUX_TEST_BREAK_FAST=<kind>:<function>` puts a
+   historical backend bug back into one function (`BreakKind`, test-only);
+   a bare function name is still gap 34's borrow break. Every kind but
+   `borrow` corrupts the JUDGEMENT at both levels, so the build heals only if a
+   safe switch really replaces it. `bin/jux/tests/safe_mode.rs` builds one
+   project with one function per bug and, for each kind, checks that rustc
+   refuses the fast lowering with the bug's error family and names the
+   function, and that the heal lowers that function alone and prints what the
+   unbroken program prints:
+
+   | kind | bug (where fixed) | rustc | rescued by |
+   |---|---|---|---|
+   | `borrow` | a borrow alive across an argument (gap 30 L12/L14) | `E0502` | operand binding (E130) |
+   | `move` | `w = v` moved the handle `v.len()` read (gap 40, E144) | `E0382` | local reads (E130) |
+   | `clone` | a member copying `T` without `Clone` (gap 2, E118/E120) | `E0599` | derived bounds |
+   | `keybound` | a generic key with no `Ord` (gap 40b, E145) | `E0277` | derived bounds |
+   | `arms` | `"ab " + e` against `"c"` (gap 35, E131) | `E0308` | `switch` arms (E130) |
+   | `numeric` | `isize + f64` through an intersection bound (gap 39, E135) | `E0277` | numeric boundaries |
+   | `path` | a type named without `crate::` (gap 31 L3, gap 35) | `E0433` | type paths |
+   | `infer` | a type argument nothing infers (gap 36 L30, gap 40b) | `E0283` | generic calls |
+   | `overload` | a stale overload pick (gap 39f, E140) | `E0061` | method names |
+   | `mutability` | a `&mut` lend of a non-`mut` binding (gap 30 L8/L9, E127) | `E0596` | `let` bindings |
+
+   Ten bugs, nine rustc error families, every one rescued.
+
+Found and fixed on the way:
+
+- **An interpolation hole's spans had no file.** `$name` and the expression
+  of `${...}` were given spans in file 0 (the first standard-library unit), so
+  their recorded types collided with that unit's expressions: under the safe
+  level `var source = this;` in `Iterable.map` was declared `f64` in a program
+  printing `$half` (`numeric_mixed_ops` failed fully safe). They now carry
+  their file's index.
+- **A bound operand into an erased slot was boxed twice** at the safe level
+  (the binding and the use both applied the box; `polymorphic_recursion_
+  fbounded` failed fully safe). The binding holds the operand's own value.
+- **A wildcard `import rust.std.*;` bound a function the program declares**
+  (`use std::io::empty;` beside the program's `<T> Vec<T> empty()`, rustc
+  `E0255`). A name the program declares as a function is skipped, as one it
+  declares as a type already was.
+
+**Tests.** `examples/result_from.jux` (a value, a checked exception and its
+subclass, a runtime exception, a library error as `NumberFormatException` and
+as `IllegalArgumentException`, `var`, a block lambda, nested `Result`s, an
+exception that is not the `E` propagating), `tests/ui/result_from_misuse`;
+`tests/ui/no_entry_point_check`, `examples/no_entry_point.jux` (now with the
+location), `bin/jux/tests/release_blockers.rs`
+(`jux_check_reports_a_binary_with_no_entry_point`,
+`jux_check_of_a_library_member_stays_clean`), and in
+`crates/juxc-lsp/src/analysis.rs` an empty loose file, a library member and a
+`[[bin]]` entry without `main`; `examples/task_await_method.jux`,
+`tests/ui/task_await_method_misuse`; `bin/jux/tests/safe_mode.rs`
+(`the_safe_level_rescues_every_historical_backend_bug`,
+`a_break_names_its_kind_or_defaults_to_borrow`, the forced-safe slice grown
+from 97 to 115 examples). With `JUX_SAFE_CORPUS=all` every pinned example,
+486 of them, prints its fast output fully safe (two failed before
+this entry, two more on the first run with the new switches: an impl method
+stating more than its trait, now excluded as above).
+
+**Known boundary.** A switch removes a family only where the judgement it
+replaces is the cause: a bound the instantiations cannot vouch for (a
+parameter bound to another parameter, a foreign type) is not added, so a
+missing bound there still fails; the method-name switch reads the checker's
+pick for method calls (a free function's overload is resolved where it is
+written, as before); the numeric switch cannot type what the checker left
+`Unknown`; and the path switch covers the FQN writer and `new`, not every
+type the header emitters spell by a bare name. A safe member that
+implements or overrides another states no more than its trait.
+
+**Spec status:** `JUX-EXCEPTIONS-ADDENDUM.md` §X.5.4 specifies
+`Result.from`; `JUX-ASYNC-ADDENDUM-v2.md` §18.1.4 states `task.await()`'s
+equivalence; `JUX-ENTRY-POINTS-ADDENDUM.md` §E.6 and
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 (`E0327`, `E0411`, `E0413`, `E0443`,
+`E0446`, `E0700`, `E0900`) are amended. E131's "Not changed" item on
+`Result.from` is superseded, and E130's known boundary is narrowed to what
+the known boundary above keeps. GAPS.md gap 41 is closed.
+
+---
 When you edit any addendum that touches one of the items above,
 either:
 

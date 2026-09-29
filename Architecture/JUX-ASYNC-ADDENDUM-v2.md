@@ -193,6 +193,12 @@ public class Task<T> {
 }
 ```
 
+`task.await()` is `await task` in every respect: it gives the task's `T`, it
+is allowed only in an async function, method or lambda (`E0700`, with
+`task.blockingGet()` named for sync code), it takes no arguments, and it takes
+the task as `await` does (`E0707` on a later use). The compiler rewrites it as
+the `await` expression once the program is checked (`ERRATA.md` E1XX-SWEEPC).
+
 Static constructors and helpers:
 
 ```jux
