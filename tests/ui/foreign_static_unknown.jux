@@ -1,0 +1,12 @@
+// A static a foreign (stub) class does not declare is the checker's error,
+// with the near names the stub does declare, whether the class was imported
+// or reached by its bare `rust.std` name. `Duration.ofMillis(5)` used to pass
+// and fail in rustc (sweep C2): Rust's constructors are `from_millis` and
+// `from_secs`.
+void main() {
+    var a = Duration.ofMillis(5);
+    var b = Duration.fromSecs(2);
+    var c = Duration.form_secs(1);
+    var ok = Duration.from_millis(5);
+    print(ok.as_millis());
+}

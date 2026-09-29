@@ -29,7 +29,7 @@
 //! | derived bounds | a relaxed parameter's `Clone + Debug` only on the members the checker's table names; a generic function's `Ord` / `Eq + Hash` only for the key uses its body was judged to make | a safe member states `Clone + Debug` for every relaxed parameter every instantiation binds to a surely-`Clone + Debug` type; a safe generic free function's own parameters take `Eq + Hash + Ord` (so `PartialEq + PartialOrd`) where every recorded call binds a type with a total order | `E0277` (trait bound not satisfied), `E0599` (no `clone` / `cmp` / `hash` on a type parameter), `E0369` (`==` on a parameter) |
 //! | method names | a method call's overload suffix (`__ovK`) armed by the call and carried through emission to where the name is written | the suffix is read from the checker's pick for the call being written (a stack of calls, innermost on top) | `E0061` (wrong argument count), `E0308` (an argument of the wrong overload), `E0599` (a member that does not exist) |
 //! | numeric boundaries | promotion and widening casts from the backend's own typing of each operand (its local map first) | the checker's recorded type of each operand first, so every promotion (`(a as f64) + b`) and widening (`x as i64`) the checker typed is written | `E0308` (mismatched types at a slot), `E0277` (`cannot add f64 to isize`) |
-//! | type paths | a program type named relative to the module when it is in the same package or the crate root | every program type the FQN writer or a `new` names is rooted at `crate::` | `E0433` (failed to resolve), `E0412` (cannot find type), `E0425` |
+//! | type paths | a program type named relative to the module when it is in the same package or the crate root | every program type is rooted at `crate::` wherever it is written: the FQN writer, a `new`, and every type position the header and body emitters spell (a parameter, a return, a field, a local, a generic argument); a function's signature is at its function's level | `E0433` (failed to resolve), `E0412` (cannot find type), `E0425` |
 //! | generic calls | a turbofish only where the program wrote type arguments | a generic free function's call is written with the checker's record of its type arguments: the written ones, and each inferred one no parameter type can carry | `E0282`, `E0283` (type annotations needed), and a written argument lost |
 //! | `let` bindings | `mut` where the mutation analysis found a write or a `&mut` lend | every local is `mut` (the crate allows `unused_mut`) | `E0596` (borrow as mutable), `E0384` (assign twice) |
 //!
@@ -622,6 +622,16 @@ impl crate::RustEmitter {
                 .map(|k| format!("__ov{k}")),
             _ => carried,
         }
+    }
+
+    /// Whether `fqn` is a type the program declares (a class that is not a
+    /// foreign stub, a record, an enum or interface of the program's own):
+    /// one the emitted crate defines, so `crate::<path>` names it.
+    pub(crate) fn fqn_is_program_type(&self, fqn: &str) -> bool {
+        self.symbols.classes.get(fqn).is_some_and(|c| !c.is_external)
+            || self.symbols.records.contains_key(fqn)
+            || self.symbols.enums.get(fqn).is_some_and(|e| !e.is_external)
+            || self.symbols.interfaces.get(fqn).is_some_and(|i| !i.is_external)
     }
 
     /// [`Self::broken_by`] for the function body being emitted now.

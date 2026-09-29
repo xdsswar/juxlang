@@ -1,0 +1,3 @@
+foreign_static_unknown.jux:7:13: [E0413] error: no static method `ofMillis` on class `rust.std.Duration` -- did you mean `from_millis`?
+foreign_static_unknown.jux:8:13: [E0413] error: no static method `fromSecs` on class `rust.std.Duration` -- did you mean `from_secs`?
+foreign_static_unknown.jux:9:13: [E0413] error: no static method `form_secs` on class `rust.std.Duration` -- did you mean `from_secs`?

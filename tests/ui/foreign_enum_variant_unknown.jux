@@ -1,0 +1,14 @@
+// A variant a foreign enum does not have is E0412 read as a value and E0413
+// called, as a Jux enum's is (sweep C2). It used to pass the checker and
+// reach rustc as a variant that does not exist.
+import rust.std.FpCategory;
+
+enum Color { Red, Green }
+
+void main() {
+    var a = FpCategory.Nann;
+    var b = FpCategory.Normall();
+    var c = Color.Gren;
+    var ok = FpCategory.Zero;
+    print(Color.Red);
+}

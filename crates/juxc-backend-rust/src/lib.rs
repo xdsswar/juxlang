@@ -2084,9 +2084,10 @@ struct RustEmitter {
     /// [`crate::lowering_level`]), read from the active plan when the
     /// emitter is made.
     pub(crate) level: lowering_level::ActiveLevel,
-    /// The span of the function body being emitted, innermost, for the
+    /// The span of the function being emitted, innermost (its declaration
+    /// while its signature is written, its body after), for the
     /// lowering-level questions asked where no expression is at hand (a type
-    /// path, a `let`'s mutability). `None` outside every body.
+    /// path, a `let`'s mutability). `None` outside every function.
     pub(crate) body_span: Option<juxc_source::Span>,
     /// `T[N]` local declarations (by span) whose value flows into a
     /// runtime-sized `T[]` slot later in their block, with, per dimension

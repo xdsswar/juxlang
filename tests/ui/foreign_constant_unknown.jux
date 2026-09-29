@@ -1,0 +1,8 @@
+// An associated constant a foreign class does not declare is E0412, with the
+// near names it does declare (sweep C2).
+void main() {
+    var a = Duration.MILLIS;
+    var b = Duration.Zero;
+    var ok = Duration.ZERO;
+    print(ok.is_zero());
+}

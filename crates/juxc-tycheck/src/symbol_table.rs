@@ -1852,6 +1852,9 @@ pub struct EnumSig {
     /// Read like a class's fields (`this.mass`, a bare `mass`, `p.mass`), and
     /// set only by the constructor.
     pub fields: HashMap<String, FieldSig>,
+    /// The enum's `const` fields (implicitly static), by name: with the
+    /// variants and the static methods, everything `E.NAME` may name.
+    pub constants: HashMap<String, FieldSig>,
     /// The constructors a variant's arguments call (§7.7.4).
     pub constructors: Vec<ConstructorSig>,
     /// Span of the whole declaration.
@@ -5761,6 +5764,7 @@ fn insert_enum(
             is_external,
             rust_path: rust_path_annotation(&enum_decl.annotations),
             fields: enum_decl.fields.iter().map(|f| (f.name.text.clone(), field_sig(f))).collect(),
+            constants: enum_decl.constants.iter().map(|f| (f.name.text.clone(), field_sig(f))).collect(),
             constructors: enum_decl
                 .constructors
                 .iter()

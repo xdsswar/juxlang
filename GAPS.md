@@ -615,6 +615,20 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `rust.sbfix.front.spv.parse(words)`, `rust.sbfix.front.spv.Error.Truncated` | E0900 | work |
 | a lambda recursing forever on a `std::thread::Builder` thread (Linux) | `thread 'library' has overflowed its stack`, status 134 | `panic: stack overflow: ...`, status 101 |
 
+### Sweep C2 (added 2026-09-29)
+
+**42. CLOSED 2026-09-29 (ERRATA E1XX-SWEEPC2).** ~~A foreign static that does not exist reached rustc.~~ `Duration.ofMillis(5)` passed the checker and failed as E0900 (rustc E0425). Every static, constant and enum variant reached through a type is now checked against the type's declared members, however it was named (a bare `rust.std` name, an import, an import alias, a crate family's nested package, a qualified name), with a did-you-mean that knows Java spellings of Rust names. An enum's `E.NAME` was never checked, a Jux enum's included; it is `E0412` now. The safe type-path switch covers every type position, signatures included (E146's documented limit). Tests: `tests/ui/foreign_static_unknown`, `foreign_instance_method_unknown`, `foreign_constant_unknown`, `foreign_enum_variant_unknown`, `foreign_static_family` (hand-written stubs), `bin/jux/tests/safe_mode.rs`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `Duration.ofMillis(5)` (no import) | E0900 (rustc E0425) | `E0413` -- did you mean `from_millis`? |
+| `Duration.MILLIS` (no import) | E0900 | `E0412` -- did you mean `MILLISECOND`? |
+| `rust.fam.inner.Clock.from_sec(2)` (a family alias) | E0900 | `E0413` -- did you mean `from_secs`? |
+| `FpCategory.Nann` | E0900 | `E0412` -- did you mean `Nan`? |
+| `Color.Blu` on a Jux enum | E0900 | `E0412` |
+| `Timer.fromSecs(3)` through `import ... Clock as Timer` | `E0413` | `E0413` -- did you mean `from_secs`? |
+| a signature naming another package's type, its root lost (hook `path`) | not rescued | heals |
+
 ---
 
 ## 4. Three streams stopped mid-flight

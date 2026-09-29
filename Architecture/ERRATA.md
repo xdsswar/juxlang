@@ -6245,6 +6245,84 @@ names) and `JUX-EXCEPTIONS-ADDENDUM.md` §X.1.2 (the six new classes) are
 amended. No diagnostic code is added. GAPS.md "Sweep B" is closed.
 
 ---
+
+## E1XX-SWEEPC2. A foreign type's statics, constants and variants are checked, and the safe level roots every type path
+
+**Conflict.** `Duration.ofMillis(5)` passed the checker and failed in rustc
+(`E0900`, rustc `E0425`): Rust's constructors are `from_millis` and
+`from_secs`, and nothing told the programmer so. A sweep of the paths a
+foreign member is reached through found the same hole in three more:
+
+- a `rust.std` type written by its bare name with no import (`Duration`,
+  which a type position resolves through the implicit prelude) was not a class
+  to the static-call and static-field checks, so any static or constant on it
+  passed (an imported one was checked);
+- a qualified alias of a class (a crate family's nested package,
+  `rust.eframe.egui.Ui` for `rust.eframe.Ui`, ERRATA E132) was not a class
+  either, so its statics passed;
+- an enum's `E.NAME` read was never checked at all: `FpCategory.Nann` on a
+  foreign enum and `Color.Blu` on the program's own both reached rustc.
+
+An instance method on a foreign value and an imported foreign class's statics
+were already checked. E146's safe type-path switch covered the FQN writer and
+`new`, not the type positions the header emitters spell (its documented
+limit).
+
+**Resolution.**
+
+- **Every static reached through a type is checked against that type's
+  declared members.** `path_resolves_to_class` resolves a bare name the way a
+  type position does (`find_visible_fqn_by_bare_in`, the `rust.std` prelude
+  and an alias of a class included) and a qualified alias through
+  `alias_class`, so a static call, a static field and a constant on a foreign
+  class are the ordinary `E0413` / `E0412` wherever the class was named from:
+  its bare name, an import, an import alias (E133), a crate family's nested
+  package (E132), a qualified name.
+- **An enum's `E.NAME` is a variant, a `const`, or a static property**, a
+  foreign enum's included; any other name is `E0412` ("no variant or constant
+  `Nann` on enum `rust.std.FpCategory`"). `EnumSig` records the enum's
+  constants to answer it.
+- **Did-you-mean.** The unknown static method, static field, enum static and
+  enum variant messages name up to three near members, as the instance-method
+  message already did. A candidate is near when the existing prefix measure
+  says so, or when the two names agree once spelling is set aside: case and
+  `_` folded, a leading Java factory word (`of`, `from`, `get`, `to`, `as`,
+  `new`, `with`) dropped from both (`ofMillis` meets `from_millis`, `fromSecs`
+  meets `from_secs`), or one edit apart (two for names of eight letters and
+  more): `form_secs` meets `from_secs`, `Nann` meets `Nan`.
+- **The safe type-path switch covers every type position.** At the safe level
+  the type emitter roots every type the program declares at `crate::`, in the
+  same package as in another (a parameter, a return, a field, a local, a
+  generic argument, an impl's target), and a function's signature is emitted
+  at its function's level (the emitter's current function is its declaration
+  while the signature is written). The test hook `path` drops the root in the
+  type emitter too, and the regression harness breaks a function whose
+  signature names another package's type (`static Point origin(..)`), which
+  only the widened switch rescues.
+
+**Tests.** `tests/ui/foreign_static_unknown` (bare `Duration`, three
+spellings), `tests/ui/foreign_instance_method_unknown`,
+`tests/ui/foreign_constant_unknown`, `tests/ui/foreign_enum_variant_unknown`
+(a foreign and a Jux enum, read and called),
+`tests/ui/foreign_static_family` (an import alias, a crate family's nested
+package through its alias and its own class, a foreign enum, with two
+hand-written `.jux.d` stubs under the case's `.jux-stubs/`, which `.gitignore`
+now lets a UI case keep); `bin/jux/tests/safe_mode.rs`'s `path` case now
+breaks `Basket.origin`. With `JUX_SAFE_CORPUS=all` all 486 pinned examples
+print their fast output fully safe.
+
+**Known boundary.** A static a foreign class inherits through a trait (a
+Rust `impl Trait for Type` whose associated function the stub does not list on
+the type) is still unknown to the checker and reported; the stub is the
+checker's whole view of a foreign type. The safe switch roots a type the
+PROGRAM declares; a foreign type keeps its real Rust path, which is absolute
+already.
+
+**Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 (`E0412`, `E0413`) is
+amended. E146's known boundary on the path switch is closed. GAPS.md gap 42
+is closed.
+
+---
 When you edit any addendum that touches one of the items above,
 either:
 
