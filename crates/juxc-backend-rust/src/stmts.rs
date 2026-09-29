@@ -2436,7 +2436,17 @@ impl RustEmitter {
         } else {
             None
         };
-        self.emit_pending_loop_label();
+        // The label goes on the LOOP, never on a block wrapped around it for
+        // the head's bindings: `continue 'outer` needs a loop label, and a
+        // labelled block took it for the stepped range and the snapshot.
+        let loop_label: Option<String> = self.pending_loop_label.take();
+        let put_label = |me: &mut Self| {
+            if let Some(l) = &loop_label {
+                me.w.push('\'');
+                me.w.push_str(&escaped_label(l));
+                me.w.push_str(": ");
+            }
+        };
         // Stepped range (§M.6): sign-aware while loop — positive
         // steps count up to the bound, negative steps count down,
         // zero throws a catchable ArithmeticException (ERRATA.md E1).
@@ -2463,6 +2473,7 @@ impl RustEmitter {
                 self.emit_expr(&r.start);
                 self.w.push_str(";\n");
                 self.w.emit_indent();
+                put_label(self);
                 if r.inclusive {
                     self.w.push_str(&format!(
                         "while (__jux_step > 0 && {var} <= __jux_end) || (__jux_step < 0 && {var} >= __jux_end) {{\n",
@@ -2491,6 +2502,7 @@ impl RustEmitter {
         // is its `operator..` (§O.2.4), whose result is walked like any other
         // iterable by the general path below.
         if matches!(&f.iter, Expr::Range(r) if self.user_range_operator(r).is_none()) {
+            put_label(self);
             self.w.push_str("for ");
             self.w.push_str(&to_rust_ident(&f.var_name.text));
             self.w.push_str(" in ");
@@ -2539,6 +2551,7 @@ impl RustEmitter {
 ",
                 );
                 self.w.emit_indent();
+                put_label(self);
                 self.w.push_str("while let Some(");
                 self.w.push_str(&to_rust_ident(&f.var_name.text));
                 self.w.push_str(
@@ -2690,6 +2703,21 @@ impl RustEmitter {
         );
         let iter_is_place = !range_value
             && (snapshot || matches!(&f.iter, Expr::Path(_) | Expr::Field(_) | Expr::Index(_)));
+        // **A head that reads through a cell guard** (`for (var raw :
+        // text.lines())` in a method: `self.0.borrow().text.clone().lines()`).
+        // Rust keeps the temporaries of a `for` head alive for the WHOLE loop,
+        // so the object's guard was held across the body, and any write to the
+        // object in it -- a call of one of its own methods that changes it --
+        // stopped with "already in use" (ERRATA E23, E1XX-SWEEPA2). The value
+        // read through the guard is bound first, and the loop walks what the
+        // rest of the head makes of it; the binding lives as long as the loop,
+        // which is what an iterator borrowing it (`lines()`) needs.
+        let fe_head: Option<String> = if !snapshot && !range_value && !iter_is_place {
+            self.for_each_head_hoist(&f.iter)
+        } else {
+            None
+        };
+        let hoisted = fe_head.is_some();
         // **A map walks OWNED entries.** A foreign map (`HashMap`, `BTreeMap`,
         // a crate's `Map<K, V>`) iterated by reference yields `(&K, &V)`, and
         // Jux has no reference types to hold them: `show(entry.0, entry.1)`
@@ -2697,6 +2725,7 @@ impl RustEmitter {
         // copied out as the `(K, V)` pair the Jux program sees; a class value
         // inside is a handle, so its copy is a refcount bump.
         if iter_is_place && self.for_each_iterates_map_entries(&f.iter) {
+            put_label(self);
             self.w.push_str("for ");
             self.w.push_str(&to_rust_ident(&f.var_name.text));
             self.w.push_str(" in ");
@@ -2722,6 +2751,7 @@ impl RustEmitter {
             }
             return;
         }
+        put_label(self);
         self.w.push_str("for ");
         if element_is_copy && iter_is_place {
             self.w.push('&');
@@ -2745,6 +2775,8 @@ impl RustEmitter {
         }
         if snapshot {
             self.w.push_str("__jux_fe_iter");
+        } else if let Some(head) = &fe_head {
+            self.w.push_str(head);
         } else if range_value {
             self.emit_expr_with_parent_prec(&f.iter, u8::MAX, false);
             self.w.push_str(".clone()");
@@ -2806,11 +2838,79 @@ impl RustEmitter {
         self.w.indent_dec();
         self.w.emit_indent();
         self.w.push_str("}\n");
-        if snapshot {
+        if snapshot || hoisted {
             self.w.indent_dec();
             self.w.emit_indent();
             self.w.push_str("}\n");
         }
+    }
+
+    /// For a for-each head that is a method-call chain whose innermost
+    /// receiver is read through a cell guard, write `{ let __jux_fe_recv =
+    /// <receiver>;` and return the head with that receiver replaced by the
+    /// binding. `None`, writing nothing, for any other head.
+    fn for_each_head_hoist(&mut self, iter: &Expr) -> Option<String> {
+        // The innermost receiver of the chain that is not itself a call: the
+        // read that takes the guard and hands back an owned value.
+        let mut cur = iter;
+        let mut recv: Option<&Expr> = None;
+        while let Expr::Call(c) = cur {
+            let Expr::Field(f) = c.callee.as_ref() else { break };
+            recv = Some(&f.object);
+            cur = &f.object;
+        }
+        let recv = recv.filter(|r| !matches!(r, Expr::Call(_)))?;
+        let render = |me: &mut Self, e: &Expr| {
+            let saved = std::mem::replace(&mut me.w, crate::writer::Writer::new());
+            let prev = std::mem::take(&mut me.emitting_format_arg);
+            me.emit_expr(e);
+            me.emitting_format_arg = prev;
+            std::mem::replace(&mut me.w, saved).into_string()
+        };
+        let guarded = |t: &str| t.contains(".borrow") || t.contains(".lock()");
+        let recv_text = render(self, recv);
+        // Only an owned read can be bound.
+        if !guarded(&recv_text) || !recv_text.ends_with(".clone()") {
+            return None;
+        }
+        // The head again, reading the binding where it read the receiver. The
+        // binding keeps the receiver's span, so it has the receiver's type.
+        let span = crate::exprs::expr_span_of(recv);
+        let name = juxc_ast::Ident { text: "__jux_fe_recv".to_string(), span };
+        let bound = Expr::Path(juxc_ast::QualifiedName { segments: vec![name], span });
+        let mut head = iter.clone();
+        {
+            let mut cur = &mut head;
+            loop {
+                let Expr::Call(c) = cur else { break };
+                let Expr::Field(f) = c.callee.as_mut() else { break };
+                if matches!(f.object.as_ref(), Expr::Call(_)) {
+                    cur = f.object.as_mut();
+                } else {
+                    *f.object = bound;
+                    break;
+                }
+            }
+        }
+        self.local_types.push(std::collections::HashMap::new());
+        if let (Some(ty), Some(scope)) = (self.expr_types.get(&span).cloned(), self.local_types.last_mut()) {
+            scope.insert("__jux_fe_recv".to_string(), ty);
+        }
+        let head_text = render(self, &head);
+        self.local_types.pop();
+        if guarded(&head_text) || !head_text.contains("__jux_fe_recv") {
+            return None;
+        }
+        self.w.push_str("{
+");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("let __jux_fe_recv = ");
+        self.w.push_str(&recv_text);
+        self.w.push_str(";
+");
+        self.w.emit_indent();
+        Some(head_text)
     }
 
     /// Whether a for-each iterable is a FOREIGN map, whose by-reference

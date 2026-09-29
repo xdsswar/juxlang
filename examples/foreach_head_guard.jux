@@ -1,0 +1,64 @@
+// A for-each head that reads a field of the object whose method runs the loop
+// (ERRATA E1XX-SWEEPA2).
+//
+// `for (var line : text.lines())` inside a method reads `this.text` through
+// the object's cell. Rust keeps every temporary of a `for` head alive for the
+// whole loop, so the object stayed borrowed while the body ran, and a body
+// that changed the object -- here `count()` and `this.seen` -- stopped with
+// "already in use". The field is now read before the loop starts. Labelled
+// loops over a field and over a line split keep `continue outer` working.
+//
+// DIFFERENTIAL: tools/java-differential/cases/160_foreach_head_guard
+
+import rust.std.*;
+
+class Scanner {
+    private String text;
+    private int seen = 0;
+    private Vec<String> words = new Vec<String>();
+
+    public Scanner(String text) { this.text = text; }
+
+    private void count(String w) {
+        this.seen = this.seen + 1;
+        this.words.push(w);
+    }
+
+    public int scan() {
+        for (var line : this.text.lines()) {
+            final String w = line.trim();
+            if (w.length() > 0) {
+                this.count(w);
+            }
+            this.text = this.text + "";
+        }
+        return this.seen;
+    }
+
+    public int firstLong() {
+        var found = 0;
+        outer:
+        for (var line : text.lines()) {
+            for (var w : this.words) {
+                if (w.length() > 4) {
+                    found = found + 1;
+                    continue outer;
+                }
+            }
+        }
+        return found;
+    }
+
+    public String joined() {
+        var out = "";
+        for (var w : this.words) { out = out + w + "."; }
+        return out;
+    }
+}
+
+public void main() {
+    var s = new Scanner("alpha beta\n  gamma delta epsilon \n\nzeta");
+    print(s.scan());
+    print(s.joined());
+    print(s.firstLong());
+}

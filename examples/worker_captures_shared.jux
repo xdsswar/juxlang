@@ -1,0 +1,70 @@
+// A `Worker.spawn` closure shares the collections it captures (ERRATA
+// E1XX-SWEEPA2).
+//
+// Before, a worker got its own copy of a captured collection or array, and a
+// write to the copy was E0702. Now the worker holds the caller's collection,
+// behind a thread-safe handle, as a Java thread does: several workers pushing
+// into one captured list all land in it, a store into a captured array is seen
+// by the caller, and a collection of collections, a record holding an array
+// and a nullable list come along the same way. Every worker is awaited before
+// anything is printed, and what is printed is a size, a sum or a sorted walk.
+//
+// DIFFERENTIAL: tools/java-differential/cases/161_worker_captures_shared
+
+import rust.std.*;
+
+record Bag(String name, int[] items) {}
+
+public int fill(Vec<int> into, int from, int n) {
+    for (int i = 0; i < n; i++) { into.push(from + i); }
+    return n;
+}
+
+public async void main() {
+    // Four workers push into one captured list.
+    var xs = new Vec<int>();
+    var a = Worker.spawn(() -> fill(xs, 0, 100));
+    var b = Worker.spawn(() -> fill(xs, 100, 100));
+    var c = Worker.spawn(() -> { for (int i = 200; i < 300; i++) { xs.push(i); } return 100; });
+    var d = Worker.spawn(() -> { xs.push(-1); return 1; });
+    print(await a + await b + await c + await d);
+    var sum = 0;
+    for (var v : xs) { sum += v; }
+    print(xs.len() + " " + sum);
+
+    // A store into a captured array.
+    int[] arr = new int[3];
+    var s = Worker.spawn(() -> { arr[1] = 5; arr[2] = arr[1] * 2; return 0; });
+    await s;
+    print(arr[0] + " " + arr[1] + " " + arr[2]);
+
+    // A map, written by the worker.
+    var ages = new HashMap<String, int>();
+    ages.insert("ann", 31);
+    var m = Worker.spawn(() -> { ages.insert("bob", 40); return ages.len(); });
+    print(await m);
+    var keys = new Vec<String>();
+    for (var k : ages.keys()) { keys.push(k); }
+    keys.sort();
+    print(keys[0] + " " + keys[1] + " " + (ages.get("bob") ?? 0));
+
+    // A list of lists: the rows are shared too.
+    var rows = new Vec<Vec<int>>();
+    rows.push(new Vec<int>());
+    var row = rows[0];
+    var r = Worker.spawn(() -> { rows[0].push(7); rows.push(new Vec<int>()); return rows.len(); });
+    print(await r);
+    print(row.len() + " " + row[0]);
+
+    // A record holding an array.
+    var bag = new Bag("box", new int[2]);
+    var g = Worker.spawn(() -> { bag.items[0] = 9; return bag.items.length; });
+    print(await g);
+    print(bag.name + " " + bag.items[0]);
+
+    // A copy is one the program asks for.
+    var orig = new Vec<int>();
+    orig.push(1);
+    var k = Worker.spawn(() -> { var mine = orig.clone(); mine.push(2); return mine.len(); });
+    print(await k + " " + orig.len());
+}

@@ -1163,12 +1163,12 @@ without waiting on itself; as with a class, a read-then-write spread across
 statements is not atomic (`ERRATA.md` E147, which replaces the copies
 of E145).
 
-**A worker's copy is read-only.** A `Worker.spawn` closure takes a captured
-collection or array by value (JUX-ASYNC-ADDENDUM §18.2): the worker gets a
-copy of its contents at the spawn point. A copy that is only read cannot be told from the
-original, so the closure may read it freely; a write to it would be lost
-without a word, so it is `E0702`. Return what the worker computes, or ask for
-the copy (`var mine = xs.clone();`) and write that (`ERRATA.md` E144).
+**A worker shares what it captures.** A `Worker.spawn` closure that captures
+a collection or array holds the caller's own (JUX-ASYNC-ADDENDUM §18.2): what
+the worker adds or stores, the caller sees, as with a list a Java thread
+captures. A copy is made only when the program asks for one (`var mine =
+xs.clone();`), here as everywhere (`ERRATA.md` E1XX-SWEEPA2, which replaces
+the copy of E144).
 
 **Across erasure the collection is still one collection.** A function on a
 polymorphic-recursion cycle is compiled by erasure (JUX-TYPE-SYSTEM-ADDENDUM

@@ -17,7 +17,9 @@
 //! result of its methods and constructors, walked through type arguments,
 //! nullable and array types, and the components of a record held there. A
 //! worker also hands its result back (`await Worker.spawn(..)`), so the result
-//! type of every `Worker.spawn` counts too.
+//! type of every `Worker.spawn` counts too, and so does every value a
+//! `Worker.spawn` closure captures: the worker and the code that spawned it
+//! hold ONE collection, as two Java threads do (ERRATA E1XX-SWEEPA2).
 //!
 //! **Granularity.** A collection moves between names freely -- an argument, a
 //! return, a field store, a generic parameter, an element of another
@@ -62,6 +64,39 @@ impl RustEmitter {
         }
         let mut seen_records: HashSet<String> = HashSet::new();
         let mut pending: Vec<(usize, TypeRef)> = Vec::new();
+        // What a worker hands back crosses, and so does what its closure
+        // captures (every name it reads; a name the closure declares itself
+        // only widens the set, which is safe).
+        let mut crossing: Vec<Ty> = Vec::new();
+        for unit in units {
+            crate::worker::for_each_worker_spawn_call(unit, &mut |c| {
+                if let Some(t) = self.expr_types.get(&c.span) {
+                    crossing.push(t.clone());
+                }
+                if let Some(l @ juxc_ast::Expr::Lambda(_)) = c.args.first() {
+                    crate::worker::walk_expr(l, &mut |e| {
+                        if let juxc_ast::Expr::Path(qn) = e {
+                            if let Some(t) = self.expr_types.get(&qn.span) {
+                                crossing.push(t.clone());
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        let mut crossing_records: Vec<String> = Vec::new();
+        for t in &crossing {
+            self.shared_tier_walk_ty(t, &mut colls, &mut arrays, &mut crossing_records);
+        }
+        for bare in crossing_records {
+            for (ridx, r) in &records {
+                if r.name.text == bare && seen_records.insert(format!("{ridx}.{bare}")) {
+                    for c in &r.components {
+                        pending.push((*ridx, c.ty.clone()));
+                    }
+                }
+            }
+        }
         if !self.sync_class_fqns.is_empty() {
             for (idx, unit) in units.iter().enumerate() {
                 let pkg = unit
@@ -135,35 +170,27 @@ impl RustEmitter {
         }
         self.current_unit_idx = saved_unit;
         self.enclosing_class = saved_class;
-        // What a worker hands back crosses too.
-        let mut results: Vec<Ty> = Vec::new();
-        for unit in units {
-            crate::worker::for_each_worker_spawn_call(unit, &mut |c| {
-                if let Some(t) = self.expr_types.get(&c.span) {
-                    results.push(t.clone());
-                }
-            });
-        }
-        for t in results {
-            self.shared_tier_walk_ty(&t, &mut colls, &mut arrays);
-        }
         self.sync_coll_paths = colls;
         self.sync_arrays = arrays;
     }
 
-    fn shared_tier_walk_ty(&self, t: &Ty, colls: &mut HashSet<String>, arrays: &mut bool) {
+    /// Walk a checked type that crosses: its collections and arrays take the
+    /// tier, and each record it names is recorded in `records` (by bare name)
+    /// so its components are walked too.
+    fn shared_tier_walk_ty(&self, t: &Ty, colls: &mut HashSet<String>, arrays: &mut bool, records: &mut Vec<String>) {
         match t {
-            Ty::Nullable(inner) => self.shared_tier_walk_ty(inner, colls, arrays),
+            Ty::Nullable(inner) => self.shared_tier_walk_ty(inner, colls, arrays, records),
             Ty::Array { element, .. } => {
                 *arrays = true;
-                self.shared_tier_walk_ty(element, colls, arrays);
+                self.shared_tier_walk_ty(element, colls, arrays, records);
             }
             Ty::User { name, generic_args } => {
                 if let Some(path) = self.collection_tier_key(name) {
                     colls.insert(path);
                 }
+                records.push(name.rsplit('.').next().unwrap_or(name).to_string());
                 for a in generic_args {
-                    self.shared_tier_walk_ty(a, colls, arrays);
+                    self.shared_tier_walk_ty(a, colls, arrays, records);
                 }
             }
             _ => {}

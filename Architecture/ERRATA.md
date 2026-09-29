@@ -774,7 +774,9 @@ array capture, including §18.2's own `parallelSum` example over `int[] data`,
 failed in rustc, and so did a closure reaching `this` and a capture of a
 function value, an interface or a stream.
 
-**Resolution.** A worker takes a captured collection or array by value, one
+**Resolution.** *(Superseded by E1XX-SWEEPA2: a captured collection is
+shared with the worker, not copied, and none of the collection cases below
+is refused any more.)* A worker takes a captured collection or array by value, one
 level deep, as §18.2 already says for every capture: the worker gets its own
 copy. Changes in the worker stay in the worker, which is the one place a
 collection does not alias (§6.5.1 already made the same exception for a
@@ -5694,6 +5696,8 @@ A probe of every channel found four places that did not:
    read a captured collection or array; a mutating method on it, or a store
    into it, is refused with the two ways to say what was meant: return the
    worker's result, or copy explicitly (`var mine = xs.clone();`).
+   *(Superseded by E1XX-SWEEPA2: the capture is shared, and the write is the
+   caller's.)*
 
 The for-each rule is unchanged: a loop walks a shallow snapshot (§6.5.1), so a
 body that mutates the collection it iterates is well defined and never meets a
@@ -6321,6 +6325,68 @@ already.
 **Spec status:** `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 (`E0412`, `E0413`) is
 amended. E146's known boundary on the path switch is closed. GAPS.md gap 42
 is closed.
+
+---
+## E1XX-SWEEPA2. A worker shares the collections it captures
+
+**Conflict.** E27 and E144 resolution 5 gave a `Worker.spawn` closure its own
+copy of a captured collection or array, one level deep, and refused a write
+to the copy (`E0702`); a collection of collections and a record holding a
+collection were refused outright (`E0702`), since neither could be copied one
+level deep. That is not Java's rule: a Java thread that captures a list holds
+the same list, and what it adds, the spawning code sees. The copy existed
+because the single-threaded handle could not cross a thread. E147 built the
+handle that can.
+
+Separately, the borrow self-check found that a for-each head reading a field
+of the object whose method runs the loop (`for (var raw : text.lines())`)
+held the object's cell for the whole loop: Rust keeps a `for` head's
+temporaries alive until the loop ends, so a body that changed the object
+would stop with "already in use" (E23). The self-check caught it in
+`examples/apps/csv_report`, and nothing ran the apps under it. With the
+receiver written `this.text` and a mutating call in the body, the call's own
+receiver hoist produced rustc E0597 instead.
+
+**Resolution.**
+
+1. **A capture is shared.** The type of every value a `Worker.spawn` closure
+   reads joins the shared tier (E147, `shared_tier.rs`), walked through type
+   arguments, nullable and array types and the components of a record, so a
+   captured collection or array is a `JuxSync` handle and crosses as itself,
+   an `Arc` bump. The worker and the spawning code hold ONE collection: a
+   worker's push, insert or element store is seen by the caller, and several
+   workers writing one captured list each land in it. A copy is made only
+   when the program asks for one (`clone()`).
+2. **`E0702` loses every copy case.** A write to a captured collection or
+   array is no longer refused; a collection of collections and a record
+   holding a collection or an array are transferable (their inner collections
+   are shared the same way). `E0702` stays for what can never cross a thread:
+   a function value, an interface handle, a stream, a `ref` binding, and a
+   class or record holding one of them.
+3. **A for-each head binds its guarded receiver first.** When the head is a
+   method-call chain whose innermost receiver is read through a cell guard,
+   that receiver is bound before the loop (`let __jux_fe_recv =
+   self.0.borrow().text.clone();`) and the loop walks the rest of the head
+   over the binding, which lives as long as the loop, as an iterator that
+   borrows it (`lines()`) needs. A loop label now always goes on the loop
+   itself, never on a block wrapped around it for this binding, a snapshot
+   or a stepped range, so `continue outer` works in each.
+4. **Apps are guarded.** `bin/jux/tests/apps.rs` builds every app under
+   `JUX_SELFCHECK=1`, like the example corpus.
+
+**Tests.** `examples/worker_captures_shared.jux` (four workers pushing into
+one captured list, a store into a captured array, a captured map, a list of
+lists, a record holding an array, an explicit copy; Java differential case
+161), `examples/worker_captures.jux` (now writes through the capture),
+`examples/foreach_head_guard.jux` (case 160). `tests/ui/worker_collection_write`,
+`tests/ui/worker_capture_nested_collection`,
+`tests/ui/worker_capture_record_holding_collection` and
+`tests/ui/worker_shared_collection_copy` are removed: each program now
+compiles, and what it does is covered by the examples.
+
+**Spec status:** JUX-ASYNC-ADDENDUM §18.2 and `JUX-LANG-V1.md` §6.5.1 state
+the sharing rule; `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0702` row is
+narrowed. E27's resolution and E144 resolution 5 are superseded.
 
 ---
 When you edit any addendum that touches one of the items above,

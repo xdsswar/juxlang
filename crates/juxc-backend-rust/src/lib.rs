@@ -2434,11 +2434,6 @@ struct RustEmitter {
     /// `IfaceCoercion::LambdaReturnUpcast`): the lambda's result is converted
     /// to it. Take-and-cleared by [`Self::emit_lambda`].
     pub(crate) lambda_return_slot: Option<juxc_ast::TypeRef>,
-    /// Captures a `Worker.spawn` closure re-wraps before its body runs: each
-    /// crossed the boundary as a plain copy of a collection's contents (the
-    /// handle itself cannot), and the body reads it as a handle again. The
-    /// flag is `true` for a nullable capture. Taken by `emit_bare_move_lambda`.
-    pub(crate) worker_attach: Vec<(String, bool, &'static str)>,
 }
 
 /// True when a class declaration should lower to the shared-mutation
@@ -8300,7 +8295,6 @@ pub fn jux_enter_callback() {
             lambda_clone_params: false,
             lambda_int_to_ordering: false,
             lambda_return_slot: None,
-            worker_attach: Vec::new(),
         }
     }
 

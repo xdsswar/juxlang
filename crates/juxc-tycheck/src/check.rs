@@ -12229,12 +12229,12 @@ impl Checker<'_> {
             let why = if self.env.is_ref_binding(&name) {
                 "a `ref` binding is a shared cell, which is task-local: copy the value into a local first, or share an `AtomicInt`".to_string()
             } else {
+                // A captured collection or array is SHARED with the worker
+                // (ERRATA E1XX-SWEEPA2): a write in the closure is a write
+                // to the caller's collection, so nothing more is checked.
                 match self.worker_capture_blocker(&ty, 0) {
                     Some(why) => why,
-                    None => {
-                        self.check_worker_collection_write(l, &name, &ty);
-                        continue;
-                    }
+                    None => continue,
                 }
             };
             self.diagnostics.push(
@@ -12265,54 +12265,6 @@ impl Checker<'_> {
                 }
             }
         }
-    }
-
-    /// **E0702** for a WRITE to a captured collection or array inside a
-    /// `Worker.spawn` closure. The worker receives its own copy (§18.2), which
-    /// is the one place a collection does not alias (JUX-LANG-V1 §6.5.1); a
-    /// copy that is only read is indistinguishable from the original, but one
-    /// that is written drops the write silently, which is the surprise §6.5.1
-    /// exists to rule out. So the copy has to be asked for (`clone()`), or the
-    /// worker's result returned (ERRATA E144).
-    fn check_worker_collection_write(&mut self, l: &juxc_ast::LambdaExpr, name: &str, ty: &Ty) {
-        let mut inner = ty;
-        while let Ty::Nullable(t) = inner {
-            inner = t;
-        }
-        let class_of: Option<String> = match inner {
-            Ty::Array { .. } => self.symbols.resolve_class("Vec").map(|(k, _)| k.clone()),
-            Ty::User { name: n, .. } if self.symbols.is_rust_collection(n) => {
-                self.symbols.resolve_class(n).map(|(k, _)| k.clone())
-            }
-            _ => return,
-        };
-        let mut_self = |m: &str| {
-            class_of
-                .as_deref()
-                .and_then(|c| self.symbols.classes.get(c))
-                .and_then(|c| c.methods.get(m))
-                .is_some_and(|ms| {
-                    ms.annotations
-                        .iter()
-                        .any(|a| a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("mutself"))
-                })
-        };
-        let Some(at) = lent_param_written_at(l, name, &mut_self) else { return };
-        let what = if matches!(inner, Ty::Array { .. }) { "array" } else { "collection" };
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::Code::E0702_ObjectCapturedBySpawn,
-                format!(
-                    "`{name}` is written inside a `Worker.spawn` closure, but a worker runs on another thread with \
-                     its OWN copy of a captured {what} (§18.2), so the write would never reach the `{name}` outside it",
-                ),
-            )
-            .with_span(at)
-            .with_help(format!(
-                "return what the worker computes and use it after `await`, or make the copy explicit inside the \
-                 closure: `var mine = {name}.clone();`"
-            )),
-        );
     }
 
     /// Where a `Worker.spawn` closure reaches `this`: an explicit `this`, or a
@@ -12396,14 +12348,9 @@ impl Checker<'_> {
                 }
                 if let Some((_, record)) = self.symbols.resolve_record(name) {
                     for c in &record.components {
-                        let head = c.ty.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
-                        let why = if let Some(why) = self.symbols.typeref_share_blocker(&c.ty) {
-                            why.to_string()
-                        } else if c.ty.array_shape.is_some() || self.symbols.is_rust_collection(head) {
-                            "a collection, which a record carries as a shared handle".to_string()
-                        } else {
-                            continue;
-                        };
+                        // A collection component crosses as the shared handle
+                        // it is (ERRATA E1XX-SWEEPA2).
+                        let Some(why) = self.symbols.typeref_share_blocker(&c.ty) else { continue };
                         return Some(format!(
                             "`{bare}.{}` holds {why}; copy the values the worker needs into locals first",
                             c.name,
@@ -12424,24 +12371,11 @@ impl Checker<'_> {
         }
     }
 
-    /// The element type of a captured collection or array. The worker gets a
-    /// copy of the collection one level deep, so each element must itself be
-    /// transferable, and must not be another collection.
+    /// The element type of a captured collection or array. The collection is
+    /// shared with the worker (ERRATA E1XX-SWEEPA2), so each element must
+    /// itself be transferable; a collection of collections is, as its inner
+    /// collections are shared the same way.
     fn worker_element_blocker(&self, element: &Ty, depth: usize) -> Option<String> {
-        let mut inner = element;
-        while let Ty::Nullable(t) = inner {
-            inner = t;
-        }
-        let nested = match inner {
-            Ty::Array { .. } => true,
-            Ty::User { name, .. } => self.symbols.is_rust_collection(name),
-            _ => false,
-        };
-        if nested {
-            return Some(
-                "it holds collections, and a worker receives a copy of a collection only one level deep; flatten the data or copy it into records first".to_string(),
-            );
-        }
         self.worker_capture_blocker(element, depth + 1)
             .map(|why| format!("its elements cannot come along: {why}"))
     }
