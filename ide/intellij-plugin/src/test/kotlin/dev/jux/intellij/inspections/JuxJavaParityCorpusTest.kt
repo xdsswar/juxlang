@@ -75,6 +75,9 @@ class JuxJavaParityCorpusTest : BasePlatformTestCase() {
         // `items[i]` on a record's bare array component is the thing this
         // example exists to compile (Jux lesson bug B5), so it stays indexed.
         "record_members.jux:JuxIndexedLoop:24",
+        // `sum += xs[i].weight()` through an erased function: indexed reads of
+        // a linked collection are what the stress test measures (ERRATA E145).
+        "stress_linked_collection.jux:JuxIndexedLoop:45",
     )
 
     fun testCorpusHasNoFindings() {

@@ -18,6 +18,10 @@ a type argument names a type, and <code>ref</code> is a binding mode.</li>
 already a shared reference. Accepted, and means nothing. Quick-fix: remove the keyword.</li>
 <li><b>E0702</b>: a <code>ref</code> binding captured by a <code>Worker.spawn</code>
 closure: the cell is task-local and cannot cross the thread boundary.</li>
+<li><b>E0702</b>: a captured collection or array WRITTEN inside a <code>Worker.spawn</code>
+closure (<code>xs.push(2)</code>, <code>arr[1] = 5</code>). The worker runs on another thread
+with its own copy, so the write would never reach the caller's. Return what the worker
+computes, or copy explicitly: <code>var mine = xs.clone();</code>.</li>
 </ul>
 </body>
 </html>

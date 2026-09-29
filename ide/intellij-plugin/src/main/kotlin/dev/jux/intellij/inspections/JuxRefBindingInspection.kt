@@ -15,6 +15,7 @@ import dev.jux.intellij.highlight.JuxTokenTypes as T
 import dev.jux.intellij.parser.JUX_REF_KW
 import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxTypeDeclaration
+import dev.jux.intellij.resolve.JuxHierarchy
 import dev.jux.intellij.resolve.JuxType
 import dev.jux.intellij.resolve.JuxTypeEngine
 
@@ -189,6 +190,10 @@ class JuxRefBindingInspection : LocalInspectionTool() {
      * thread, and a `ref` binding is an `Rc`-backed cell that is task-local, so
      * it can never come along. Only the `ref` half of E0702 is mirrored here:
      * the class-capture half needs the whole `Send` analysis the checker does.
+     *
+     * And **E0702** for a WRITE to a captured collection or array (ERRATA
+     * E144): the worker gets its own copy (§18.2), so a write to it would never
+     * reach the caller's. See [checkWorkerCopyWrites].
      */
     private fun checkSpawnCaptures(call: PsiElement, holder: ProblemsHolder) {
         val callee = call.firstChild ?: return
@@ -200,6 +205,8 @@ class JuxRefBindingInspection : LocalInspectionTool() {
         val args = call.node.findChildByType(E.ARGUMENT_LIST)?.psi ?: return
         val lambda = PsiTreeUtil.findChildrenOfType(args, PsiElement::class.java)
             .firstOrNull { it.elementType === E.LAMBDA_EXPRESSION } ?: return
+
+        if (JuxTypeEngine.firstExpressionChild(args) === lambda) checkWorkerCopyWrites(lambda, holder)
 
         // The `ref` bindings the enclosing function declares, by name. Read
         // from the declarations rather than through reference resolution: the
@@ -225,6 +232,107 @@ class JuxRefBindingInspection : LocalInspectionTool() {
                     "`AtomicInt` (E0702)",
                 ProblemHighlightType.GENERIC_ERROR,
             )
+        }
+    }
+
+    /**
+     * **E0702**, a write to a worker's copy (ERRATA E144): a `Worker.spawn`
+     * closure receives a captured collection or array by value, since a handle
+     * cannot cross threads. A copy that is only read cannot be told from the
+     * original, but a written one drops the write without a word, which is
+     * the surprise §6.5.1 exists to rule out.
+     *
+     * A write is what the checker counts: a store into the capture
+     * (`arr[1] = 5`, `xs[0] += 1`), or a `@MutSelf` method called on it
+     * (`xs.push(2)`). The first one in the closure is reported, once per name,
+     * with the compiler's wording. Only a local or parameter of the enclosing
+     * code whose type the editor knows is judged, and only when its elements
+     * are plain values: a collection of collections or of interface handles
+     * cannot be captured at all, which the checker reports with E0702's other
+     * message.
+     */
+    private fun checkWorkerCopyWrites(lambda: PsiElement, holder: ProblemsHolder) {
+        val reported = HashSet<String>()
+        for (e in PsiTreeUtil.findChildrenOfType(lambda, PsiElement::class.java)) {
+            val (root, at) = when (e.elementType) {
+                E.ASSIGNMENT_EXPRESSION -> {
+                    val target = JuxTypeEngine.firstExpressionChild(e) ?: continue
+                    // `xs = other` rebinds the copy's name, which writes nothing.
+                    if (target.elementType === E.REFERENCE_EXPRESSION) continue
+                    (storeRoot(target) ?: continue) to target
+                }
+                E.CALL_EXPRESSION -> {
+                    val access = e.firstChild?.takeIf { it.elementType === E.FIELD_ACCESS_EXPRESSION } ?: continue
+                    val receiver = JuxTypeEngine.firstExpressionChild(access)
+                        ?.takeIf { it.elementType === E.REFERENCE_EXPRESSION } ?: continue
+                    val method = JuxTypeEngine.resolveMemberAccess(access, JuxTypeEngine.argumentCount(e))?.element
+                        ?: continue
+                    if (!hasAnnotation(method, "MutSelf")) continue
+                    receiver to e
+                }
+                else -> continue
+            }
+            val name = root.text.trim()
+            if (name in reported) continue
+            val what = copiedKind(root, lambda) ?: continue
+            reported.add(name)
+            holder.registerProblem(
+                at,
+                "`$name` is written inside a `Worker.spawn` closure, but a worker runs on another thread with " +
+                    "its OWN copy of a captured $what (§18.2), so the write would never reach the `$name` " +
+                    "outside it (E0702)",
+                ProblemHighlightType.GENERIC_ERROR,
+            )
+        }
+    }
+
+    /** The bare name a store target is reached from: `a` of `a[1]`, `a.b[2]`, `a.f`. */
+    private fun storeRoot(target: PsiElement): PsiElement? {
+        var t: PsiElement = target
+        while (true) {
+            t = when (t.elementType) {
+                E.REFERENCE_EXPRESSION -> return t
+                E.INDEX_EXPRESSION, E.FIELD_ACCESS_EXPRESSION -> JuxTypeEngine.firstExpressionChild(t) ?: return null
+                else -> return null
+            }
+        }
+    }
+
+    /**
+     * "collection" or "array" when [ref] names a local or parameter declared
+     * OUTSIDE [lambda] that holds a collection or array of plain values, so the
+     * worker holds a copy of it; null otherwise.
+     */
+    private fun copiedKind(ref: PsiElement, lambda: PsiElement): String? {
+        val decl = JuxTypeEngine.resolveReferenceExpression(ref) ?: return null
+        if (decl.elementType !== E.LOCAL_VARIABLE && decl.elementType !== E.PARAMETER) return null
+        if (PsiTreeUtil.isAncestor(lambda, decl, false)) return null
+        return when (val type = JuxTypeEngine.stripNullable(JuxTypeEngine.declaredType(decl))) {
+            is JuxType.ArrayType -> "array".takeIf { plainElement(type.element) }
+            is JuxType.ClassType -> "collection".takeIf { isCollection(type.decl) && type.args.all { plainElement(it) } }
+            else -> null
+        }
+    }
+
+    /** A bound Rust collection: a stub class marked `@RustCollection` (§6.5.1). */
+    private fun isCollection(decl: JuxTypeDeclaration): Boolean =
+        JuxHierarchy.isRustType(decl) && hasAnnotation(decl, "RustCollection")
+
+    /** An element a one-level copy carries: a primitive, `String`, or a type that is neither an interface nor a collection. */
+    private fun plainElement(t: JuxType): Boolean = when (val s = JuxTypeEngine.stripNullable(t)) {
+        is JuxType.Primitive -> true
+        is JuxType.ClassType -> !isInterfaceDecl(s.decl) && !isCollection(s.decl)
+        else -> false
+    }
+
+    /** True when [decl] carries the annotation [simpleName], directly or in its modifier list (case-insensitive). */
+    private fun hasAnnotation(decl: PsiElement, simpleName: String): Boolean {
+        val holders = listOfNotNull(decl, decl.node.findChildByType(E.MODIFIER_LIST)?.psi)
+        return holders.any { holder ->
+            holder.node.getChildren(null).any {
+                it.elementType === E.ANNOTATION &&
+                    it.text.removePrefix("@").substringBefore('(').trim().equals(simpleName, ignoreCase = true)
+            }
         }
     }
 

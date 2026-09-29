@@ -74,6 +74,8 @@ class JuxCorpusHighlightingTest : BasePlatformTestCase() {
             JuxDeprecatedUsageInspection(),
             JuxTypeParameterBoundInspection(),
             JuxTypeArgumentCountInspection(),
+            JuxRefBindingInspection(),
+            JuxUninferableLambdaInspection(),
         )
     }
 

@@ -12,6 +12,7 @@ import dev.jux.intellij.psi.JuxElementTypes as E
 import dev.jux.intellij.psi.JuxTypeDeclaration
 import dev.jux.intellij.resolve.JuxHierarchy
 import dev.jux.intellij.resolve.JuxTypeEngine
+import dev.jux.intellij.resolve.JuxTypeIndex
 
 /**
  * **E0443** for a Jux type written with the wrong number of type arguments,
@@ -70,6 +71,15 @@ class JuxTypeArgumentCountInspection : LocalInspectionTool() {
         val params = JuxHierarchy.typeParameterNames(decl)
         val written = node.args.size
         if (written == params.size) return
+        // A name this file neither declares nor settles by import may mean
+        // another same-named type (`Box` under `import rust.std.*;` when the
+        // stub is not indexed, beside a stranger's `class Box`): when one of
+        // them takes the written count, which is meant is not certain.
+        if (decl.containingFile != ref.containingFile &&
+            JuxTypeIndex.typesNamed(ref.project, simple).any {
+                it !== decl && JuxHierarchy.typeParameterNames(it).size == written
+            }
+        ) return
         val shown = node.text
         val message = if (params.isEmpty()) {
             "`$simple` is not generic, but `$shown` gives it $written type argument${if (written == 1) "" else "s"} (E0443)"

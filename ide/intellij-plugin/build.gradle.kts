@@ -85,6 +85,18 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.10</h3>
+            <p>The editor follows collections by reference and the rest of gap 40 (ERRATA E144-E145), and closes what 0.1.9 left open.</p>
+            <ul>
+              <li><b>A lambda has a function type.</b> <b>var gv = () -&gt; v;</b> is a <b>() -&gt; Vec&lt;int&gt;</b>, so <b>gv().push(1)</b> types, completes and navigates. The type is the parameters' and what the body produces: an expression body's value, a block body's first <b>return</b>, else <b>void</b>. <b>Worker.spawn(() -&gt; { return 7; })</b> is a <b>Task&lt;int&gt;</b>.</li>
+              <li><b>A var lambda nothing gives a parameter type to</b> (<b>var unused = (x) -&gt; x + 1;</b>, never called or passed) is <b>E0453</b>.</li>
+              <li><b>A write to a worker's copy is E0702</b>: <b>xs.push(2)</b> or <b>arr[1] = 5</b> on a collection or array a <b>Worker.spawn</b> closure captured. Reading it stays fine, and so does writing <b>var mine = xs.clone();</b>.</li>
+              <li><b>int[]? xs;</b> is a local declaration.</li>
+              <li><b>An anonymous class that leaves an abstract method unimplemented</b> is <b>E0429</b>, on the <b>Shape</b> of <b>new Shape() { ... }</b>, with <b>Implement methods</b>.</li>
+              <li><b>An array, nullable or pointer bound</b> is <b>E0459</b> like any bound nothing else meets: <b>T extends int[]</b>, <b>T extends Named?</b>; <b>T extends int*</b> is read as <b>int</b>, as the compiler reads it.</li>
+              <li><b>Task.await()</b> and <b>Task.delay(ms)</b> / <b>Task.delay(Duration)</b> complete, and <b>Task&lt;void&gt;</b> keeps its argument.</li>
+              <li><b>E0438</b> is retired by the compiler; its remaining case, a bound through a foreign type of unknown shape (<b>E0620</b>), and E0702 for a collection copied out of a worker-shared object, are reported by the language server.</li>
+            </ul>
             <h3>0.1.9</h3>
             <p>The editor follows the compiler's generics and anonymous-class work (ERRATA E135-E143).</p>
             <ul>

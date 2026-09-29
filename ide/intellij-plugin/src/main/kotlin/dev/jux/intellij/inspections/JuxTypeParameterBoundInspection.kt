@@ -31,8 +31,12 @@ import dev.jux.intellij.resolve.JuxTypeIndex
  *
  * Interfaces are free, in any number and order, and a bound naming another
  * type parameter (`<R extends K>`) is checked where `K` is. Silent on a bound
- * it cannot resolve, and on a bound written with a suffix (`int[]`, `T?`),
- * which the language server reports.
+ * it cannot resolve.
+ *
+ * A bound written with a suffix is E0459 too: `T extends int[]` is an array
+ * type and `T extends Named?` a nullable one, and neither is extended by
+ * anything. A pointer suffix is read through, as the checker reads it:
+ * `T extends int*` is judged, and shown, as `int`.
  */
 class JuxTypeParameterBoundInspection : LocalInspectionTool() {
 
@@ -51,8 +55,27 @@ class JuxTypeParameterBoundInspection : LocalInspectionTool() {
         val name = param.name ?: return
         val classes = ArrayList<Pair<JuxTypeDeclaration, PsiElement>>()
         for (ref in JuxTypeEngine.boundReferences(param)) {
-            if (hasSuffix(ref)) continue
-            val shown = ref.text.trim()
+            val suffix = suffixOf(ref)
+            val written = suffix.filter { it.elementType !== T.STAR }
+            if (written.isNotEmpty()) {
+                // An unresolved base is the unresolved-name check's alone, as
+                // the checker validates the bound's name before its shape.
+                if (JuxTypeEngine.typeOfTypeReference(ref) is JuxType.Unknown) continue
+                val last = written.last()
+                val shown = textFrom(ref, last)
+                val why = if (last.elementType === T.QUESTION) "`$shown` is a nullable type" else "`$shown` is an array type"
+                holder.registerProblem(
+                    holder.manager.createProblemDescriptor(
+                        ref,
+                        last,
+                        "`$name extends $shown` admits only `$shown` itself: $why (§T.4.6) (E0459)",
+                        ProblemHighlightType.GENERIC_ERROR,
+                        holder.isOnTheFly,
+                    ),
+                )
+                continue
+            }
+            val shown = textFrom(ref, angleEnd(ref))
             val why = when (val bound = JuxTypeEngine.typeOfTypeReference(ref)) {
                 is JuxType.Primitive ->
                     if (bound.name == "String" || bound.name == "string") "`$shown` is final"
@@ -95,13 +118,70 @@ class JuxTypeParameterBoundInspection : LocalInspectionTool() {
     }
 
     /**
-     * A bound written with `[]`, `?` or `*` after its name: an array, nullable
-     * or pointer type, which the angle-list parser leaves as tokens after the
-     * reference. Left to the language server.
+     * The `[]`, `?` and `*` tokens written after a bound's name (and after its
+     * type arguments), which the angle-list parser leaves as loose tokens
+     * after the reference, in order. `Named<int>[]?` gives `[`, `]`, `?`.
      */
-    private fun hasSuffix(ref: PsiElement): Boolean {
-        var next = ref.nextSibling
-        while (next is PsiWhiteSpace) next = next.nextSibling
-        return next.elementType === T.LBRACKET || next.elementType === T.QUESTION || next.elementType === T.STAR
+    private fun suffixOf(ref: PsiElement): List<PsiElement> {
+        val out = ArrayList<PsiElement>()
+        var next = skipSpace(angleEnd(ref).nextSibling)
+        while (next != null) {
+            when (next.elementType) {
+                T.LBRACKET, T.RBRACKET, T.QUESTION, T.STAR -> out.add(next)
+                // `T[N]`: a length inside the brackets.
+                T.INT_LITERAL, T.IDENTIFIER -> if (out.lastOrNull()?.elementType !== T.LBRACKET) break else out.add(next)
+                else -> break
+            }
+            next = skipSpace(next.nextSibling)
+        }
+        return out
+    }
+
+    /**
+     * The last token of a bound's name and type arguments: the reference
+     * itself, or the `>` closing the `<..>` written after it, whose tokens the
+     * angle-list parser keeps opaque beside the reference.
+     */
+    private fun angleEnd(ref: PsiElement): PsiElement {
+        var next = skipSpace(ref.nextSibling)
+        if (next.elementType !== T.LT) return ref
+        var depth = 0
+        var last: PsiElement = ref
+        while (next != null) {
+            depth += when (next.elementType) {
+                T.LT -> 1
+                T.LT_LT -> 2
+                T.GT -> -1
+                T.GT_GT -> -2
+                else -> 0
+            }
+            last = next
+            // A `>>` closing this list and the enclosing one: the enclosing
+            // list's `>` is shared, so the bound ends here.
+            if (depth <= 0) return last
+            next = next.nextSibling
+        }
+        return last
+    }
+
+    private fun skipSpace(e: PsiElement?): PsiElement? {
+        var c = e
+        while (c is PsiWhiteSpace || c is com.intellij.psi.PsiComment) c = c.nextSibling
+        return c
+    }
+
+    /** The written text from [first] to [last], siblings, spaced as the checker prints a type (`Pair<int, int>`). */
+    private fun textFrom(first: PsiElement, last: PsiElement): String {
+        val sb = StringBuilder()
+        var c: PsiElement? = first
+        while (c != null) {
+            if (c !is PsiWhiteSpace) sb.append(c.text)
+            if (c === last) break
+            c = c.nextSibling
+        }
+        var text = sb.toString().filterNot { it.isWhitespace() }.replace(",", ", ")
+        // `<V extends Vec<int>>`: the one `>>` token closes the parameter list too.
+        while (text.endsWith('>') && text.count { it == '>' } > text.count { it == '<' }) text = text.dropLast(1)
+        return text
     }
 }
