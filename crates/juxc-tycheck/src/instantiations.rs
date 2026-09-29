@@ -54,6 +54,10 @@ pub struct Closure {
     /// Generic functions and methods (as call keys) called with arguments
     /// that keep growing (ERRATA E141 erases them).
     pub growing: HashSet<String>,
+    /// Every concrete argument list each generic function or method (as a
+    /// [`FactKind::Call`] key) is called with. What the safe lowering level
+    /// asks before it gives a function's parameter a bound (sweep C).
+    pub calls: HashMap<String, Vec<Vec<Ty>>>,
 }
 
 const MAX_PER_KEY: usize = 512;
@@ -238,13 +242,19 @@ pub fn close(symbols: &SymbolTable, facts: &[Fact], seeds: &[Ty]) -> Closure {
         }
     }
     let mut classes: HashMap<String, Vec<Vec<Ty>>> = HashMap::new();
+    let mut calls: HashMap<String, Vec<Vec<Ty>>> = HashMap::new();
     for (kind, set) in &sets {
-        if let FactKind::New(c) = kind {
-            let v: Vec<Vec<Ty>> = set.iter().filter_map(|k| values.get(&(kind.clone(), k.clone())).cloned()).collect();
-            classes.insert(c.clone(), v);
+        let v: Vec<Vec<Ty>> = set.iter().filter_map(|k| values.get(&(kind.clone(), k.clone())).cloned()).collect();
+        match kind {
+            FactKind::New(c) => {
+                classes.insert(c.clone(), v);
+            }
+            FactKind::Call(k) => {
+                calls.insert(k.clone(), v);
+            }
         }
     }
-    Closure { classes, unbounded, growing }
+    Closure { classes, unbounded, growing, calls }
 }
 
 /// The call keys whose instantiations reach the body of method key `m`: its

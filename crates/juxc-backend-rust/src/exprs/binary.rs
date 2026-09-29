@@ -350,6 +350,21 @@ impl RustEmitter {
         if let Expr::Literal(juxc_ast::Literal::Char(_)) = e {
             return Some(juxc_tycheck::Primitive::Char);
         }
+        // Safe level (gap 34, sweep C): the checker's recorded type first, so
+        // every promotion and widening cast is written from what the checker
+        // typed, not from the backend's own tracking of locals and fields.
+        // The test hook `numeric` loses the backend's typing (gap 39: a member
+        // reached through a bound was typed unknown, and `isize + f64` went
+        // to rustc), which only the checker's answer stands in for.
+        let span = expr_span_of(e);
+        if self.safe_at(span) && span != juxc_source::Span::DUMMY {
+            if let Some(Ty::Primitive(p)) = self.expr_types.get(&span) {
+                return Some(*p);
+            }
+        }
+        if self.broken_by(crate::BreakKind::Numeric, span) {
+            return literal_numeric_ty(e);
+        }
         // A pointer difference is a `long` (§L.6.2), and its lowering already
         // carries the `as i64`. A parenthesized `(q - p)` has no recorded type
         // under its own span, so without this it read as untyped and took a

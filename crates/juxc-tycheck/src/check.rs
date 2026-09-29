@@ -438,6 +438,17 @@ pub(crate) struct Checker<'a> {
     /// Typed `assertThrows<E>(f)` calls (§TS.3): call span -> the FQN of `E`,
     /// absorbed into `SymbolTable::typed_assert_throws`.
     pub(crate) typed_assert_throws: HashMap<Span, String>,
+    /// `Result.from(f)` calls (EXCEPTIONS §X.5.4): call span -> the FQN of
+    /// the exception class its `Err` holds, absorbed into
+    /// `SymbolTable::result_from_calls`.
+    pub(crate) result_from_calls: HashMap<Span, String>,
+    /// Generic free-function calls: call span -> the type arguments it binds
+    /// (an unknown one stays `Unknown`) and whether the call wrote them,
+    /// absorbed into `SymbolTable::call_type_args`.
+    pub(crate) call_type_args: HashMap<Span, (Vec<Ty>, bool)>,
+    /// `task.await()` calls (ASYNC §18.1.4), by call span, absorbed into
+    /// `SymbolTable::task_await_calls`.
+    pub(crate) task_await_calls: std::collections::HashSet<Span>,
     /// Record patterns (§A.3): pattern span -> the record's FQN, absorbed into
     /// `SymbolTable::record_patterns`.
     pub(crate) record_patterns: HashMap<Span, String>,
@@ -653,6 +664,9 @@ impl<'a> Checker<'a> {
             operator_selections: HashMap::new(),
             free_operator_calls: HashMap::new(),
             typed_assert_throws: HashMap::new(),
+            result_from_calls: HashMap::new(),
+            call_type_args: HashMap::new(),
+            task_await_calls: std::collections::HashSet::new(),
             record_patterns: HashMap::new(),
             assigned_in_block: std::collections::HashSet::new(),
             assigned_after_stmt: std::collections::HashSet::new(),
@@ -11071,6 +11085,146 @@ impl<'a> Checker<'a> {
         true
     }
 
+    /// `Result.from(f)` (EXCEPTIONS §X.5.4): run `f`, and package what it
+    /// returns as `Ok(value)` or the exception it throws as `Err(e)`.
+    ///
+    /// A compiler intrinsic, not a static of the library enum: a generic
+    /// static there would be one more candidate for every `Result` call to
+    /// infer against (the risk gap 35 named). Its type is local to the call,
+    /// `Result<T, E>` with `T` what `f` produces and `E` the one explicit type
+    /// argument (which `crate::result_from` fills in from a written target
+    /// type), else `Exception`. `E` must be `Exception` or a subclass of it
+    /// (E0446, as for `assertThrows<E>`); `f` takes nothing and produces a
+    /// value (E0411, E0410). A valid call is recorded for the backend, which
+    /// lowers it to the dispatch a `catch (E e)` clause uses: an exception
+    /// that is not an `E` propagates.
+    fn check_result_from(&mut self, c: &CallExpr) {
+        for arg in &c.args {
+            self.check_expr(arg);
+        }
+        if c.args.len() != 1 {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0411_WrongArgCount,
+                    format!(
+                        "`Result.from` takes one argument, the function to run, but {} (§X.5.4)",
+                        supplied(c.args.len())
+                    ),
+                )
+                .with_span(c.span)
+                .with_help("write `Result.from(() -> expression)`"),
+            );
+            return;
+        }
+        if c.explicit_generic_args.len() > 1 {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0443_ExplicitTypeArgs,
+                    format!(
+                        "`Result.from` takes one type argument, the exception its `Err` holds, but {} (§X.5.4)",
+                        supplied(c.explicit_generic_args.len())
+                    ),
+                )
+                .with_span(c.span),
+            );
+            return;
+        }
+        let takes_params = match &c.args[0] {
+            Expr::Lambda(l) => !l.params.is_empty(),
+            other => matches!(infer_expr(other, &self.env, self.symbols), Ty::Fn { params, .. } if !params.is_empty()),
+        };
+        if takes_params {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0411_WrongArgCount,
+                    "the function `Result.from` runs is called with no arguments, so it cannot take parameters (§X.5.4)",
+                )
+                .with_span(expr_span(&c.args[0])),
+            );
+            return;
+        }
+        let value = crate::infer::produced_value_type(c.args.first(), &self.env, self.symbols);
+        // A block body that can run off its end returns nothing, whatever its
+        // last statement computes.
+        let falls_through = matches!(
+            &c.args[0],
+            Expr::Lambda(l) if matches!(&l.body, juxc_ast::LambdaBody::Block(b) if crate::return_check::body_can_fall_through(b))
+        );
+        if matches!(value, Ty::Void) || falls_through {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0410_TypeMismatch,
+                    "the function `Result.from` runs must produce a value for `Ok`, and this one returns nothing (§X.5.4)",
+                )
+                .with_span(expr_span(&c.args[0]))
+                .with_help("return the value from the lambda, or call the code directly inside `try`"),
+            );
+            return;
+        }
+        let (written, class) = match c.explicit_generic_args.first() {
+            Some(e) => {
+                let written = ty_from_ref(e, &self.env, self.symbols);
+                let class = match &written {
+                    Ty::User { name, generic_args } if generic_args.is_empty() => self
+                        .resolve_class_fqn(name)
+                        .filter(|class| self.extends_chain_reaches(class, crate::infer::EXCEPTION_FQN)),
+                    _ => None,
+                };
+                (written.to_string(), class)
+            }
+            None => ("Exception".to_string(), Some(crate::infer::EXCEPTION_FQN.to_string())),
+        };
+        match class {
+            Some(class) => {
+                self.result_from_calls.insert(c.span, class);
+            }
+            None => self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0446_GenericBoundNotSatisfied,
+                    format!(
+                        "`Result.from` packages a thrown exception as the `Err`, so the error type must be \
+                         `Exception` or a subclass of it, and `{written}` is not (§X.5.4)"
+                    ),
+                )
+                .with_span(c.span)
+                .with_help("catch the exception and build the value from its variants: `Result.Ok(value)` or `Result.Err(error)`"),
+            ),
+        }
+    }
+
+    /// `task.await()` (ASYNC §18.1.4): `await task` spelled as a method. It
+    /// suspends, so it is `E0700` outside an async function, method or lambda,
+    /// exactly as the keyword is; it takes no arguments (`E0411`). A valid
+    /// call is recorded, and rewritten as `await task` before the lowering.
+    fn check_task_await_call(&mut self, c: &CallExpr, name_span: Span) {
+        for arg in &c.args {
+            self.check_expr(arg);
+        }
+        if !c.args.is_empty() {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0411_WrongArgCount,
+                    format!("`await()` takes no arguments, but {} (§18.1.4)", supplied(c.args.len())),
+                )
+                .with_span(c.span),
+            );
+            return;
+        }
+        if !self.in_async {
+            self.diagnostics.push(
+                Diagnostic::error(
+                    code::Code::E0700_AwaitRequiresAsyncContext,
+                    "`task.await()` suspends like `await task`, so it is only allowed inside an async \
+                     function, method, or lambda -- mark the enclosing function `async` (e.g. `async T \
+                     f()`), or read the value from sync code with `task.blockingGet()`",
+                )
+                .with_span(name_span),
+            );
+            return;
+        }
+        self.task_await_calls.insert(c.span);
+    }
+
     /// Does the class `fqn`'s `extends` chain reach `ancestor` (itself
     /// included)? Bounded, so a malformed cyclic chain cannot hang the check.
     fn extends_chain_reaches(&self, fqn: &str, ancestor: &str) -> bool {
@@ -12878,6 +13032,18 @@ impl<'a> Checker<'a> {
                         c.span,
                     );
                     self.record_inst(crate::instantiations::FactKind::Call(format!("fn:{fqn}")), subst_args.clone());
+                    // The call's type arguments, written or inferred, for the
+                    // safe lowering level's turbofish (sweep C).
+                    if !subst_params.is_empty() {
+                        let written: Vec<Ty> = c
+                            .explicit_generic_args
+                            .iter()
+                            .map(|t| ty_from_ref(t, &self.env, self.symbols))
+                            .collect();
+                        let is_written = written.len() == subst_params.len();
+                        let args = if is_written { written } else { subst_args.clone() };
+                        self.call_type_args.insert(c.span, (args, is_written));
+                    }
                     let prev_callee_fn = self.callee_fn_key.replace(fqn.clone());
                     if callee_c_variadic && c.args.len() > params.len() {
                         // C-variadic call with extra args: the fixed prefix gets
@@ -13303,6 +13469,13 @@ impl<'a> Checker<'a> {
                     // and helpers such as `fromName` / `cases`). Anything else
                     // reached rustc as an unresolved associated item.
                     if let Some((kind, fqn)) = self.value_type_named_by(qn) {
+                        // `Result.from(() -> ...)` (§X.5.4) is an intrinsic,
+                        // not a static of the library enum: its type is local
+                        // to the call (`infer::result_from_type`).
+                        if kind == "enum" && fqn == crate::infer::RESULT_FQN && method_name == "from" {
+                            self.check_result_from(c);
+                            return;
+                        }
                         // An INSTANCE method named through the type is not a
                         // static: `Result.ok(1)` (the spelling §7.11 uses) was
                         // lowered as a call of the instance `ok()` with `1` for
@@ -13326,11 +13499,10 @@ impl<'a> Checker<'a> {
                             };
                             let mut diag =
                                 Diagnostic::error(code::Code::E0413_UnresolvedMethod, message).with_span(c.span);
-                            if fqn == "jux.std.result.Result" && matches!(method_name, "ok" | "err" | "from") {
+                            if fqn == crate::infer::RESULT_FQN && matches!(method_name, "ok" | "err") {
                                 diag = diag.with_help(match method_name {
                                     "ok" => "a `Result` is built from its variants: `Result.Ok(value)` (ERRATA E56)",
-                                    "err" => "a `Result` is built from its variants: `Result.Err(error)` (ERRATA E56)",
-                                    _ => "catch the exception and build the value from its variants: `Result.Ok(value)` or `Result.Err(e)`",
+                                    _ => "a `Result` is built from its variants: `Result.Err(error)` (ERRATA E56)",
                                 });
                             }
                             self.diagnostics.push(diag);
@@ -13526,6 +13698,15 @@ impl<'a> Checker<'a> {
                     // than a rustc message about a type the program never
                     // wrote, which is all a typo used to get.
                     if name == juxc_ast::TASK_SENTINEL {
+                        // `task.await()` (§18.1.4: `public async T await()`,
+                        // "same as `await task` syntax") is the keyword's
+                        // other spelling: an async context only (E0700), no
+                        // arguments, and rewritten as `await task` once the
+                        // program is checked (`expand::apply_task_awaits`).
+                        if method_name == "await" {
+                            self.check_task_await_call(c, field.field.span);
+                            return;
+                        }
                         if !matches!(
                             method_name,
                             "cancel"
@@ -13543,9 +13724,10 @@ impl<'a> Checker<'a> {
                                     code::Code::E0413_UnresolvedMethod,
                                     format!(
                                         "no method `{method_name}` on `Task` -- a task's own \
-                                         members are `cancel()`, `isCancelled()`, `isResolved()`, \
-                                         `blockingGet()` (or `join()`), `map(f)` and `flatMap(f)`; \
-                                         `await task` is what reads its value (§18.1.4)",
+                                         members are `await()`, `cancel()`, `isCancelled()`, \
+                                         `isResolved()`, `blockingGet()` (or `join()`), `map(f)` and \
+                                         `flatMap(f)`; `await task` (or `task.await()`) is what reads \
+                                         its value in async code (§18.1.4)",
                                     ),
                                 )
                                 .with_span(field.field.span),
@@ -16822,6 +17004,15 @@ fn rust_length_call(e: &Expr) -> Option<String> {
         _ => "xs".to_string(),
     };
     Some(format!("{receiver}.{}()", f.field.text))
+}
+
+/// "1 was supplied" / "2 were supplied", for an arity diagnostic.
+fn supplied(n: usize) -> String {
+    if n == 1 {
+        "1 was supplied".to_string()
+    } else {
+        format!("{n} were supplied")
+    }
 }
 
 #[cfg(test)]

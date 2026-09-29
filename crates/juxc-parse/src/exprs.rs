@@ -1220,7 +1220,7 @@ impl<'a> Parser<'a> {
                 // `span.start` is the interp token's absolute offset; hole
                 // expressions rebase against it so their spans stay unique
                 // (collision-free `expr_types` keys).
-                let segments = self.parse_interp_segments(&raw, true, span.start as usize);
+                let segments = self.parse_interp_segments(&raw, true, span.start as usize, span.file);
                 Some(Expr::InterpString(InterpStringExpr {
                     segments,
                     span,
@@ -1238,7 +1238,7 @@ impl<'a> Parser<'a> {
             // stay literal (decode_escapes = false).
             TokenKind::InterpRawStr(raw) => {
                 self.advance();
-                let segments = self.parse_interp_segments(&raw, false, span.start as usize);
+                let segments = self.parse_interp_segments(&raw, false, span.start as usize, span.file);
                 Some(Expr::InterpString(InterpStringExpr {
                     segments,
                     span,

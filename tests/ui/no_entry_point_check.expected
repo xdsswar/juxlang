@@ -1,0 +1,1 @@
+no_entry_point_check.jux:1:1: [E0327] error: this program has no entry point, so there is nothing to run

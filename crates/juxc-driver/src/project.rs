@@ -157,7 +157,7 @@ pub fn build_package_selected(
         let result = crate::compile_workspace_as_cfg(
             sources,
             juxc_backend_rust::lower_workspace_lib,
-            cfg,
+            &cfg.clone().with_binary(false),
         )?;
         record(&result, &mut all_diagnostics, &mut all_sources);
         if let Some(crate_) = result.crate_ {
@@ -213,7 +213,8 @@ pub fn build_package_selected(
             move |u, s, e, src| {
                 juxc_backend_rust::lower_workspace_with_entry(u, s, e, src, entry_pkg.clone())
             },
-            cfg,
+            // A binary needs an entry point (E0327).
+            &cfg.clone().with_binary(true),
         )?;
         record(&result, &mut all_diagnostics, &mut all_sources);
         if let Some(crate_) = result.crate_ {
@@ -315,7 +316,7 @@ pub fn build_example(
     let result = crate::compile_workspace_as_cfg(
         sources,
         |u, s, e, src| juxc_backend_rust::lower_workspace_with_entry(u, s, e, src, None),
-        cfg,
+        &cfg.clone().with_binary(true),
     )?;
     record(&result, &mut all_diagnostics, &mut all_sources);
     if let Some(crate_) = result.crate_ {

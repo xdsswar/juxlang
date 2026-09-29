@@ -85,6 +85,11 @@ pub struct CfgFacts {
     /// The build is a CHECK (`jux check`), not a build, so the review lints
     /// that a build leaves out (`W0820`) are raised.
     checking: bool,
+    /// The sources are one BINARY target's (a loose file, a directory given
+    /// as a program, a `[[bin]]`, an example), so the program needs an entry
+    /// point (`E0327`, Entry Points §E.1). A library member does not, which is
+    /// why this is a fact of the build and not of the file.
+    binary: bool,
 }
 
 impl Default for CfgFacts {
@@ -123,6 +128,7 @@ impl CfgFacts {
             lints: Vec::new(),
             deny_warnings: false,
             checking: false,
+            binary: false,
         }
     }
 
@@ -198,6 +204,7 @@ impl CfgFacts {
             lints: Vec::new(),
             deny_warnings: false,
             checking: false,
+            binary: false,
         }
     }
 
@@ -241,6 +248,18 @@ impl CfgFacts {
     pub fn with_checking(mut self, checking: bool) -> Self {
         self.checking = checking;
         self
+    }
+
+    /// Mark the sources as one binary target's, which must have an entry
+    /// point (`E0327`).
+    pub fn with_binary(mut self, binary: bool) -> Self {
+        self.binary = binary;
+        self
+    }
+
+    /// Whether the sources are a binary target's.
+    pub fn binary(&self) -> bool {
+        self.binary
     }
 
     /// Whether `-Werror` is in force.

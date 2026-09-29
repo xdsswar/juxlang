@@ -1,0 +1,12 @@
+ok web on 8080
+config error: no port in `web`
+config error: missing key: name
+true
+4
+not a number: invalid digit found in string
+true
+caught: / by zero
+40
+Ok(true)
+2
+propagated: / by zero

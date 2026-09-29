@@ -3253,7 +3253,14 @@ impl RustEmitter {
         // from a `p.len()` (doesn't); marking external locals `mut` lets the
         // mutating calls compile. The crate prelude `#![allow(unused_mut)]`
         // absorbs the over-marking on read-only uses.
-        if self.mutated_in_fn.contains(&var.name.text) || external_local {
+        //
+        // Safe level (gap 34, sweep C): every local is `mut`, whatever the
+        // mutation analysis judged. The test hook `mutability` makes that
+        // analysis answer "never written" (a `&mut` lend of a non-`mut`
+        // binding, gap 30 L8/L9), which only the safe answer overrides.
+        let judged_mut = self.mutated_in_fn.contains(&var.name.text)
+            && !self.broken_by(crate::BreakKind::Mutability, var.span);
+        if judged_mut || external_local || self.safe_at(var.span) {
             self.w.push_str("mut ");
         }
         self.w.push_str(&to_rust_ident(&var.name.text));

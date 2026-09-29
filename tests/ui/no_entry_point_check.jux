@@ -1,0 +1,3 @@
+// An empty program: nothing to run is E0327 under `juxc --check` too, the
+// rule the build applies (Entry Points E.1). A library member with no entry
+// point is not a binary, and stays valid.

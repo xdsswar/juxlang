@@ -211,7 +211,10 @@ fn run_juxc(cli: Cli) -> Result<Option<ExitCode>> {
     };
     // `-Werror` on top of whatever the project's `[lints]` says.
     let deny = cli.deny_warnings || cli.warnings.is_some() || facts.deny_warnings();
-    let facts = facts.with_deny_warnings(deny);
+    // `juxc` builds a program, so its sources need an entry point (E0327),
+    // unless a manifest says the package has no binary at all.
+    let binary = manifest.as_ref().map_or(true, |m| !m.bins.is_empty());
+    let facts = facts.with_deny_warnings(deny).with_binary(binary);
 
     // Check-only mode (editor tooling / CI lint): run the front end, report
     // diagnostics, and stop — no crate is emitted and `cargo` is never

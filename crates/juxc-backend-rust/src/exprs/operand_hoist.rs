@@ -152,7 +152,15 @@ impl RustEmitter {
             self.w.push_str("let ");
             self.w.push_str(&name);
             self.w.push_str(" = ");
+            // The temp holds the operand's own value. A box into an erased
+            // slot (ERRATA E141) is the slot's, applied where the temp is
+            // read: boxed here too, the value was boxed twice.
+            let key = Self::erase_key(e);
+            let unboxed = self.erase_on_emit.contains_key(&key) && self.erasing_now.insert((key, true));
             self.emit_expr(e);
+            if unboxed {
+                self.erasing_now.remove(&(key, true));
+            }
             // Bound by value: a place read out of a cell is copied (a
             // String, a record) or shared (an object handle).
             if self.wrapper_value_needs_clone(e) || self.value_place_needs_clone(e) {

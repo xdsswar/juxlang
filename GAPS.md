@@ -367,7 +367,7 @@ Tests: `bin/juxc/tests/leaker_idioms.rs` and
 
 Also found and fixed on the way: `W0457` said classes are "`Rc`-refcounted" (eleven pinned outputs updated by hand).
 
-Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0413` with help. A stack overflow off Windows and a foreign `Display` stay as E129 left them.
+Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0413` with help (provided since gap 41). A stack overflow off Windows and a foreign `Display` stay as E129 left them.
 
 ### Generics sweep (added 2026-09-28)
 
@@ -563,6 +563,30 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `int[]? xs;` as a local | parse error | works, matches Java |
 | `BTreeMap<T, int>` keyed by an erased or generic `T` | E0900 (rustc E0277) | works, matches Java |
 | 10,000 pushes and reads through an erased function | quadratic | about 60 ms (debug build) |
+
+### Sweep C (added 2026-09-28)
+
+**41. CLOSED 2026-09-28 (ERRATA E1XX-SWEEPC).** ~~What gaps 34 and 35 left open, and `task.await()`.~~ `Result.from(() -> ...)` (§X.5.4) is a compiler intrinsic whose type is decided at the call: `Result<T, E>`, `E` taken from the `Result<T, E>` it is returned or assigned as, a written `Result.from<E>`, or `Exception`; the function runs under a `catch (E e)` clause's dispatch, and an exception that is not an `E` propagates. `E0327` is raised by `jux check`, `juxc --check`, the language server and the build alike, for a binary target only and once the program has no other error; a library member stays clean. `task.await()` is `await task` (ASYNC §18.1.4): typed `T`, `E0700` outside async code, taking the task. The safe lowering level gained six switches for the type and trait families (derived bounds, method names, numeric boundaries, type paths, generic calls, `let` bindings), and a regression harness puts ten bugs gaps 2-40b fixed back into one function each (`JUX_TEST_BREAK_FAST=<kind>:<function>`), nine rustc error families, every one rescued by the safe level. Found on the way: interpolation holes had spans in file 0 (collisions with the first standard-library unit), a bound operand into an erased slot was boxed twice at the safe level, and `import rust.std.*;` bound `std::io::empty` over the program's own `empty()` (rustc `E0255`). Tests: `examples/result_from.jux`, `examples/task_await_method.jux`, `examples/no_entry_point.jux`, `tests/ui/result_from_misuse`, `tests/ui/task_await_method_misuse`, `tests/ui/no_entry_point_check`, `bin/jux/tests/release_blockers.rs`, `crates/juxc-lsp/src/analysis.rs`, `bin/jux/tests/safe_mode.rs`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `return Result.from(() -> readConfig());` in a `Result<Config, ConfigError>` function | `E0413` | `Ok(config)` or `Err(e)` |
+| `var r = Result.from(() -> 1 / 0);` | `E0413` | `Err(/ by zero)` as an `Exception` |
+| `Result<int, NumberFormatException> r = Result.from(() -> "12x".parse<int>());` | `E0413` | `Err(invalid digit found in string)` |
+| `Result.from(() -> Result.from(() -> x))` | `E0413` | a `Result<Result<T, E>, E>` |
+| `jux check empty.jux` | `check ok` | `E0327` at 1:1 |
+| an empty file open in the editor | clean | `E0327` |
+| `jux check` of a `[lib]` package whose files have no `main` | `check ok` | `check ok` |
+| `t.await()` in an async function | `E0413` | the task's value |
+| `t.await()` in a plain function | `E0413` | `E0700` naming `blockingGet()` |
+| a relaxed member copying `T` with its `Clone` bound lost (hook `clone`) | E0900 (rustc `E0599`) | heals, that function in compatibility mode |
+| a generic key with no `Ord` (hook `keybound`) | E0900 (rustc `E0277`) | heals |
+| `isize + f64` with the operand types lost (hook `numeric`) | E0900 (rustc `E0277`) | heals |
+| a cross-package type without `crate::` (hook `path`) | E0900 (rustc `E0433`) | heals |
+| `empty<int>()` with its turbofish lost (hook `infer`) | E0900 (rustc `E0283`) | heals |
+| `a.add(2, 3)` with a stale overload pick (hook `overload`) | E0900 (rustc `E0061`) | heals |
+| `measure("abcd", out n)` with `n` bound without `mut` (hook `mutability`) | E0900 (rustc `E0596`) | heals |
+| `JUX_SAFE_CORPUS=all` | 483 of 485 | 486 of 486 |
 
 ---
 

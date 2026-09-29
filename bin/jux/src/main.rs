@@ -1803,6 +1803,9 @@ fn loose_facts(release: bool, action: Action) -> juxc_driver::CfgFacts {
     juxc_driver::CfgFacts::new(release, juxc_driver::Profile::Full)
         .with_deny_warnings(juxc_driver::lints::deny_warnings_requested())
         .with_checking(matches!(action, Action::Check))
+        // A loose file or directory is built as a program, so it needs an
+        // entry point; `jux check` says so as the build would (E0327).
+        .with_binary(true)
 }
 
 /// Report, then build and possibly run - shared by the single-file and

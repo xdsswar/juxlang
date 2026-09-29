@@ -138,6 +138,7 @@ pub fn analyze_workspace_in(
     // The editor's source roots, when the file sits under one, name the
     // compilation set outright (§I.4).
     let from_roots = open_path.as_deref().and_then(|p| roots.compilation_set(p));
+    let from_roots_absent = from_roots.is_none();
     let mut scanned: Vec<PathBuf> = match (from_roots, &scope) {
         (Some(files), _) => files,
         (None, Some(dir)) => scan_jux_files(dir),
@@ -194,6 +195,14 @@ pub fn analyze_workspace_in(
         });
     }
 
+    // Whether the set is a binary's, which must have an entry point (E0327),
+    // decided as `jux build` decides it: a file no manifest governs is a
+    // program on its own, and a package's set is a binary's when it holds one
+    // of the package's `[[bin]]` entry files. A library member is not.
+    let binary = match &manifest {
+        Some(m) => m.bins.iter().any(|b| scanned.iter().any(|p| p.components().eq(b.path.components()))),
+        None => scope.is_none() && from_roots_absent,
+    };
     for path in scanned {
         if open_path.as_deref() == Some(path.as_path()) {
             sources.push(SourceFile::new(path, rope.to_string()));
@@ -222,7 +231,8 @@ pub fn analyze_workspace_in(
     let facts = manifest
         .as_ref()
         .map(|m| juxc_driver::project::cfg_facts_for(m, false))
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .with_binary(binary);
     analyze_sources(uri, rope, sources, &facts, enc)
 }
 
@@ -241,7 +251,8 @@ pub fn analyze_single_in(uri: &Url, rope: &Rope, enc: PositionEncoding) -> Analy
         .unwrap_or_else(|_| uri.to_string());
     let source = SourceFile::new(path, rope.to_string());
     // No project → default `full` profile (no profile-specific restrictions).
-    analyze_sources(uri, rope, vec![source], &juxc_driver::CfgFacts::default(), enc)
+    // A loose file is a program on its own, so it needs an entry point (E0327).
+    analyze_sources(uri, rope, vec![source], &juxc_driver::CfgFacts::default().with_binary(true), enc)
 }
 
 /// Shared core: feed `sources` (the user units; stdlib is auto-prepended) to
@@ -485,6 +496,78 @@ mod tests {
             here.is_empty(),
             "a declared `[[bin]]` entry is its own program and compiles cleanly: {here:?}",
         );
+    }
+
+    fn entry_point_errors(analysis: &Analysis, uri: &Url) -> usize {
+        analysis
+            .diagnostics_by_uri
+            .get(uri)
+            .map(|ds| ds.iter().filter(|d| d.message.contains("no entry point")).count())
+            .unwrap_or(0)
+    }
+
+    /// E0327 in the editor, by the rule the build applies (sweep C): a file no
+    /// manifest governs is a program on its own, so an empty one has nothing
+    /// to run. It used to be reported only by `jux build`, and the editor said
+    /// nothing.
+    #[test]
+    fn an_empty_loose_file_is_e0327() {
+        let root = temp_root("empty_loose");
+        let _ = fs::remove_file(root.join("jux.toml"));
+        let file = root.join("empty.jux");
+        fs::write(&file, "").unwrap();
+        let uri = Url::from_file_path(&file).unwrap();
+        let analysis = analyze_workspace(&root, &uri, &Rope::from_str(""));
+        assert_eq!(entry_point_errors(&analysis, &uri), 1, "{:?}", analysis.diagnostics_by_uri);
+        let d = &analysis.diagnostics_by_uri[&uri][0];
+        assert_eq!(d.range.start, tower_lsp::lsp_types::Position::new(0, 0));
+        // The single-document fallback says the same.
+        let single = analyze_single(&uri, &Rope::from_str("class Unused { int n = 0; }"));
+        assert_eq!(entry_point_errors(&single, &uri), 1, "{:?}", single.diagnostics_by_uri);
+        // And a program with a `main`, or top-level statements, is clean.
+        let fine = analyze_single(&uri, &Rope::from_str("print(1);"));
+        assert_eq!(entry_point_errors(&fine, &uri), 0);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A library member is not a binary: a package whose manifest declares no
+    /// `[[bin]]` (and has no `src/main.jux`) builds a library, and a file of
+    /// declarations in it stays clean.
+    #[test]
+    fn a_library_member_without_an_entry_point_stays_clean() {
+        let root = temp_root("lib_member");
+        let file = root.join("Shape.jux");
+        let text = "public class Shape { public int sides = 3; }";
+        fs::write(&file, text).unwrap();
+        let uri = Url::from_file_path(&file).unwrap();
+        let analysis = analyze_workspace(&root, &uri, &Rope::from_str(text));
+        let here = analysis.diagnostics_by_uri.get(&uri).cloned().unwrap_or_default();
+        assert!(here.is_empty(), "a library member needs no entry point: {here:?}");
+    }
+
+    /// A package's `[[bin]]` entry file with no `main` is the build's E0327,
+    /// shown on the entry file; the shared library code beside it is clean.
+    #[test]
+    fn a_bin_entry_without_main_is_e0327_on_the_entry() {
+        let root = temp_root("bin_no_main");
+        fs::write(
+            root.join("jux.toml"),
+            "[package]\nname = \"com.example.app\"\nversion = \"0.1.0\"\n\n\
+             [[bin]]\nname = \"app\"\npath = \"src/main.jux\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        let entry = root.join("src").join("main.jux");
+        let text = "class Unused { int n = 0; }";
+        fs::write(&entry, text).unwrap();
+        let uri = Url::from_file_path(&entry).unwrap();
+        let analysis = analyze_workspace(&root, &uri, &Rope::from_str(text));
+        assert_eq!(entry_point_errors(&analysis, &uri), 1, "{:?}", analysis.diagnostics_by_uri);
+        // With a `main`, clean.
+        let fixed = "void main() { print(1); }";
+        let analysis = analyze_workspace(&root, &uri, &Rope::from_str(fixed));
+        assert_eq!(entry_point_errors(&analysis, &uri), 0, "{:?}", analysis.diagnostics_by_uri);
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn temp_root(tag: &str) -> PathBuf {

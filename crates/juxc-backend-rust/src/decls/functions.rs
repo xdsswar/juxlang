@@ -537,7 +537,15 @@ impl RustEmitter {
             // / `Hash` (§T.2.1). Scoped to this signature, so the sets never
             // carry over to the next declaration.
             self.collect_fn_equality_bound_params(fn_decl);
-            let keys = self.add_fn_key_bound_params(fn_decl);
+            // Test hook `keybound`: no key bounds, gap 40b's shape.
+            let keys = if self.broken_by(crate::BreakKind::KeyBound, fn_decl.span) {
+                Vec::new()
+            } else {
+                self.add_fn_key_bound_params(fn_decl)
+            };
+            // Safe level (sweep C): the full derived set the instantiations
+            // allow, whatever the body's uses say.
+            let keys = self.add_safe_derived_bounds(fn_decl, keys);
             self.emit_generic_params_with_bounds(&combined_generics, &defaulted);
             self.drop_key_bound_params(&keys);
             self.eq_bound_params.clear();
@@ -1405,6 +1413,7 @@ impl RustEmitter {
         // anonymous-class method nested inside a lambda doesn't
         // inherit inference-typed channels (S9).
         let prev_lam = std::mem::take(&mut self.in_lambda_body);
+        let prev_body_span = self.body_span.replace(body.span);
         // Every body gets its OWN `local_types` scope. Body statements emit at
         // whatever scope is current, so without this a body's locals were
         // inserted into the base scope and never removed: a later function or
@@ -1444,6 +1453,11 @@ impl RustEmitter {
             &mut self.captures_read_again,
             crate::lastuse::captures_read_again(body, &self.current_fn_params),
         );
+        // Test hook (`move`): the last-use judgement says every read is the
+        // last, the shape of gap 40's moved handles.
+        if self.level.broken_by(crate::BreakKind::Move, body.span) {
+            self.non_final_uses.clear();
+        }
         // The safe lowering level copies every read (GAPS.md gap 34).
         self.apply_safe_last_use(body);
         let mut cell_locals =
@@ -1496,6 +1510,7 @@ impl RustEmitter {
         self.captures_read_again = prev_captures;
         self.local_types.pop();
         self.in_lambda_body = prev_lam;
+        self.body_span = prev_body_span;
     }
 
     /// Emit the *tail* statement of a function body — the one targeted

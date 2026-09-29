@@ -442,6 +442,32 @@ public Result<Config, ConfigError> readConfigSafe() {
 }
 ```
 
+`Result.from(f)` runs `f`, a function of no arguments that produces a value.
+What it returns is `Ok(value)`; an exception it throws that is an `E` (the
+class or a subclass) is `Err(e)`, and any other exception propagates, exactly
+as past a `catch (E e)`. A Rust library's error is the Jux exception it
+surfaces as (Bindgen §G.5.4, ERRATA E134), so `Result<int,
+NumberFormatException> r = Result.from(() -> "12x".parse<int>());` is an
+`Err`.
+
+The call's type is `Result<T, E>`: `T` is what `f` produces, and `E` is
+
+- the `E` of the `Result<T, E>` the call is written against: a function's
+  declared return type for `return Result.from(...)`, a local's or field's
+  declared type for `Result<T, E> r = Result.from(...)`;
+- else the one type argument written on the call, `Result.from<E>(() -> ...)`;
+- else `Exception` (so `var r = Result.from(() -> ...)` catches every
+  exception).
+
+`E` must be `Exception` or a subclass (`E0446`); `f` must take no parameters
+and produce a value (`E0411`, `E0410`). The call nests
+(`Result.from(() -> Result.from(() -> x))` is a `Result<Result<T, E>, E>`).
+
+`Result.from` is not a method of the library's `Result` enum but a form the
+compiler knows: its type is decided at the call from the call alone, so it
+adds nothing for inference to consider at any other call on `Result`
+(ERRATA E1XX-SWEEPC).
+
 The two styles compose freely.
 
 ---

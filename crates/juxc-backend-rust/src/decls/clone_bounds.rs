@@ -105,7 +105,34 @@ impl RustEmitter {
         if scope.order.is_empty() {
             return Vec::new();
         }
-        let wanted: HashSet<String> = match self.symbols.clone_needs.member(span) {
+        // Safe level (gap 34, sweep C): the table's own answer for a member it
+        // does not know, every relaxed parameter, as far as the program's
+        // instantiations allow: a parameter every one of them binds to a type
+        // that is surely `Clone + Debug`. The test hook `clone` reverts the
+        // table's entry for the member to "needs nothing" (the shape gap 2's
+        // bound moves had before E120), which only this answer overrides.
+        // Not for a member that implements or overrides another's: its
+        // trait's declaration states the clause the table gives that other
+        // member, and an impl may not ask for more (rustc E0276).
+        if self.safe_at(span) && !self.member_overrides_another(span) {
+            let allowed = self.clone_debug_params_allowed(&scope.fqn, &scope.order);
+            let mut wanted: HashSet<String> = allowed.into_iter().collect();
+            if !self.broken_by(crate::BreakKind::Clone, span) {
+                wanted.extend(self.relaxed_member_params(span, subst));
+            }
+            return Self::predicates(scope.order.iter().filter(|p| wanted.contains(*p)));
+        }
+        if self.broken_by(crate::BreakKind::Clone, span) {
+            return Vec::new();
+        }
+        let wanted = self.relaxed_member_params(span, subst);
+        Self::predicates(scope.order.iter().filter(|p| wanted.contains(*p)))
+    }
+
+    /// The relaxed parameters the table says the member at `span` states.
+    fn relaxed_member_params(&self, span: Span, subst: Option<&HashMap<String, TypeRef>>) -> HashSet<String> {
+        let scope = &self.relaxed_scope;
+        match self.symbols.clone_needs.member(span) {
             None => scope.set.clone(),
             Some(n) if n.owner == scope.fqn => n.params.iter().cloned().collect(),
             Some(n) => {
@@ -122,8 +149,83 @@ impl RustEmitter {
                     out
                 }
             }
-        };
-        Self::predicates(scope.order.iter().filter(|p| wanted.contains(*p)))
+        }
+    }
+
+    /// Whether the member declared at `span` is an interface's own method (a
+    /// default body, a trait item), or implements or overrides a method of an
+    /// interface or ancestor its owner has: a member whose `where` clause a
+    /// trait's declaration fixes.
+    fn member_overrides_another(&self, span: Span) -> bool {
+        let Some(member) = self.symbols.clone_needs.member(span) else { return true };
+        let name = member.name.as_str();
+        if self.symbols.interfaces.contains_key(&member.owner) {
+            return true;
+        }
+        let mut ifaces: Vec<String> = Vec::new();
+        let mut class = self.symbols.classes.get(&member.owner);
+        let mut first = true;
+        for _ in 0..64 {
+            let Some(c) = class else { break };
+            if !first && c.methods.contains_key(name) {
+                return true;
+            }
+            first = false;
+            for t in &c.implements {
+                if let Some(seg) = t.name.segments.last() {
+                    ifaces.push(seg.text.clone());
+                }
+            }
+            class = c.extends_fqn.as_ref().and_then(|p| self.symbols.classes.get(p));
+        }
+        if let Some(r) = self.symbols.records.get(&member.owner) {
+            for t in &r.implements {
+                if let Some(seg) = t.name.segments.last() {
+                    ifaces.push(seg.text.clone());
+                }
+            }
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        while let Some(i) = ifaces.pop() {
+            if !seen.insert(i.clone()) {
+                continue;
+            }
+            let Some((_, sig)) = self.lookup_interface_by_bare_or_fqn(&i) else { continue };
+            if sig.methods.contains_key(name) {
+                return true;
+            }
+            for t in &sig.extends {
+                if let Some(seg) = t.name.segments.last() {
+                    ifaces.push(seg.text.clone());
+                }
+            }
+        }
+        false
+    }
+
+    /// The parameters of declaration `fqn` (out of `params`) that every
+    /// instantiation the program builds binds to a type that is surely `Clone
+    /// + Debug`: the ones a safe member may state without refusing a caller.
+    /// A declaration with no recorded instantiation (one reached only through
+    /// a subclass's `extends`, say) states nothing more.
+    fn clone_debug_params_allowed(&self, fqn: &str, params: &[String]) -> Vec<String> {
+        let declared: Vec<String> = self
+            .symbols
+            .classes
+            .get(fqn)
+            .map(|c| c.generic_params.iter().map(|p| p.name.text.clone()).collect())
+            .or_else(|| self.symbols.records.get(fqn).map(|r| r.generic_params.iter().map(|p| p.name.text.clone()).collect()))
+            .or_else(|| self.symbols.enums.get(fqn).map(|e| e.generic_params.iter().map(|p| p.name.text.clone()).collect()))
+            .unwrap_or_default();
+        let insts = self.symbols.instantiations.classes.get(fqn).cloned().unwrap_or_default();
+        params
+            .iter()
+            .filter(|p| {
+                let Some(i) = declared.iter().position(|d| d == *p) else { return false };
+                !insts.is_empty() && insts.iter().all(|args| args.get(i).is_some_and(|t| self.surely_clone_debug(t)))
+            })
+            .cloned()
+            .collect()
     }
 
     /// The clause for a member of a `Kind` trait (its declaration, a

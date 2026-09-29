@@ -51,7 +51,7 @@ mod interp;
 mod lastuse;
 mod literals;
 mod lowering_level;
-pub use lowering_level::{function_regions, region_at, with_lowering_plan, FnRegion, LoweringPlan};
+pub use lowering_level::{function_regions, region_at, with_lowering_plan, BreakKind, FnRegion, LoweringPlan};
 mod patterns;
 mod rep_select;
 pub use rep_select::RepViolation;
@@ -1757,6 +1757,10 @@ struct RustEmitter {
     /// member name (field-position callee, bare implicit-this call,
     /// `Class::method` static). `None` for non-overloaded calls.
     pub(crate) pending_method_suffix: Option<String>,
+    /// The spans of the calls being emitted, innermost last: at the safe
+    /// level a method name's overload pick is read from the checker for the
+    /// call on top, where the name is written (`take_method_suffix`).
+    pub(crate) method_call_stack: Vec<juxc_source::Span>,
     /// Pending `__ovK` suffix for the method DECLARATION being
     /// emitted — set by the class-decl loops (position of the decl
     /// among same-name siblings), consumed by `emit_method`'s name
@@ -1981,6 +1985,10 @@ struct RustEmitter {
     /// [`crate::lowering_level`]), read from the active plan when the
     /// emitter is made.
     pub(crate) level: lowering_level::ActiveLevel,
+    /// The span of the function body being emitted, innermost, for the
+    /// lowering-level questions asked where no expression is at hand (a type
+    /// path, a `let`'s mutability). `None` outside every body.
+    pub(crate) body_span: Option<juxc_source::Span>,
     /// `T[N]` local declarations (by span) whose value flows into a
     /// runtime-sized `T[]` slot later in their block, with, per dimension
     /// (outermost first), whether that slot makes it runtime-sized. Such a
@@ -7525,6 +7533,7 @@ pub fn jux_enter_thread() {
             local_types: vec![std::collections::HashMap::new()],
             ctor_live_after: std::collections::HashSet::new(),
             pending_method_suffix: None,
+            method_call_stack: Vec::new(),
             pending_decl_suffix: None,
             in_catch_arm: false,
             catch_rethrow: None,
@@ -7564,6 +7573,7 @@ pub fn jux_enter_thread() {
             into_via: Vec::new(),
             non_final_uses: std::collections::HashSet::new(),
             level: lowering_level::ActiveLevel::from_thread(),
+            body_span: None,
             fixed_array_dynamic_decls: std::collections::HashMap::new(),
             reassigned_var_decls: std::collections::HashSet::new(),
             captures_read_again: std::collections::HashMap::new(),
@@ -8985,8 +8995,15 @@ pub fn jux_enter_thread() {
                 continue;
             }
             // Nor a name the program declares: `use … as Name;` beside the
-            // user's own `pub struct Name` is the same E0255 collision.
-            if self.bare_name_is_user_type(simple) {
+            // user's own `pub struct Name` is the same E0255 collision, and so
+            // is one beside the program's own function of that name (a
+            // `<T> Vec<T> empty()` under `import rust.std.*;`, whose calls the
+            // checker already resolves to the program's function).
+            if self.bare_name_is_user_type(simple)
+                || self
+                    .lookup_function_here(simple)
+                    .is_some_and(|(found, f)| !found.starts_with(&prefix) && f.rust_path.is_none())
+            {
                 continue;
             }
             if let Some(real) = sig.rust_path.as_ref() {

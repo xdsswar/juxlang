@@ -313,7 +313,8 @@ impl Walk<'_> {
             let method = f.field.text.as_str();
             // `t.blockingGet()` takes the task, and so do `t.map(f)` and
             // `t.flatMap(f)`: the derived task owns its source (ERRATA E114).
-            let takes_self = (method == "blockingGet" && c.args.is_empty())
+            // `t.await()` is `await t` (§18.1.4), and takes it as that does.
+            let takes_self = ((method == "blockingGet" || method == "await") && c.args.is_empty())
                 || ((method == "map" || method == "flatMap") && c.args.len() == 1);
             if takes_self && self.task_local(&f.object).is_some() {
                 for a in &c.args {
