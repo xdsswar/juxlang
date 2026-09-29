@@ -164,3 +164,132 @@ fn an_unknown_static_names_no_trait() {
     assert!(said.contains("[E0413] error: no static method `orgin` on class `rust.c3fix.Clock` -- did you mean `origin`?"), "{said}");
     assert!(!said.contains("Tick") && !said.contains("RustTrait"), "{said}");
 }
+
+
+// ---------------------------------------------------------------------------
+// Blanket impls and `FromIterator` (sweep C4)
+// ---------------------------------------------------------------------------
+
+const C4FIX_LIB: &str = include_str!("../../../crates/juxc-bindgen/tests/fixtures/sweepc4-src/lib.rs");
+
+/// What bindgen writes for `c4fix` (see `sweepc4_fixture.rs`).
+const C4FIX_STUB: &str = r#"package rust.c4fix;
+
+/** A counter: `Default + Clone`, `Named`, and built from numbers. */
+@rust("c4fix::Clock")
+@RustClone
+@RustDebug
+@RustPartialEq
+@RustDefault
+public class Clock implements Labelled, Maker, Named, Portable {
+    @RustTrait("c4fix::Maker") public static final u32 KIND;
+    @RustDefault public Clock();
+    public u32 now();
+    @RustTrait("std::default::Default") public static Clock default();
+    @RustTrait("std::iter::FromIterator<_>") public static Clock from_iter(Vec<u32> iter);
+    @RustTrait("c4fix::Maker") public static Clock make_default();
+    @RustTrait("c4fix::Labelled") public static String label();
+}
+
+/** Blanket over one of the crate's own traits. */
+@rust("c4fix::Labelled")
+@RustBlanket("Named")
+public interface Labelled {
+    @RustStatic public String label();
+}
+
+/** Blanket over `Default + Clone`: decidable from a stub's derive facts. */
+@rust("c4fix::Maker")
+@RustBlanket("Default + Clone")
+public interface Maker {
+    @RustStatic public Self make_default();
+}
+
+/** A crate trait implemented directly. */
+@rust("c4fix::Named")
+public interface Named {
+    public String name();
+}
+
+/** Neither `Default` nor `Named`: no blanket impl's static reaches it. */
+@rust("c4fix::Plain")
+@RustDebug
+public struct Plain implements Portable {
+    public u32 v;
+}
+
+/** Blanket over `Send`, which no stub records: covers nothing in the stub. */
+@rust("c4fix::Portable")
+@RustBlanket("Send")
+public interface Portable {
+    @RustStatic public u32 portable();
+}
+"#;
+
+const C4_PROGRAM: &str = r#"import rust.c4fix.Clock;
+import rust.std.Vec;
+
+void main() {
+    // A blanket impl over `Default + Clone`: a constant and a function.
+    print(Clock.KIND);
+    print(Clock.make_default().now());
+    // A blanket impl over the crate's own trait `Named`.
+    print(Clock.label());
+    // `FromIterator<u32>`: any collection of `u32`.
+    var ns = new Vec<u32>();
+    u32 a = 2;
+    u32 b = 3;
+    ns.push(a);
+    ns.push(b);
+    print(Clock.from_iter(ns).now());
+    print(ns.len());
+}
+"#;
+
+const C4_EXPECTED: &str = "7\n0\nnamed\n5\n2\n";
+
+#[test]
+fn blanket_and_from_iter_statics_run() {
+    let root = workspace_root();
+    let dir = root.join("target").join("it-trait-statics-blanket");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("stubs")).unwrap();
+    std::fs::create_dir_all(dir.join("c4fix").join("src")).unwrap();
+    std::fs::write(dir.join("main.jux"), C4_PROGRAM).unwrap();
+    std::fs::copy(
+        root.join("crates").join("juxc-driver").join("stubs").join("rust-std.jux.d"),
+        dir.join("stubs").join("rust-std.jux.d"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("stubs").join("c4fix.jux.d"), C4FIX_STUB).unwrap();
+    std::fs::write(
+        dir.join("c4fix").join("Cargo.toml"),
+        "[package]\nname = \"c4fix\"\nversion = \"0.0.0\"\nedition = \"2021\"\npublish = false\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("c4fix").join("src").join("lib.rs"), C4FIX_LIB).unwrap();
+    let (crate_dir, rust) = emit(&dir);
+    let flat = rust.split_whitespace().collect::<Vec<_>>().join(" ");
+    for want in [
+        "<c4fix::Clock as c4fix::Maker>::KIND",
+        "<c4fix::Clock as c4fix::Maker>::make_default()",
+        "<c4fix::Clock as c4fix::Labelled>::label()",
+        "<c4fix::Clock as std::iter::FromIterator<_>>::from_iter(",
+    ] {
+        assert!(flat.contains(want), "expected `{want}` in the emitted Rust:\n{rust}");
+    }
+    let manifest = crate_dir.join("Cargo.toml");
+    let toml = std::fs::read_to_string(&manifest).unwrap();
+    let krate = dir.join("c4fix").to_string_lossy().replace('\\', "/");
+    let toml = toml.replacen("[dependencies]\n", &format!("[dependencies]\nc4fix = {{ path = \"{krate}\" }}\n"), 1);
+    std::fs::write(&manifest, toml).unwrap();
+    let out = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--manifest-path"])
+        .arg(&manifest)
+        .env_remove("RUSTFLAGS")
+        .output()
+        .expect("running cargo");
+    let stdout = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
+    assert!(out.status.success(), "the emitted crate did not build or run:\n{}\n{stdout}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(stdout, C4_EXPECTED);
+}

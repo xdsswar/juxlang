@@ -908,9 +908,11 @@ pub fn resolve_and_load_stub_sources(manifest: &Manifest) -> Vec<SourceFile> {
     let deps: Vec<&crate::manifest::Dependency> = manifest.dependencies.iter().collect();
     for (name, result) in crate::stubs::resolve_crate_stubs(root, &deps) {
         if let Err(e) = result {
+            // Held to the leak detector (sweep C4): the cause may be the
+            // toolchain's own words.
             eprintln!(
-                "jux: warning: could not resolve stub for `{name}` \
-                 (autocomplete for it will be unavailable): {e}",
+                "jux: warning: {}; its types are not available to the program or the editor",
+                crate::stubs::stub_message_in_jux_terms(&name, &e.to_string()),
             );
         }
     }
@@ -972,7 +974,7 @@ pub fn ensure_project_stubs(root: &Path) -> StubSyncReport {
         for (name, result) in crate::stubs::resolve_crate_stubs(pkg_root, &deps) {
             match result {
                 Ok(path) => report.resolved.push(path),
-                Err(e) => report.warnings.push(format!("could not resolve stub for `{name}`: {e}")),
+                Err(e) => report.warnings.push(crate::stubs::stub_message_in_jux_terms(&name, &e.to_string())),
             }
         }
         crate::stubs::prune_undeclared_stubs(pkg_root, &deps);

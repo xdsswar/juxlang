@@ -900,6 +900,28 @@ impl RustEmitter {
         crate::exprs::field::rust_trait_annotation(&sig.annotations)
     }
 
+    /// The type arguments a generic foreign class is written with as the self
+    /// type of a qualified trait call (`<std::vec::Vec<_> as ...>`, sweep C4):
+    /// `_` for each parameter, left to inference, except the standard
+    /// library's defaulted allocator (`A`) and hasher (`S`) parameters, which
+    /// are omitted so they take their defaults (`Vec<_, _>` would leave the
+    /// allocator to an inference nothing constrains). Empty for a
+    /// non-generic class.
+    pub(crate) fn foreign_self_type_args(&self, class_fqn: &str) -> String {
+        let Some(class) = self.symbols.classes.get(class_fqn) else { return String::new() };
+        let std = class_fqn.starts_with("rust.std.");
+        let n = class
+            .generic_params
+            .iter()
+            .filter(|p| !(std && matches!(p.name.text.as_str(), "A" | "S")))
+            .count();
+        if n == 0 {
+            String::new()
+        } else {
+            format!("<{}>", vec!["_"; n].join(", "))
+        }
+    }
+
     /// The trait a foreign class's static FIELD `name` (an associated
     /// constant) comes from, when the stub marks it `@RustTrait` (sweep C3).
     pub(crate) fn static_field_trait_impl(&self, class_fqn: &str, name: &str) -> Option<String> {
@@ -2697,7 +2719,8 @@ impl RustEmitter {
                             .as_ref()
                             .and_then(|_| self.static_trait_impl(&class_fqn, &f.field.text, call.span));
                         if let (Some(real), Some(tr)) = (&external_real, &via_trait) {
-                            self.w.push_str(&format!("<{real} as {tr}>::"));
+                            let args = self.foreign_self_type_args(&class_fqn);
+                            self.w.push_str(&format!("<{real}{args} as {tr}>::"));
                             self.w.push_str(&to_rust_ident(&f.field.text));
                             let _ = self.take_method_suffix();
                         } else {

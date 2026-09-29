@@ -1490,6 +1490,11 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
         }
     }
 
+    // A blanket impl of one of the crate's own traits gives its associated
+    // functions and constants to every type its bound is known to cover
+    // (sweep C4).
+    apply_blanket_trait_statics(krate, &public, &mut collected);
+
     // A type the crate marks `#[deprecated]` says so (LEAKS L39).
     for (id, _, item) in &mut collected {
         if let StubItem::Type(t) = item {
@@ -2069,7 +2074,17 @@ fn collect_trait_statics(
         let Some(impl_item) = krate.index.get(impl_id) else { continue };
         let ItemEnum::Impl(im) = &impl_item.inner else { continue };
         let Some(tr) = &im.trait_ else { continue };
-        if im.is_synthetic || im.is_negative || im.blanket_impl.is_some() || !is_self(&im.for_) {
+        // A blanket impl is taken only through [`apply_blanket_trait_statics`],
+        // which asks for its original (`for T`) impl, once per type its bound
+        // is known to cover. A type's own impl list repeats every blanket impl
+        // as if written for the type (`blanket_impl` set), and those are not
+        // evidence of anything.
+        let is_blanket_original = matches!(im.for_, Type::Generic(_));
+        if im.is_synthetic
+            || im.is_negative
+            || (im.blanket_impl.is_some() && !is_blanket_original)
+            || !is_self(&im.for_)
+        {
             continue;
         }
         let Some(trait_path) = nameable_trait_path(krate, public, &tr.id) else { continue };
@@ -2103,8 +2118,49 @@ fn collect_trait_statics(
             match &mitem.inner {
                 ItemEnum::Function(f) if !has_self_receiver(f) => {
                     let mut sf = map_function(krate, mname, f);
-                    // A generic associated function (`from_iter<I>`) has a
-                    // parameter only its trait bound describes; left out.
+                    // `FromIterator<A>::from_iter<I: IntoIterator<Item = A>>`
+                    // takes any collection of `A`: in Jux, a `Vec<A>`, which
+                    // Rust iterates by value (sweep C4). `Vec.from_iter(xs)`,
+                    // `String.from_iter(chars)`, `HashMap.from_iter(pairs)`.
+                    if written.starts_with("std::iter::FromIterator") && mname == "from_iter" {
+                        let Some(item_ty) = path_type_args(&tr.args).into_iter().next() else { continue };
+                        // A borrowed item (`FromIterator<&OsStr>`) is not a
+                        // value a Jux collection holds; `&str` and `&char`
+                        // are, as `String` and `char`.
+                        if let Type::BorrowedRef { type_, .. } = item_ty {
+                            if !matches!(type_.as_ref(), Type::Primitive(p) if p == "str" || p == "char") {
+                                continue;
+                            }
+                        }
+                        let elem = map_type(item_ty);
+                        // An item type that is the impl's own parameter and
+                        // not the type's (`impl<P: AsRef<Path>> FromIterator<P>
+                        // for PathBuf`) is a bound, not a type.
+                        let own_params: Vec<String> = match &im.for_ {
+                            Type::ResolvedPath(p) => path_type_args(&p.args)
+                                .into_iter()
+                                .filter_map(|a| match a {
+                                    Type::Generic(g) => Some(g.clone()),
+                                    _ => None,
+                                })
+                                .collect(),
+                            _ => Vec::new(),
+                        };
+                        if mentions_other_param(&elem, &own_params) {
+                            continue;
+                        }
+                        if !elem.is_spellable() || sf.params.len() != 1 {
+                            continue;
+                        }
+                        sf.generics.clear();
+                        sf.params[0].ty = JuxType::vec(elem);
+                        sf.params[0].is_impl = false;
+                        sf.params[0].by_ref = false;
+                        sf.params[0].by_mut_ref = false;
+                        sf.bounds.clear();
+                    }
+                    // Any other generic associated function has a parameter
+                    // only its trait bound describes; left out.
                     if !sf.generics.is_empty() {
                         continue;
                     }
@@ -2139,10 +2195,209 @@ fn collect_trait_statics(
     (fns, consts)
 }
 
+/// One requirement a blanket impl puts on the type it covers
+/// (`impl<T: Clone + Named> Maker for T`), as far as a stub can answer it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BlanketBound {
+    /// A standard derive fact the stub records (`@RustClone`, `@RustDebug`,
+    /// `@RustPartialEq`, `@RustDefault`, `@RustHash`), by trait name.
+    StdFact(&'static str),
+    /// One of the crate's own traits, by simple name: the type's
+    /// `implements` clause answers it.
+    CrateTrait(String),
+    /// `Into<Y>`: the type is `Y`, or `Y` records it among its `From`
+    /// sources (`@RustFrom`).
+    Into(String),
+    /// Anything a stub cannot answer (`Send`, `Display`, `Copy`, a third
+    /// crate's trait, a bound with other arguments).
+    Unknown,
+}
+
+/// The requirements `im`'s blanket parameter `param` carries, from its
+/// declaration and the impl's `where` clause. `?Sized` and `Sized` ask
+/// nothing a type of the stub lacks.
+fn blanket_bounds(krate: &Crate, im: &rustdoc_types::Impl, param: &str) -> Vec<BlanketBound> {
+    let mut out: Vec<BlanketBound> = Vec::new();
+    let mut take = |bs: &[GenericBound]| {
+        for b in bs {
+            let GenericBound::TraitBound { trait_, modifier, .. } = b else { continue };
+            if matches!(modifier, rustdoc_types::TraitBoundModifier::Maybe) {
+                continue;
+            }
+            let name = last_segment(&trait_.path);
+            let local = krate.index.contains_key(&trait_.id) && krate.paths.get(&trait_.id).map_or(true, |s| s.crate_id == 0);
+            let std_fact = ["Clone", "Debug", "PartialEq", "Default", "Hash"].into_iter().find(|f| *f == name);
+            out.push(match (name, std_fact) {
+                ("Sized", _) => continue,
+                ("Into", _) => match path_type_args(&trait_.args).first().map(|t| map_type(t)) {
+                    Some(JuxType::User { name: t, args }) if args.is_empty() => BlanketBound::Into(t),
+                    _ => BlanketBound::Unknown,
+                },
+                (_, Some(f)) if !local && trait_.args.is_none() => BlanketBound::StdFact(f),
+                _ if local && trait_.args.is_none() => BlanketBound::CrateTrait(name.to_string()),
+                _ => BlanketBound::Unknown,
+            });
+        }
+    };
+    for gp in &im.generics.params {
+        if gp.name == param {
+            if let GenericParamDefKind::Type { bounds, .. } = &gp.kind {
+                take(bounds);
+            }
+        }
+    }
+    for wp in &im.generics.where_predicates {
+        if let WherePredicate::BoundPredicate { type_: Type::Generic(g), bounds, .. } = wp {
+            if g == param {
+                take(bounds);
+            }
+        }
+    }
+    out
+}
+
+/// Whether the stub's recorded facts show that type `t` meets every one of
+/// `bounds`. `declared` is every collected type, for `Into<Y>`'s `Y`.
+fn stub_meets_bounds(t: &StubType, bounds: &[BlanketBound], declared: &HashMap<String, Vec<String>>) -> bool {
+    bounds.iter().all(|b| match b {
+        BlanketBound::StdFact("Clone") => t.is_clone,
+        BlanketBound::StdFact("Debug") => t.is_debug,
+        BlanketBound::StdFact("PartialEq") => t.is_partial_eq,
+        BlanketBound::StdFact("Default") => t.is_default,
+        BlanketBound::StdFact("Hash") => t.is_hash,
+        BlanketBound::StdFact(_) => false,
+        BlanketBound::CrateTrait(name) => t.implements.iter().any(|i| i.rsplit('.').next() == Some(name.as_str())),
+        BlanketBound::Into(target) => {
+            target == &t.name || declared.get(target).is_some_and(|froms| froms.iter().any(|f| f.rsplit('.').next() == Some(t.name.as_str())))
+        }
+        BlanketBound::Unknown => false,
+    })
+}
+
+/// Surface the associated functions and constants of every BLANKET impl of
+/// one of the crate's own traits (`impl<T: Clone> Maker for T`) on each type
+/// of the stub the impl is known to cover (sweep C4). Coverage is decided
+/// from the stub's recorded facts ([`stub_meets_bounds`]); an impl with a
+/// requirement a stub cannot answer covers no type, since a guess would put
+/// a static on a type Rust does not give it. The standard library's own
+/// blanket impls with associated functions are identities (`impl<T> From<T>
+/// for T`, `impl<T, U: Into<T>> TryFrom<U> for T`) that add nothing a
+/// program would call, and are not taken.
+fn apply_blanket_trait_statics(krate: &Crate, public: &PublicPaths, collected: &mut [(u32, String, StubItem)]) {
+    let mut blankets: Vec<(Vec<BlanketBound>, rustdoc_types::Id, String)> = Vec::new();
+    for item in krate.index.values() {
+        let ItemEnum::Trait(t) = &item.inner else { continue };
+        if item.crate_id != 0 || !is_public(&item.visibility) {
+            continue;
+        }
+        // The standard library's own traits (which `std`'s documentation
+        // inlines as its items) are not a crate's: their blanket impls are
+        // the identities the doc comment above leaves out.
+        let std_root = krate
+            .paths
+            .get(&item.id)
+            .and_then(|s| s.path.first())
+            .is_some_and(|r| matches!(r.as_str(), "core" | "alloc" | "std"));
+        if std_root {
+            continue;
+        }
+        for impl_id in &t.implementations {
+            let Some(ii) = krate.index.get(impl_id) else { continue };
+            let ItemEnum::Impl(im) = &ii.inner else { continue };
+            let Type::Generic(param) = &im.for_ else { continue };
+            if im.is_synthetic || im.is_negative {
+                continue;
+            }
+            blankets.push((blanket_bounds(krate, im, param), *impl_id, param.clone()));
+        }
+    }
+    if blankets.is_empty() {
+        return;
+    }
+    let declared: HashMap<String, Vec<String>> = collected
+        .iter()
+        .filter_map(|(_, n, it)| match it {
+            StubItem::Type(t) => Some((n.clone(), t.from_types.clone())),
+            _ => None,
+        })
+        .collect();
+    for (_, name, item) in collected.iter_mut() {
+        let StubItem::Type(t) = item else { continue };
+        if !matches!(t.kind, TypeKind::Class | TypeKind::Struct | TypeKind::Enum) {
+            continue;
+        }
+        for (bounds, impl_id, param) in &blankets {
+            if bounds.contains(&BlanketBound::Unknown) || !stub_meets_bounds(t, bounds, &declared) {
+                continue;
+            }
+            let taken: HashSet<String> = t
+                .methods
+                .iter()
+                .map(|m| m.name.clone())
+                .chain(t.fields.iter().map(|f| f.name.clone()))
+                .collect();
+            let is_blanket = |ty: &Type| matches!(ty, Type::Generic(g) if g == param);
+            let (mut fns, mut consts) = collect_trait_statics(krate, public, &[*impl_id], name, &is_blanket, &taken);
+            // The impl writes its parameter where a concrete impl writes `Self`.
+            let me = JuxType::user(name.clone());
+            for f in &mut fns {
+                replace_param(&mut f.ret, param, &me);
+                if let Some(e) = &mut f.throws {
+                    replace_param(e, param, &me);
+                }
+                for p in &mut f.params {
+                    replace_param(&mut p.ty, param, &me);
+                }
+            }
+            for c in &mut consts {
+                replace_param(&mut c.ty, param, &me);
+            }
+            // An enum's associated constants are not surfaced (see
+            // `build_enum`).
+            if matches!(t.kind, TypeKind::Enum) {
+                consts.clear();
+            }
+            t.methods.extend(fns);
+            t.fields.extend(consts);
+        }
+    }
+}
+
+/// Whether `ty` names a generic parameter that is not one of `allowed`.
+fn mentions_other_param(ty: &JuxType, allowed: &[String]) -> bool {
+    match ty {
+        JuxType::Param(p) => !allowed.contains(p),
+        JuxType::User { args, .. } | JuxType::Tuple(args) => args.iter().any(|a| mentions_other_param(a, allowed)),
+        JuxType::Nullable(inner) | JuxType::RawPtr(inner) => mentions_other_param(inner, allowed),
+        JuxType::Array { elem, .. } => mentions_other_param(elem, allowed),
+        JuxType::Fn { params, ret, .. } => {
+            params.iter().any(|a| mentions_other_param(a, allowed)) || mentions_other_param(ret, allowed)
+        }
+        _ => false,
+    }
+}
+
+/// Replace the generic parameter `param` in `ty` with `with`.
+fn replace_param(ty: &mut JuxType, param: &str, with: &JuxType) {
+    match ty {
+        JuxType::Param(p) if p == param => *ty = with.clone(),
+        JuxType::User { name, args } if name == param && args.is_empty() => *ty = with.clone(),
+        JuxType::User { args, .. } => args.iter_mut().for_each(|a| replace_param(a, param, with)),
+        JuxType::Nullable(inner) | JuxType::RawPtr(inner) => replace_param(inner, param, with),
+        JuxType::Array { elem, .. } => replace_param(elem, param, with),
+        JuxType::Tuple(items) => items.iter_mut().for_each(|a| replace_param(a, param, with)),
+        JuxType::Fn { params, ret, .. } => {
+            params.iter_mut().for_each(|a| replace_param(a, param, with));
+            replace_param(ret, param, with);
+        }
+        _ => {}
+    }
+}
+
 /// The standard library's traits whose associated functions a type's stub
 /// carries (see [`collect_trait_statics`]): what constructs or converts a
 /// value, by the trait's simple name.
-const STD_STATIC_TRAITS: &[&str] = &["Default", "From", "TryFrom", "FromStr"];
+const STD_STATIC_TRAITS: &[&str] = &["Default", "From", "TryFrom", "FromStr", "FromIterator"];
 
 /// The `throws` of a trait impl's associated function whose `Result` error is
 /// one of the impl's associated types (`Self::Err`): `Some(Some(E))` for that

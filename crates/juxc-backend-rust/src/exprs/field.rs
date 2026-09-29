@@ -707,7 +707,10 @@ impl RustEmitter {
                             // One a trait impl gives the type is read
                             // through the trait (sweep C3).
                             match self.static_field_trait_impl(&class_fqn, &f.field.text) {
-                                Some(tr) => self.w.push_str(&format!("<{real} as {tr}>")),
+                                Some(tr) => {
+                                    let args = self.foreign_self_type_args(&class_fqn);
+                                    self.w.push_str(&format!("<{real}{args} as {tr}>"))
+                                }
                                 None => self.w.push_str(&real),
                             }
                             self.w.push_str("::");

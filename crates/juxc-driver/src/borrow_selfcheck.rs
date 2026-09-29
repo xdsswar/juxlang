@@ -368,6 +368,11 @@ impl<'ast> Visit<'ast> for CallFacts {
 fn path_call_name(func: &Expr) -> Option<String> {
     match func {
         Expr::Path(p) if p.qself.is_none() => p.path.segments.last().map(|s| s.ident.to_string()),
+        // A qualified path (`<Vec<_> as FromIterator<_>>::from_iter`, a
+        // foreign trait-impl static, sweep C3/C4) names a foreign function,
+        // never a function value and never a Jux function: the empty name
+        // is neither.
+        Expr::Path(_) => Some(String::new()),
         _ => None,
     }
 }
