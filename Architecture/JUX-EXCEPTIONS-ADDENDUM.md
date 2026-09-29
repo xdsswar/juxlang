@@ -466,7 +466,7 @@ and produce a value (`E0411`, `E0410`). The call nests
 `Result.from` is not a method of the library's `Result` enum but a form the
 compiler knows: its type is decided at the call from the call alone, so it
 adds nothing for inference to consider at any other call on `Result`
-(ERRATA E1XX-SWEEPC).
+(ERRATA E146).
 
 The two styles compose freely.
 

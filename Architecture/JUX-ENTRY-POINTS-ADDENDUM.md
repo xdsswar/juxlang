@@ -309,7 +309,7 @@ Each `path` must contain exactly one entry (per §E.1.3 / §E.2).
 | `E0324` | `@entry` cannot select the declaration it is written on: a signature outside §E.1.2's set, or anything that is not a free function |
 | `E0325` | `freestanding = true` but no `@entry` function is declared                 |
 | `E0326` | A class member named `main` with an entry-shaped signature is not `static` (§E.1.2.2) |
-| `E0327` | A program built as a binary has no entry point: no `main`, no `@entry` function and no top-level statements, an empty file included. `jux check`, `juxc --check` and the language server report it exactly when the build would (a binary target whose program has no other error); a library member never gets it (ERRATA E131, E1XX-SWEEPC) |
+| `E0327` | A program built as a binary has no entry point: no `main`, no `@entry` function and no top-level statements, an empty file included. `jux check`, `juxc --check` and the language server report it exactly when the build would (a binary target whose program has no other error); a library member never gets it (ERRATA E131, E146) |
 
 **Implementation status.** `E0320` (both forms in one binary, as well as the
 §E.1.3 double-implicit case), `E0321`, `E0322` (as the blanket rejection of

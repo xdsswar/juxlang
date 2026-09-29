@@ -197,7 +197,7 @@ public class Task<T> {
 is allowed only in an async function, method or lambda (`E0700`, with
 `task.blockingGet()` named for sync code), it takes no arguments, and it takes
 the task as `await` does (`E0707` on a later use). The compiler rewrites it as
-the `await` expression once the program is checked (`ERRATA.md` E1XX-SWEEPC).
+the `await` expression once the program is checked (`ERRATA.md` E146).
 
 Static constructors and helpers:
 

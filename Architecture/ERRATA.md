@@ -5809,7 +5809,7 @@ nullable, `Box`, `Rc`; Java differential case 156),
 
 ---
 
-## E1XX-SWEEPC. Sweep C: `Result.from`, `E0327` wherever the build says it, `task.await()`, and the safe level for the type and trait families
+## E146. Sweep C: `Result.from`, `E0327` wherever the build says it, `task.await()`, and the safe level for the type and trait families
 
 **Conflict.** Four things the specification states did not hold:
 
