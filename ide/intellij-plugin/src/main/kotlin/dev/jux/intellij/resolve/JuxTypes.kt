@@ -185,7 +185,13 @@ object JuxTypeEngine {
             E.CAST_EXPRESSION -> expr.node.findChildByType(E.TYPE_REFERENCE)?.psi
                 ?.let { typeOfTypeReference(it) } ?: JuxType.Unknown
             E.INDEX_EXPRESSION -> elementTypeOf(typeOf(firstExpressionChild(expr)))
-            E.CONDITIONAL_EXPRESSION -> expressionChildren(expr).getOrNull(1)?.let { typeOf(it) } ?: JuxType.Unknown
+            // The two arms of `? :` meet in one type as numeric operands do (§S.2.6).
+            E.CONDITIONAL_EXPRESSION -> {
+                val arms = expressionChildren(expr)
+                val then = arms.getOrNull(1)?.let { typeOf(it) } ?: JuxType.Unknown
+                val other = arms.getOrNull(2) ?: return then
+                promote(then, typeOf(other), arms[1], other)
+            }
             E.ASSIGNMENT_EXPRESSION -> typeOf(firstExpressionChild(expr))
             E.UNARY_EXPRESSION -> {
                 val operand = firstExpressionChild(expr)
@@ -310,13 +316,14 @@ object JuxTypeEngine {
         val argCount = argumentCount(call)
         return when (callee.elementType) {
             E.FIELD_ACCESS_EXPRESSION -> {
-                val member = resolveMemberAccess(callee, argCount) ?: return enumBuiltinCallType(callee)
+                val member = resolveMemberAccess(callee, argCount)
+                    ?: return spawnCallType(call, callee) ?: enumBuiltinCallType(callee)
                 if (member.element.elementType === E.METHOD_DECLARATION) returnType(member) else JuxType.Unknown
             }
             E.REFERENCE_EXPRESSION -> when (val target = resolveReferenceExpression(callee, argCount)) {
                 // `Point(1, 2)` on a record, or a type called like a constructor.
                 is JuxTypeDeclaration -> selfType(target)
-                null -> JuxType.Unknown
+                null -> spawnCallType(call, callee) ?: JuxType.Unknown
                 else -> if (target.elementType === E.METHOD_DECLARATION) {
                     val owner = PsiTreeUtil.getParentOfType(target, JuxTypeDeclaration::class.java)
                     if (owner != null) returnType(JuxMember(target, selfType(owner)))
@@ -329,6 +336,30 @@ object JuxTypeEngine {
             }
             else -> JuxType.Unknown
         }
+    }
+
+    /**
+     * `spawn(f())` and `Worker.spawn(() -> ..)`: the one `Task<T>` (JUX-ASYNC
+     * §18.1.4, ERRATA E136), so `var t = spawn(f()); t.` completes the task's
+     * members. `T` is what the spawned call or lambda body gives, when that is
+     * known. Null for any other call; the intrinsics have no declaration.
+     */
+    private fun spawnCallType(call: PsiElement, callee: PsiElement): JuxType? {
+        if (memberName(callee) != "spawn") return null
+        if (callee.elementType === E.FIELD_ACCESS_EXPRESSION &&
+            firstExpressionChild(callee)?.let { memberName(it) } != "Worker"
+        ) return null
+        // A program's own `Task` hides the name, not what `spawn` returns.
+        val task = JuxTypeIndex.findType(call, "Task")
+            ?.takeIf { JuxTypeIndex.isLibraryRealmPackage(dev.jux.intellij.completion.JuxAutoImport.packageOf(it)) }
+            ?: return null
+        val arg = call.node.findChildByType(E.ARGUMENT_LIST)?.psi?.let { firstExpressionChild(it) }
+        val value = when (arg?.elementType) {
+            null -> JuxType.Unknown
+            E.LAMBDA_EXPRESSION -> expressionChildren(arg).lastOrNull()?.let { typeOf(it) } ?: JuxType.Unknown
+            else -> typeOf(arg)
+        }
+        return JuxType.ClassType(task, listOf(value))
     }
 
     /**
@@ -378,11 +409,69 @@ object JuxTypeEngine {
             T.FAT_ARROW -> JuxType.Primitive("bool")
             T.PLUS -> {
                 val right = typeOf(operands.getOrNull(1))
-                if (isString(left) || isString(right)) stringType(expr) else left
+                if (isString(left) || isString(right)) stringType(expr)
+                else promote(left, right, operands.getOrNull(0), operands.getOrNull(1))
             }
+            T.MINUS, T.STAR, T.SLASH, T.PERCENT, T.AMP, T.PIPE, T.CARET ->
+                promote(left, typeOf(operands.getOrNull(1)), operands.getOrNull(0), operands.getOrNull(1))
             else -> left
         }
     }
+
+    /**
+     * Binary numeric promotion (`JUX-SEMANTICS-ADDENDUM.md` §S.2.6): the one
+     * type two numeric operands meet in. A `double` wins, then a `float`; two
+     * integers of one signedness meet in the wider; a `char` is an `int`; an
+     * untyped literal takes the other side's type. It is what makes
+     * `t.ident() + t.age() + t.score()` a `double` when `score()` is reached
+     * through the second bound of `<T extends Named & Aged>` (ERRATA E135).
+     * Anything this does not decide (a mixed-signedness pair, a user type)
+     * keeps the left operand's type, as before.
+     */
+    private fun promote(left: JuxType, right: JuxType, leftExpr: PsiElement?, rightExpr: PsiElement?): JuxType {
+        val l = numericName(left) ?: return left
+        val r = numericName(right) ?: return left
+        if (isUntypedLiteral(rightExpr) && r == "int") return JuxType.Primitive(l)
+        if (isUntypedLiteral(leftExpr) && l == "int") return JuxType.Primitive(r)
+        if (l == "double" || r == "double") return JuxType.Primitive("double")
+        if (l == "float" || r == "float") return JuxType.Primitive("float")
+        if (l == r) return JuxType.Primitive(l)
+        val signed = SIGNED_WIDTHS
+        val unsigned = UNSIGNED_WIDTHS
+        return when {
+            l in signed && r in signed -> JuxType.Primitive(if (signed.indexOf(l) >= signed.indexOf(r)) l else r)
+            l in unsigned && r in unsigned -> JuxType.Primitive(if (unsigned.indexOf(l) >= unsigned.indexOf(r)) l else r)
+            else -> left
+        }
+    }
+
+    /** The canonical numeric name of [t] (`f64` is `double`, `char` is `int`), or null. */
+    private fun numericName(t: JuxType): String? {
+        val name = (stripNullable(t) as? JuxType.Primitive)?.name ?: return null
+        return when (name) {
+            "f64" -> "double"
+            "f32" -> "float"
+            "char" -> "int"
+            "i64" -> "long"
+            "u64" -> "ulong"
+            "i8" -> "byte"
+            "u8" -> "ubyte"
+            "i16" -> "short"
+            "u16" -> "ushort"
+            else -> name.takeIf { it == "double" || it == "float" || it in SIGNED_WIDTHS || it in UNSIGNED_WIDTHS }
+        }
+    }
+
+    /** An integer literal with no suffix, which adapts to the other operand (§S.2.6). */
+    private fun isUntypedLiteral(e: PsiElement?): Boolean {
+        val lit = if (e?.elementType === E.UNARY_EXPRESSION) firstExpressionChild(e) else e
+        if (lit?.elementType !== E.LITERAL_EXPRESSION) return false
+        val tok = lit.firstChild ?: return false
+        return tok.elementType === T.INT_LITERAL && tok.text.last().isDigit()
+    }
+
+    private val SIGNED_WIDTHS = listOf("byte", "short", "i32", "int", "long")
+    private val UNSIGNED_WIDTHS = listOf("ubyte", "ushort", "u32", "uint", "ulong")
 
     private fun isString(t: JuxType): Boolean =
         (t is JuxType.Primitive && t.name.equals("String", ignoreCase = true)) ||
@@ -560,7 +649,7 @@ object JuxTypeEngine {
         return when (callee.elementType) {
             E.FIELD_ACCESS_EXPRESSION -> {
                 val member = resolveMemberAccess(callee, argCount) ?: return null
-                member.element.takeIf { it.elementType === E.METHOD_DECLARATION }?.let { it to substitution(member.owner) }
+                member.element.takeIf { it.elementType === E.METHOD_DECLARATION }?.let { it to ownerSubstitution(member) }
             }
             E.REFERENCE_EXPRESSION -> {
                 val target = resolveReferenceExpression(callee, argCount) ?: return null
@@ -888,6 +977,56 @@ object JuxTypeEngine {
         return if (ids.size > 1) ids.dropLast(1).joinToString(".") else null
     }
 
+    /**
+     * Every bound of a type parameter, in the order written: `<T extends Base
+     * & Named & Aged>` is `[Base, Named, Aged]` (§T.4.6; the class may come
+     * after the interfaces, ERRATA E135). Empty when it has none.
+     */
+    fun boundsOf(param: JuxTypeParameter): List<JuxType> =
+        boundReferences(param).map { typeOfTypeReference(it) }
+
+    /** The written bound references of [param], in order (the `TYPE_REFERENCE`s after `extends` and each `&`). */
+    fun boundReferences(param: JuxTypeParameter): List<PsiElement> {
+        val out = ArrayList<PsiElement>()
+        param.node.findChildByType(E.TYPE_REFERENCE)?.psi?.let { out.add(it) }
+        var c = param.node.treeNext
+        var sawExtends = false
+        while (c != null) {
+            when (c.elementType) {
+                E.TYPE_PARAMETER, T.COMMA, T.GT -> return out
+                T.EXTENDS_KW, T.COLON -> sawExtends = true
+                E.TYPE_REFERENCE -> if (sawExtends) out.add(c.psi)
+            }
+            c = c.treeNext
+        }
+        return out
+    }
+
+    /**
+     * The classes whose members a value of [t] has: one for a class type, and
+     * for a type parameter every bound's, an intersection's included, with a
+     * bound naming another parameter (`<R extends K>`) standing for that
+     * parameter's bounds (ERRATA E135, rule 1).
+     */
+    fun memberSources(t: JuxType): List<JuxType.ClassType> {
+        val s = stripNullable(t)
+        if (s !is JuxType.TypeVar) return listOfNotNull(classOf(s))
+        val out = ArrayList<JuxType.ClassType>()
+        val seen = HashSet<JuxTypeParameter>()
+        fun walk(v: JuxType.TypeVar) {
+            if (!seen.add(v.param)) return
+            val bounds = boundsOf(v.param).ifEmpty { listOfNotNull(v.bound) }
+            for (b in bounds) {
+                when (val bs = stripNullable(b)) {
+                    is JuxType.TypeVar -> walk(bs)
+                    else -> classOf(bs)?.let { out.add(it) }
+                }
+            }
+        }
+        walk(s)
+        return out
+    }
+
     /** The declared upper bound of a type parameter: `<T extends Auto>` → `Auto`. */
     fun boundOf(param: JuxTypeParameter): JuxType? {
         // The bound sits inside the parameter node, or as the siblings after
@@ -1069,14 +1208,22 @@ object JuxTypeEngine {
 
     /** Members of [t] reachable after a dot, nearest declaration first, overrides once. */
     fun membersOf(t: JuxType): List<JuxMember> {
-        val ct = classOf(t) ?: return emptyList()
+        // A type parameter has the members of EVERY bound (`<T extends Named &
+        // Aged>` has `name()` and `age()`); the first bound answers a name
+        // two of them share, as the compiler's first answer does.
+        val sources = memberSources(t)
+        if (sources.isEmpty()) return emptyList()
         val out = ArrayList<JuxMember>()
         val seen = HashSet<String>()
-        for (owner in typeAndSupertypes(ct)) {
-            for (m in JuxHierarchy.allMembersDeclaredIn(owner.decl)) {
-                val name = (m as? JuxNamedElement)?.name ?: continue
-                val key = if (m.elementType === E.METHOD_DECLARATION) "$name/${JuxHierarchy.arity(m)}" else name
-                if (seen.add(key)) out.add(JuxMember(m, owner))
+        val visited = HashSet<JuxTypeDeclaration>()
+        for (ct in sources) {
+            for (owner in typeAndSupertypes(ct)) {
+                if (!visited.add(owner.decl)) continue
+                for (m in JuxHierarchy.allMembersDeclaredIn(owner.decl)) {
+                    val name = (m as? JuxNamedElement)?.name ?: continue
+                    val key = if (m.elementType === E.METHOD_DECLARATION) "$name/${JuxHierarchy.arity(m)}" else name
+                    if (seen.add(key)) out.add(JuxMember(m, owner))
+                }
             }
         }
         return out
@@ -1091,10 +1238,13 @@ object JuxTypeEngine {
      * a caller that must not guess between them (parameter hints) needs both.
      */
     fun membersOfAllOverloads(t: JuxType, name: String): List<PsiElement> {
-        val ct = classOf(t) ?: return emptyList()
         val out = ArrayList<PsiElement>()
-        for (owner in typeAndSupertypes(ct)) {
-            JuxHierarchy.allMembersDeclaredIn(owner.decl).filterTo(out) { (it as? JuxNamedElement)?.name == name }
+        val visited = HashSet<JuxTypeDeclaration>()
+        for (ct in memberSources(t)) {
+            for (owner in typeAndSupertypes(ct)) {
+                if (!visited.add(owner.decl)) continue
+                JuxHierarchy.allMembersDeclaredIn(owner.decl).filterTo(out) { (it as? JuxNamedElement)?.name == name }
+            }
         }
         return out
     }
@@ -1115,7 +1265,21 @@ object JuxTypeEngine {
         val ref = member.element.node.findChildByType(E.TYPE_REFERENCE)?.psi ?: return JuxType.Unknown
         // A generated stub writes a constructor-like return as `Self`.
         if (ref.text.trim() == "Self") return member.owner
-        return substitute(typeOfTypeReference(ref), substitution(member.owner))
+        return substitute(typeOfTypeReference(ref), ownerSubstitution(member))
+    }
+
+    /**
+     * The owner's substitution as seen inside [member]: a method's own type
+     * parameter shadows the class's of the same name (`<T> T echo(T t)` in
+     * `class Shelf<T>`, ERRATA E135), so `Shelf<int>` does not bind it.
+     */
+    fun ownerSubstitution(member: JuxMember): Map<String, JuxType> {
+        val subst = substitution(member.owner)
+        if (subst.isEmpty()) return subst
+        val own = member.element.node.findChildByType(E.TYPE_PARAMETER_LIST)?.psi?.children
+            ?.filterIsInstance<JuxTypeParameter>()?.mapNotNull { it.name }?.toSet()
+            ?: return subst
+        return if (own.isEmpty()) subst else subst.filterKeys { it !in own }
     }
 
     // ------------------------------------------------------------ resolution

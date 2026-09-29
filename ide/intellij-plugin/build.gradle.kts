@@ -85,6 +85,16 @@ intellijPlatform {
         // and no org.jetbrains.changelog plugin, so this block is the whole
         // mechanism -- keep it to what a user would notice.
         changeNotes = """
+            <h3>0.1.9</h3>
+            <p>The editor follows the compiler's generics and anonymous-class work (ERRATA E135-E143).</p>
+            <ul>
+              <li><b>Anonymous classes are real classes in the editor.</b> The body of <b>new Listener() { ... }</b> is parsed, so its members complete, navigate and rename. A bare name inside it finds the anonymous class's own members and its supertype's first, then the captured locals, then the enclosing object's fields and methods, private ones included. <b>this</b> inside it is the anonymous object.</li>
+              <li><b>Intersection bounds</b>: a value of <b>T extends Base &amp; Named &amp; Aged</b> completes and navigates the members of every bound, with the class anywhere in the list. Two classes in one intersection (<b>E0419</b>) and a bound nothing else can meet, a Rust type, a record, an enum, a primitive or <b>String</b> (<b>E0459</b>), are reported.</li>
+              <li><b>Numeric promotion</b>: <b>t.age() + t.score()</b> is a <b>double</b> when <b>score()</b> is, through a bound or not, and so are the two arms of <b>? :</b>.</li>
+              <li><b>A method's own &lt;T&gt; shadows the class's</b>: <b>echo("s")</b> on a <b>Shelf&lt;int&gt;</b> is not read as an <b>int</b>.</li>
+              <li><b>Task&lt;T&gt;</b> is the handle <b>spawn</b> returns, written anywhere a type is: <b>blockingGet</b>, <b>join</b>, <b>cancel</b>, <b>map</b>, <b>Task.all</b> and the rest complete, also on <b>var t = spawn(f())</b>.</li>
+              <li><b>The wrong number of type arguments at any depth</b> (<b>E0443</b>): <b>Vec&lt;Vec&lt;Pair&lt;int&gt;&gt;&gt;</b> is reported at the inner <b>Pair&lt;int&gt;</b>. <b>class MyVec extends Vec&lt;int&gt;</b> is <b>E0420</b> alone, without a list of the Rust type's methods to implement.</li>
+            </ul>
             <h3>0.1.8</h3>
             <p>The editor catches up with the language changes of the latest compiler (aliases, crate families, library exceptions, the release-blocker sweep), and stops marking code that compiles.</p>
             <ul>

@@ -309,7 +309,7 @@ class JuxParser : PsiParser {
 
     // ---- class body & members --------------------------------------------
 
-    private fun parseClassBody(b: PsiBuilder, isEnum: Boolean) {
+    internal fun parseClassBody(b: PsiBuilder, isEnum: Boolean) {
         val body = b.mark()
         b.advanceLexer() // `{`
         if (isEnum) parseEnumConstants(b)
@@ -676,7 +676,10 @@ class JuxParser : PsiParser {
         else -> E.CLASS_DECLARATION
     }
 
-    private companion object {
+    internal companion object {
+        /** A stateless instance, for the class body an expression can hold. */
+        val MEMBERS = JuxParser()
+
         val ENUM_SEP: TokenSet = TokenSet.create(T.COMMA, T.SEMICOLON)
 
         /** Per-accessor visibility (§P.1.3) — no package level on accessors. */
@@ -685,4 +688,17 @@ class JuxParser : PsiParser {
         /** Tokens ending a `where` constraint run: the body, terminator, or `= expr`. */
         val WHERE_CLAUSE_END: TokenSet = TokenSet.create(T.LBRACE, T.SEMICOLON, T.EQ)
     }
+}
+
+/**
+ * The `{ .. }` of `new T(..) { .. }`, parsed as the class body it is and
+ * wrapped as [E.ANONYMOUS_CLASS] (JUX-LANG-V1 §7). It was skipped as an
+ * opaque brace run, which left every name inside it unresolved: no
+ * completion, no navigation, and none of the enclosing object's members an
+ * anonymous class reaches bare (ERRATA E138).
+ */
+internal fun PsiBuilder.parseAnonymousClassBody() {
+    val m = mark()
+    JuxParser.MEMBERS.parseClassBody(this, isEnum = false)
+    m.done(E.ANONYMOUS_CLASS)
 }

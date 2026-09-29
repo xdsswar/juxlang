@@ -23,7 +23,8 @@ import dev.jux.intellij.resolve.JuxTypeIndex
  *    single-inheritance error (structural, no resolution needed);
  *  - extending an interface/record/enum/… is E0423 (quick-fix: move an
  *    interface to `implements`);
- *  - extending a `final` class is E0420; a `sealed` class whose `permits`
+ *  - extending a `final` class, or a Rust type (`extends Vec<int>`, ERRATA
+ *    E135), is E0420; a `sealed` class whose `permits`
  *    clause doesn't list this type is E0422;
  *  - an interface may extend only interfaces.
  *
@@ -80,6 +81,13 @@ class JuxExtendsClauseInspection : LocalInspectionTool() {
             val first = refs.first()
             val parent = JuxTypeIndex.findTypeThroughAliases(first, JuxHierarchy.bareTypeName(first)) ?: continue
             when {
+                // A Rust type is final to Jux (ERRATA E135): its methods are
+                // the crate's, and there is nothing for a subclass to extend.
+                JuxHierarchy.isRustType(parent) && !JuxHierarchy.isRustType(type) -> report(
+                    first,
+                    "Class '$typeName' cannot extend '${parent.name}': '${parent.name}' is a Rust type, " +
+                        "and a Rust type cannot be extended; hold one in a field and delegate to it (E0420)",
+                )
                 !JuxHierarchy.isClass(parent) -> report(
                     first,
                     "Class '$typeName' cannot extend '${parent.name}' because it is " +

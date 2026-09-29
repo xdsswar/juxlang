@@ -439,8 +439,8 @@ private fun PsiBuilder.parseNew(): PsiBuilder.Marker {
     when {
         at(T.LPAREN) -> {
             parseArgumentList()
-            // Anonymous class body `new T() { … }` (opaque for now).
-            if (at(T.LBRACE)) skipMatched(T.LBRACE, T.RBRACE)
+            // Anonymous class body `new T() { … }`: its members, parsed.
+            if (at(T.LBRACE)) parseAnonymousClassBody()
         }
         at(T.LBRACKET) -> {
             // `new T[n]`, `new T[a][b]`, `new T[]{…}`: each size is an

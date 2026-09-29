@@ -44,6 +44,9 @@ object JuxElementTypes {
     val STRUCT_DECLARATION = JuxElementType("STRUCT_DECLARATION")
     val ANNOTATION_DECLARATION = JuxElementType("ANNOTATION_DECLARATION")
     val TYPE_ALIAS_DECLARATION = JuxElementType("TYPE_ALIAS_DECLARATION")
+    // The `{ members }` of `new T(..) { .. }` (JUX-LANG-V1 §7, ERRATA E138):
+    // a class with no name whose one supertype is the `new`'s type.
+    val ANONYMOUS_CLASS = JuxElementType("ANONYMOUS_CLASS")
 
     val TYPE_PARAMETER_LIST = JuxElementType("TYPE_PARAMETER_LIST")
     val TYPE_PARAMETER = JuxElementType("TYPE_PARAMETER")

@@ -4,6 +4,7 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.tree.IElementType
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.util.elementType
+import dev.jux.intellij.psi.JuxAnonymousClass
 import dev.jux.intellij.psi.JuxElementTypes
 import dev.jux.intellij.psi.JuxNamedElement
 import dev.jux.intellij.psi.JuxTypeDeclaration
@@ -32,6 +33,13 @@ object JuxHierarchy {
      * the extends/implements clause inspections to highlight a specific entry.
      */
     fun supertypeReferences(type: JuxTypeDeclaration): List<Pair<PsiElement, Boolean>> {
+        // An anonymous class has one supertype, the type its `new` names: a
+        // class it extends, or an interface it implements.
+        if (type is JuxAnonymousClass) {
+            val ref = type.supertypeReference() ?: return emptyList()
+            val target = JuxTypeIndex.findTypeThroughAliases(ref, bareTypeName(ref))
+            return listOf(ref to (target == null || !isInterface(target)))
+        }
         val out = ArrayList<Pair<PsiElement, Boolean>>()
         for ((clauseType, isExtends) in listOf(
             JuxElementTypes.EXTENDS_CLAUSE to true,
@@ -189,6 +197,17 @@ object JuxHierarchy {
     fun isInterface(type: JuxTypeDeclaration): Boolean =
         type.node.elementType === JuxElementTypes.INTERFACE_DECLARATION
 
+    /**
+     * True for a Rust type: one a generated `.jux.d` stub declares, or one in
+     * the `rust.*` realm. Such a type is final to Jux: nothing extends it and
+     * nothing is bounded by it (ERRATA E135).
+     */
+    fun isRustType(type: JuxTypeDeclaration): Boolean {
+        if (type.containingFile?.name?.endsWith(".jux.d") == true) return true
+        val pkg = dev.jux.intellij.completion.JuxAutoImport.packageOf(type)
+        return pkg == "rust" || pkg.startsWith("rust.")
+    }
+
     /** True for a `class` declaration (the only extensible kind, §6.1 / E0423). */
     fun isClass(type: JuxTypeDeclaration): Boolean =
         type.node.elementType === JuxElementTypes.CLASS_DECLARATION
@@ -302,6 +321,10 @@ object JuxHierarchy {
         val owner = PsiTreeUtil.getParentOfType(member, JuxTypeDeclaration::class.java)
             ?: return true
         if (from != null && owner === from) return true
+        // Code written inside the declaring type -- a nested type, an
+        // anonymous class -- sees its private members, as in Java (ERRATA
+        // E139: an anonymous class reaches the enclosing class's privates).
+        if (from != null && PsiTreeUtil.isAncestor(owner, from, true)) return true
         if (hasModifier(member, "private")) return false
         if (hasModifier(member, "protected")) {
             return from != null && inheritsFrom(from, owner.name)
@@ -430,11 +453,11 @@ object JuxHierarchy {
         val seen = HashSet<String>()
         val queue = ArrayDeque<JuxTypeDeclaration>()
         queue.add(type)
-        val visitedTypes = HashSet<String>()
+        val visitedTypes = HashSet<Any>()
         while (queue.isNotEmpty()) {
             val t = queue.removeFirst()
-            val tn = t.name ?: continue
-            if (!visitedTypes.add(tn)) continue
+            // An anonymous class has no name; it is its own key.
+            if (!visitedTypes.add(t.name ?: t)) continue
             for (et in MEMBER_KINDS) {
                 for (m in directChildren(t, et)) {
                     val name = (m as? JuxNamedElement)?.name ?: continue

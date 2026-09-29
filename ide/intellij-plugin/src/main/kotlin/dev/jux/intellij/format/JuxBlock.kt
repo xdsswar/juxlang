@@ -84,7 +84,9 @@ class JuxBlock(
         E.ANNOTATION, E.RECORD_COMPONENT_LIST, E.WHERE_CLAUSE -> true
         // `new T(…) { … }` / `new T[…] { … }`: the brace run is raw tokens
         // consumed by skipMatched — re-indenting it would scramble user code.
-        E.NEW_EXPRESSION -> node.findChildByType(T.LBRACE) != null
+        // An anonymous class body is parsed now, but its layout is still the
+        // author's: it stays one block, as it was when it was raw tokens.
+        E.NEW_EXPRESSION -> node.findChildByType(T.LBRACE) != null || node.findChildByType(E.ANONYMOUS_CLASS) != null
         else -> false
     }
 }

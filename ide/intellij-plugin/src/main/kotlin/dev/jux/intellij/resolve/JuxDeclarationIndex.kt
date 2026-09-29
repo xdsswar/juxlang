@@ -75,7 +75,8 @@ class JuxDeclarationIndex : FileBasedIndexExtension<String, Void>() {
      * Bump when [getIndexer] changes what it records, so the platform
      * discards what it has rather than mixing two shapes of data.
      */
-    override fun getVersion(): Int = 1
+    // 2: an anonymous class body is parsed, so its members are recorded (0.1.9).
+    override fun getVersion(): Int = 2
 
     override fun getInputFilter(): FileBasedIndex.InputFilter =
         DefaultFileTypeSpecificInputFilter(JuxFileType)

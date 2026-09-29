@@ -48,6 +48,7 @@ class JuxParserDefinition : ParserDefinition {
         E.STRUCT_DECLARATION,
         E.ANNOTATION_DECLARATION,
         E.TYPE_ALIAS_DECLARATION -> JuxTypeDeclaration(node)
+        E.ANONYMOUS_CLASS -> JuxAnonymousClass(node)
 
         E.METHOD_DECLARATION,
         E.CONSTRUCTOR_DECLARATION,
