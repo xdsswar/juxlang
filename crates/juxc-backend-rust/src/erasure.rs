@@ -883,7 +883,9 @@ impl RustEmitter {
         if is_bare_param(a, params) && !a.nullable {
             return Pos::Erased;
         }
-        if self.link_reaches(a, params) {
+        // A nullable parameter (`Maybe<T?>`) is converted too: an `Option`
+        // of the erased value on one side, of the value's type on the other.
+        if self.holds_leaf(a, params) {
             let mut names: Vec<String> = Vec::new();
             let shape = rename_leaves(a, params, &mut names);
             let key: String = juxc_tycheck::symbol_table::render_type_ref(&shape)
@@ -895,27 +897,64 @@ impl RustEmitter {
         Pos::Kept
     }
 
-    /// Whether `t` is a collection (or a runtime-sized array) that holds one
-    /// of `params`, directly or through further collections.
+    /// Whether `t` holds one of `params` inside a container the two sides of
+    /// an erasure boundary can convert between (ERRATA E144, E1XX-GAP40b):
+    /// a collection or runtime-sized array (linked), a `Box` or a tuple
+    /// (copied: a value has no identity to keep), an `Rc` or `Arc` (the same
+    /// pointer each time it crosses), or a nullable one. The parameter itself,
+    /// bare, is not such a type: it is boxed.
     pub(crate) fn link_reaches(&self, t: &TypeRef, params: &[String]) -> bool {
-        if t.nullable || t.fn_shape.is_some() || t.ptr_depth > 0 {
+        if t.array_shape.is_none() && t.generic_args.is_empty() && t.name.segments.len() == 1 && params.contains(&t.name.segments[0].text) {
             return false;
         }
-        let leaf_or_deeper = |this: &Self, a: &TypeRef| {
-            (is_bare_param(a, params) && !a.nullable) || this.link_reaches(a, params)
-        };
+        self.holds_leaf(t, params)
+    }
+
+    /// Whether `t` is, or holds through convertible containers, one of `params`.
+    fn holds_leaf(&self, t: &TypeRef, params: &[String]) -> bool {
+        if t.fn_shape.is_some() || t.ptr_depth > 0 {
+            return false;
+        }
+        if t.nullable {
+            let mut inner = t.clone();
+            inner.nullable = false;
+            return self.holds_leaf(&inner, params);
+        }
+        if is_bare_param(t, params) {
+            return true;
+        }
+        match self.wrap_of(t) {
+            Some(_) => link_children(t).iter().any(|a| self.holds_leaf(a, params)),
+            None => false,
+        }
+    }
+
+    /// The kind of container `t` (not nullable) is, for converting what it
+    /// holds across an erasure boundary.
+    pub(crate) fn wrap_of(&self, t: &TypeRef) -> Option<Wrap> {
+        if t.nullable {
+            return Some(Wrap::Opt);
+        }
         if let Some(shape) = &t.array_shape {
-            if shape.dims.len() != 1 || shape.elem_nullable || !matches!(shape.dims[0], juxc_ast::ArrayDim::Dynamic) {
-                return false;
+            let dynamic = shape.dims.len() == 1 && matches!(shape.dims[0], juxc_ast::ArrayDim::Dynamic);
+            return dynamic.then_some(Wrap::Coll);
+        }
+        let bare = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+        if bare == juxc_ast::TUPLE_SENTINEL {
+            return Some(Wrap::Tuple);
+        }
+        let foreign = |name: &str| {
+            self.lookup_class_by_bare_or_fqn(name).is_some_and(|c| c.is_external) && !self.bare_name_is_user_type(name)
+        };
+        if t.generic_args.len() >= 1 && foreign(bare) {
+            match bare {
+                "Box" => return Some(Wrap::Boxed),
+                "Rc" => return Some(Wrap::Shared("rc")),
+                "Arc" => return Some(Wrap::Shared("arc")),
+                _ => {}
             }
-            let mut element = t.clone();
-            element.array_shape = None;
-            return leaf_or_deeper(self, &element);
         }
-        if !self.collection_is_handle(&t.name) || !(1..=2).contains(&t.generic_args.len()) {
-            return false;
-        }
-        t.generic_args.iter().filter_map(|a| a.as_type()).any(|a| leaf_or_deeper(self, a))
+        (self.collection_is_handle(&t.name) && (1..=2).contains(&t.generic_args.len())).then_some(Wrap::Coll)
     }
 
     /// The Rust text of `t` as a value type.
@@ -981,34 +1020,67 @@ impl RustEmitter {
             };
             return format!("{open}|__jux_lx: &{x}| {boxed}{close}");
         }
-        let args = link_args(slot, typed);
-        if args.is_empty() || !args.iter().any(|(s, _)| leaf_of(s, leaves).is_some() || self.link_reaches(s, leaves)) {
+        if !self.holds_leaf(slot, leaves) {
             return format!("{open}|__jux_ls| ::std::clone::Clone::clone(__jux_ls){close}");
         }
         let erased = subst_names(slot, leaves, &vec![juxc_tycheck::erasure::ERASED_TYPE.to_string(); leaves.len()]);
         let eh = self.type_text(&erased);
         let th = self.type_text(typed);
-        let ei = self.inner_text(&erased);
-        let ti = self.inner_text(typed);
-        let mut elem_tt: Vec<String> = Vec::new();
-        let mut elem_te: Vec<String> = Vec::new();
+        let (from_ty, _) = if to_typed { (eh.clone(), th.clone()) } else { (th.clone(), eh.clone()) };
+        let args = link_args(slot, typed);
+        let mut elems: Vec<String> = Vec::new();
         for (s, t) in &args {
-            elem_tt.push(self.link_closure(s, t, leaves, true, boxer));
-            elem_te.push(self.link_closure(s, t, leaves, false, boxer));
+            elems.push(self.link_closure(s, t, leaves, to_typed, boxer));
         }
-        let map = |elems: &[String]| {
-            if elems.len() == 1 {
-                format!(".map({})", elems[0])
-            } else {
-                format!(".map(|(__jux_lk, __jux_lw)| (({})(__jux_lk), ({})(__jux_lw)))", elems[0], elems[1])
+        let wrap = self.wrap_of(slot);
+        match wrap {
+            // `T?`: the value inside, when there is one.
+            Some(Wrap::Opt) => {
+                let inner = elems.first().cloned().unwrap_or_default();
+                format!("{open}|__jux_lo: &{from_ty}| __jux_lo.as_ref().map({inner}){close}")
             }
-        };
-        let tt = format!("{open}|__jux_lc: &{ei}| __jux_lc.iter(){}.collect::<{ti}>(){close}", map(&elem_tt));
-        let te = format!("{open}|__jux_lc: &{ti}| __jux_lc.iter(){}.collect::<{ei}>(){close}", map(&elem_te));
-        if to_typed {
-            format!("{open}|__jux_lh: &{eh}| crate::jux_link_unerase(__jux_lh, {tt}, {te}){close}")
-        } else {
-            format!("{open}|__jux_lh: &{th}| crate::jux_link_erase(__jux_lh, {tt}, {te}){close}")
+            // A value holds no identity: a new one, element by element.
+            Some(Wrap::Tuple) => {
+                let parts: Vec<String> =
+                    elems.iter().enumerate().map(|(i, c)| format!("({c})(&__jux_lt.{i})")).collect();
+                let one = if parts.len() == 1 { "," } else { "" };
+                format!("{open}|__jux_lt: &{from_ty}| ({}{one}){close}", parts.join(", "))
+            }
+            Some(Wrap::Boxed) => {
+                let inner = elems.first().cloned().unwrap_or_default();
+                format!("{open}|__jux_lb: &{from_ty}| std::boxed::Box::new(({inner})(&**__jux_lb)){close}")
+            }
+            // A shared pointer's contents cannot change, and it is the same
+            // pointer each time it crosses, so identity (`ptr_eq`) holds.
+            Some(Wrap::Shared(kind)) => {
+                let inner = elems.first().cloned().unwrap_or_default();
+                format!("{open}|__jux_lr: &{from_ty}| crate::jux_share_{kind}(__jux_lr, {inner}){close}")
+            }
+            _ => {
+                // A collection or array: linked, one storage on both sides.
+                let ei = self.inner_text(&erased);
+                let ti = self.inner_text(typed);
+                let mut elem_tt: Vec<String> = Vec::new();
+                let mut elem_te: Vec<String> = Vec::new();
+                for (s, t) in &args {
+                    elem_tt.push(self.link_closure(s, t, leaves, true, boxer));
+                    elem_te.push(self.link_closure(s, t, leaves, false, boxer));
+                }
+                let map = |elems: &[String]| {
+                    if elems.len() == 1 {
+                        format!(".map({})", elems[0])
+                    } else {
+                        format!(".map(|(__jux_lk, __jux_lw)| (({})(__jux_lk), ({})(__jux_lw)))", elems[0], elems[1])
+                    }
+                };
+                let tt = format!("{open}|__jux_lc: &{ei}| __jux_lc.iter(){}.collect::<{ti}>(){close}", map(&elem_tt));
+                let te = format!("{open}|__jux_lc: &{ti}| __jux_lc.iter(){}.collect::<{ei}>(){close}", map(&elem_te));
+                if to_typed {
+                    format!("{open}|__jux_lh: &{eh}| crate::jux_link_unerase(__jux_lh, {tt}, {te}){close}")
+                } else {
+                    format!("{open}|__jux_lh: &{th}| crate::jux_link_erase(__jux_lh, {tt}, {te}){close}")
+                }
+            }
         }
     }
 
@@ -1605,14 +1677,17 @@ fn leaf_of(slot: &TypeRef, leaves: &[String]) -> Option<String> {
 /// The element types of the collection or array `slot`, paired with the
 /// same of `typed`.
 fn link_args(slot: &TypeRef, typed: &TypeRef) -> Vec<(TypeRef, TypeRef)> {
+    if slot.nullable {
+        let (mut s, mut t) = (slot.clone(), typed.clone());
+        s.nullable = false;
+        t.nullable = false;
+        return vec![(s, t)];
+    }
     if slot.array_shape.is_some() {
         if typed.array_shape.is_none() {
             return Vec::new();
         }
-        let (mut s, mut t) = (slot.clone(), typed.clone());
-        s.array_shape = None;
-        t.array_shape = None;
-        return vec![(s, t)];
+        return vec![(array_element(slot), array_element(typed))];
     }
     let s: Vec<&TypeRef> = slot.generic_args.iter().filter_map(|a| a.as_type()).collect();
     let t: Vec<&TypeRef> = typed.generic_args.iter().filter_map(|a| a.as_type()).collect();
@@ -1620,6 +1695,44 @@ fn link_args(slot: &TypeRef, typed: &TypeRef) -> Vec<(TypeRef, TypeRef)> {
         return Vec::new();
     }
     s.into_iter().zip(t).map(|(a, b)| (a.clone(), b.clone())).collect()
+}
+
+/// The element of the one-dimensional array type `t`, its own `?` kept.
+fn array_element(t: &TypeRef) -> TypeRef {
+    let mut e = t.clone();
+    e.nullable = t.array_shape.as_ref().is_some_and(|s| s.elem_nullable);
+    e.array_shape = None;
+    e
+}
+
+/// What the container `t` holds: the payload of a nullable, the element of an
+/// array, the arguments of anything else.
+fn link_children(t: &TypeRef) -> Vec<TypeRef> {
+    if t.nullable {
+        let mut inner = t.clone();
+        inner.nullable = false;
+        return vec![inner];
+    }
+    if t.array_shape.is_some() {
+        return vec![array_element(t)];
+    }
+    t.generic_args.iter().filter_map(|a| a.as_type().cloned()).collect()
+}
+
+/// A container an erasure boundary converts what it holds through (see
+/// [`RustEmitter::wrap_of`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Wrap {
+    /// A collection or runtime-sized array: linked, one storage.
+    Coll,
+    /// `T?`: the payload, when there is one.
+    Opt,
+    /// A tuple: a new one, element by element.
+    Tuple,
+    /// `Box<T>`: a new box.
+    Boxed,
+    /// `Rc<T>` / `Arc<T>`: the same pointer each time it crosses.
+    Shared(&'static str),
 }
 
 /// The adapter's name for an interface and a shape (`E` erased, `K` kept,

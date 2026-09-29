@@ -83,7 +83,7 @@ impl RustEmitter {
         let mut first = true;
         for sub in &implementers {
             // A subtype whose parameters the supertype does not fix is
-            // refused by the checker (E0438); it cannot appear here.
+            // erased with its cycle (ERRATA E141); it cannot appear here.
             let Some(args) = juxc_tycheck::generic_dispatch::supertype_args(&self.symbols, sub, base_fqn) else {
                 continue;
             };

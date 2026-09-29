@@ -1,0 +1,36 @@
+// An object shared with workers keeps its collections under its own lock, so
+// one read out of it is a copy (JUX-LANG-V1 §6.5.1). Reading the copy is
+// fine; WRITING it would drop the write, so it is E0702 (ERRATA
+// E1XX-GAP40b). Writing through the object, a fresh list a method builds,
+// and an explicit `clone()` are all fine.
+import rust.std.*;
+
+class Registry {
+    private Vec<String> log = new Vec<String>();
+    public Vec<String> items = new Vec<String>();
+    public void handle(String s) { this.log.push(s); }
+    public Vec<String> getLog() { return this.log; }
+    public Vec<String> fresh() { var v = new Vec<String>(); v.push("f"); return v; }
+    public int count() { return this.log.len(); }
+    public void selfCopy() { var mine = this.log; mine.push("lost"); }
+}
+
+public int work(Registry r) { r.handle("w"); return 1; }
+
+public async void main() {
+    var r = new Registry();
+    var t = Worker.spawn(() -> work(r));
+    await t;
+    var l = r.getLog();
+    print(l.len());
+    l.push("x");
+    r.getLog().push("y");
+    var it = r.items;
+    it[0] = "z";
+    r.items.push("in place");
+    var f = r.fresh();
+    f.push("ok");
+    var c = r.getLog().clone();
+    c.push("ok");
+    print(r.count() + " " + r.items.len());
+}

@@ -57,8 +57,11 @@ mod rep_select;
 pub use rep_select::RepViolation;
 mod sizeof_emit;
 mod stmts;
+mod sync_boundary;
 mod types;
 mod worker;
+mod worker_copies;
+pub use worker_copies::worker_copy_diagnostics;
 mod writer;
 
 #[cfg(test)]
@@ -1249,6 +1252,96 @@ pub fn jux_link_erase<EC: 'static, TC: 'static>(
         },
     }
 }
+/// A shared pointer (`Rc<T>`, `Arc<T>`) seen from both sides of an erasure
+/// boundary (ERRATA E1XX-GAP40b). What it points at cannot change, so the two
+/// sides need no copy kept in step; what they need is identity: the same
+/// pointer crossing twice is the same pointer on the other side, and crossing
+/// back gives the original. The pair is remembered while either is in use.
+pub struct JuxSharePair {
+    a: Box<dyn std::any::Any>,
+    b: Box<dyn std::any::Any>,
+    unused: Box<dyn Fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>,
+}
+thread_local! {
+    static JUX_SHARES: std::cell::RefCell<std::collections::HashMap<usize, std::rc::Rc<JuxSharePair>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static JUX_SHARES_PRUNED: std::cell::Cell<usize> = const { std::cell::Cell::new(64) };
+}
+fn jux_share_find<P: Clone + 'static>(key: usize) -> Option<P> {
+    let pair = JUX_SHARES.with(|m| m.borrow().get(&key).cloned());
+    pair.and_then(|p| p.a.downcast_ref::<P>().or_else(|| p.b.downcast_ref::<P>()).cloned())
+}
+fn jux_share_keep<P1: 'static, P2: 'static>(
+    k1: usize,
+    k2: usize,
+    p1: P1,
+    p2: P2,
+    unused: impl Fn(&dyn std::any::Any, &dyn std::any::Any) -> bool + 'static,
+) {
+    let pair = std::rc::Rc::new(JuxSharePair { a: Box::new(p1), b: Box::new(p2), unused: Box::new(unused) });
+    JUX_SHARES.with(|m| {
+        let mut m = m.borrow_mut();
+        let pruned = JUX_SHARES_PRUNED.with(|p| p.get());
+        if m.len() > 2 * pruned {
+            m.retain(|_, p| !(p.unused)(&*p.a, &*p.b));
+            JUX_SHARES_PRUNED.with(|p| p.set(m.len().max(64)));
+        }
+        m.insert(k1, pair.clone());
+        m.insert(k2, pair);
+    });
+}
+/// The `Rc<Y>` the `Rc<X>` `r` is on the other side of a boundary.
+pub fn jux_share_rc<X: 'static, Y: 'static>(r: &std::rc::Rc<X>, conv: impl Fn(&X) -> Y) -> std::rc::Rc<Y> {
+    let any: std::rc::Rc<dyn std::any::Any> = r.clone();
+    match any.downcast::<Y>() {
+        Ok(same) => same,
+        Err(_) => {
+            let key = std::rc::Rc::as_ptr(r) as *const () as usize;
+            match jux_share_find::<std::rc::Rc<Y>>(key) {
+                Some(y) => y,
+                _ => {
+                    let y = std::rc::Rc::new(conv(&**r));
+                    let k2 = std::rc::Rc::as_ptr(&y) as *const () as usize;
+                    jux_share_keep(key, k2, r.clone(), y.clone(), |a, b| {
+                        let count = |p: &dyn std::any::Any| match (p.downcast_ref::<std::rc::Rc<X>>(), p.downcast_ref::<std::rc::Rc<Y>>()) {
+                            (Some(x), _) => std::rc::Rc::strong_count(x),
+                            (_, Some(y)) => std::rc::Rc::strong_count(y),
+                            _ => 0,
+                        };
+                        count(a) <= 1 && count(b) <= 1
+                    });
+                    y
+                }
+            }
+        }
+    }
+}
+/// The `Arc<Y>` the `Arc<X>` `r` is on the other side of a boundary.
+pub fn jux_share_arc<X: 'static, Y: 'static>(r: &std::sync::Arc<X>, conv: impl Fn(&X) -> Y) -> std::sync::Arc<Y> {
+    let as_any: &dyn std::any::Any = r;
+    match as_any.downcast_ref::<std::sync::Arc<Y>>() {
+        Some(same) => same.clone(),
+        _ => {
+            let key = std::sync::Arc::as_ptr(r) as *const () as usize;
+            match jux_share_find::<std::sync::Arc<Y>>(key) {
+                Some(y) => y,
+                _ => {
+                    let y = std::sync::Arc::new(conv(&**r));
+                    let k2 = std::sync::Arc::as_ptr(&y) as *const () as usize;
+                    jux_share_keep(key, k2, r.clone(), y.clone(), |a, b| {
+                        let count = |p: &dyn std::any::Any| match (p.downcast_ref::<std::sync::Arc<X>>(), p.downcast_ref::<std::sync::Arc<Y>>()) {
+                            (Some(x), _) => std::sync::Arc::strong_count(x),
+                            (_, Some(y)) => std::sync::Arc::strong_count(y),
+                            _ => 0,
+                        };
+                        count(a) <= 1 && count(b) <= 1
+                    });
+                    y
+                }
+            }
+        }
+    }
+}
 "##;
 
 pub(crate) const NOT_NULL_ASSERT_RAISE: &str = ".unwrap_or_else(|| std::panic::panic_any(crate::jux::std::exceptions::NullPointerException::new(String::from(\"`!!` asserted on a null value\"))))";
@@ -1862,6 +1955,13 @@ struct RustEmitter {
     /// Collection values to link into the erased slot they fill (ERRATA
     /// E144), keyed like `erase_on_emit`.
     pub(crate) link_on_emit: std::collections::HashMap<crate::erasure::EraseKey, crate::erasure::LinkMark>,
+    /// Collection values crossing into (`true`: to the plain inline form)
+    /// or out of (`false`: to a handle) a worker-shared class (ERRATA
+    /// E1XX-GAP40b, `sync_boundary.rs`), keyed like `erase_on_emit`.
+    pub(crate) sync_args: std::collections::HashMap<crate::erasure::EraseKey, bool>,
+    /// The crossings being emitted now, so the conversion's own emission of
+    /// the value does not convert it again.
+    pub(crate) sync_now: std::collections::HashSet<crate::erasure::EraseKey>,
     /// The expressions being boxed or unboxed right now, so the recursive
     /// emission of the value itself does not wrap it again.
     pub(crate) erasing_now: std::collections::HashSet<(crate::erasure::EraseKey, bool)>,
@@ -7458,6 +7558,8 @@ pub fn jux_enter_thread() {
             into_receivers: std::collections::HashMap::new(),
             erase_on_emit: std::collections::HashMap::new(),
             link_on_emit: std::collections::HashMap::new(),
+            sync_args: std::collections::HashMap::new(),
+            sync_now: std::collections::HashSet::new(),
             erasing_now: std::collections::HashSet::new(),
             into_via: Vec::new(),
             non_final_uses: std::collections::HashSet::new(),

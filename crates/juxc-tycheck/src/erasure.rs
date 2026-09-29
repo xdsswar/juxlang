@@ -21,7 +21,7 @@
 //! collection holding the parameter is linked to one storage on both sides
 //! (E144). A bound holding the parameter inside a foreign type that
 //! is neither a Jux class nor a collection has no conversion, and such a
-//! cycle is `E0438`.
+//! cycle is `E0620` (`E0438` is retired, ERRATA E1XX-GAP40b).
 
 use std::collections::BTreeSet;
 
@@ -41,7 +41,7 @@ pub struct Erasure {
     pub fns: BTreeSet<String>,
     /// A cycle that could not be erased: the function, method or class on it
     /// (its key or FQN), the one that keeps growing it, and the bounded type
-    /// parameter that stops it (`E0438`).
+    /// parameter that stops it (`E0620`).
     pub refused: Vec<(String, String, juxc_ast::TypeParam)>,
 }
 
@@ -143,7 +143,7 @@ pub fn plan(symbols: &SymbolTable) -> Erasure {
     // dispatch object too. A bound that is not a fixed type (one naming a
     // type parameter, `T extends Comparable<T>`) is kept through an adapter
     // (E143), and a collection of the parameter is linked (E144); a
-    // foreign type holding it that is neither is `E0438`.
+    // foreign type holding it that is neither is `E0620`.
     let grower = fns.iter().next().cloned().or_else(|| closure.unbounded.values().next().cloned()).unwrap_or_default();
     let mut refused: Vec<(String, String, juxc_ast::TypeParam)> = Vec::new();
     for c in &classes {
@@ -309,37 +309,52 @@ fn erasable(p: &juxc_ast::TypeParam, params: &[juxc_ast::TypeParam], symbols: &S
     })
 }
 
-/// Whether `t` holds a type parameter inside a collection (`Vec<T>`,
-/// `HashMap<String, Vec<T>>`, `T[]`): the erased code and the value see two
-/// Rust types for it, and the adapter links the two so they share one
-/// storage (ERRATA E144). Every argument of the collection is a
-/// parameter, a type with none, a Jux class (erased with the family), or a
-/// collection of the same kind.
+/// Whether `t` holds a type parameter inside a container the erased code and
+/// the value's own code can convert between (ERRATA E144, E1XX-GAP40b): a
+/// collection or runtime-sized array (linked to one storage), a `Box` or a
+/// tuple (a value: a new one each crossing is exact), an `Rc` or `Arc` (the
+/// same pointer each crossing), or a nullable one. Every argument is a
+/// parameter, a type with none, a Jux class (erased with the family), or such
+/// a container again.
 pub fn linked(t: &juxc_ast::TypeRef, params: &[juxc_ast::TypeParam], symbols: &SymbolTable) -> bool {
-    if !names_param(t, params) || t.nullable || t.fn_shape.is_some() || t.ptr_depth > 0 {
+    if !names_param(t, params) || t.fn_shape.is_some() || t.ptr_depth > 0 {
         return false;
     }
     let arg_ok = |a: &juxc_ast::TypeRef| {
         !names_param(a, params)
-            || (a.generic_args.is_empty() && a.name.segments.len() == 1 && a.array_shape.is_none() && !a.nullable)
+            || (a.generic_args.is_empty() && a.name.segments.len() == 1 && a.array_shape.is_none())
             || a.name.segments.last().is_some_and(|s| user_class(symbols, &s.text).is_some())
             || linked(a, params, symbols)
     };
+    if t.nullable {
+        let mut inner = t.clone();
+        inner.nullable = false;
+        return arg_ok(&inner);
+    }
     if let Some(shape) = &t.array_shape {
         let dynamic = shape.dims.iter().all(|d| matches!(d, juxc_ast::ArrayDim::Dynamic));
         let mut element = t.clone();
         element.array_shape = None;
-        return dynamic && shape.dims.len() == 1 && !shape.elem_nullable && arg_ok(&element);
+        element.nullable = shape.elem_nullable;
+        return dynamic && shape.dims.len() == 1 && arg_ok(&element);
+    }
+    let bare = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+    let args_ok = || t.generic_args.iter().all(|a| a.as_type().is_some_and(arg_ok));
+    if bare == juxc_ast::TUPLE_SENTINEL {
+        return args_ok();
     }
     let name = t.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
-    let is_collection = symbols.is_rust_collection(&name)
-        || t.name.segments.last().is_some_and(|s| symbols.is_rust_collection(&s.text));
-    is_collection
-        && (1..=2).contains(&t.generic_args.len())
-        && t.generic_args.iter().all(|a| a.as_type().is_some_and(arg_ok))
+    let foreign_pointer = matches!(bare, "Box" | "Rc" | "Arc")
+        && user_class(symbols, bare).is_none()
+        && symbols.resolve_class(&name).or_else(|| symbols.resolve_class(bare)).is_some_and(|(_, c)| c.is_external);
+    if foreign_pointer {
+        return !t.generic_args.is_empty() && args_ok();
+    }
+    let is_collection = symbols.is_rust_collection(&name) || symbols.is_rust_collection(bare);
+    is_collection && (1..=2).contains(&t.generic_args.len()) && args_ok()
 }
 
-/// `E0438` for each cycle [`plan`] could not erase.
+/// `E0620` for each cycle [`plan`] could not erase.
 pub fn refused_diagnostics(symbols: &SymbolTable) -> Vec<(usize, juxc_diagnostics::Diagnostic)> {
     let mut out = Vec::new();
     for (entity, grower, param) in &symbols.erasure.refused {
@@ -359,29 +374,50 @@ pub fn refused_diagnostics(symbols: &SymbolTable) -> Vec<(usize, juxc_diagnostic
             .map(crate::symbol_table::render_type_ref)
             .collect::<Vec<_>>()
             .join(" & ");
-        let what = format!(
-            "bounded by `{bound}`, which holds the parameter inside a foreign type that is neither a Jux \
-             class nor a collection, and an erased value has no conversion into such a type"
-        );
+        // The foreign type the parameter is held in: the one the message is about.
+        let names: Vec<juxc_ast::TypeParam> = vec![param.clone()];
+        let holder = param
+            .bounds
+            .iter()
+            .flat_map(|b| b.generic_args.iter().filter_map(|a| a.as_type()))
+            .find_map(|a| foreign_holder(a, &names, symbols))
+            .unwrap_or_else(|| bound.clone());
         out.push((
             unit,
             juxc_diagnostics::Diagnostic::error(
-                juxc_diagnostics::code::Code::E0438_GenericVirtualMethod,
+                juxc_diagnostics::code::Code::E0620_ErasedThroughForeignType,
                 format!(
                     "`{grower}` calls itself at an ever-larger type argument (polymorphic recursion), which is \
                      compiled by erasing the type arguments of every function and class on that cycle -- but \
-                     `{}` of `{name}` is {what}",
+                     `{}` of `{name}` is bounded by `{bound}`, which holds it inside `{holder}`, a foreign type \
+                     whose shape the compiler does not know, so the erased value cannot be converted into it",
                     param.name.text,
                 ),
             )
             .with_span(param.span)
             .with_help(format!(
-                "bound `{}` by the parameter itself or a Jux class holding it, or keep `{grower}` from calling itself at a larger type argument",
+                "hold `{}` in a Jux class, a collection, a `Box`, a tuple, an `Rc` or an `Arc` instead, or keep \
+                 `{grower}` from calling itself at a larger type argument",
                 param.name.text
             )),
         ));
     }
     out
+}
+
+/// The innermost foreign generic type in `t` that holds one of `params` and
+/// is not a container [`linked`] converts.
+fn foreign_holder(t: &juxc_ast::TypeRef, params: &[juxc_ast::TypeParam], symbols: &SymbolTable) -> Option<String> {
+    if !names_param(t, params) || t.generic_args.is_empty() {
+        return None;
+    }
+    let inner = t.generic_args.iter().filter_map(|a| a.as_type()).find_map(|a| foreign_holder(a, params, symbols));
+    if inner.is_some() {
+        return inner;
+    }
+    let bare = t.name.segments.last().map(|s| s.text.as_str()).unwrap_or("");
+    let ours = user_class(symbols, bare).is_some() || user_interface(symbols, bare).is_some();
+    (!ours && !linked(t, params, symbols)).then(|| crate::symbol_table::render_type_ref(t))
 }
 
 /// Every instantiation of an erased class is the one erased instantiation.

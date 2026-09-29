@@ -2757,7 +2757,13 @@ impl RustEmitter {
             // `.0.borrow()` (field-path receiver), both the receiver
             // guard AND the argument guards must drop before the call —
             // hoist both. Otherwise args-only suffices.
-            if let Some(cf) = self.callee_receiver_reads_through_borrow(&call.callee) {
+            // A collection stored inline in a worker-shared object is called
+            // in place, under the object's lock (ERRATA E1XX-GAP40b):
+            // hoisting it out would call the method on a copy.
+            if let Some(cf) = self
+                .callee_receiver_reads_through_borrow(&call.callee)
+                .filter(|cf| !self.field_is_sync_inline(&cf.object))
+            {
                 self.emit_call_with_hoisted_receiver(call, cf, true);
             } else {
                 self.emit_call_with_hoisted_args(call);
@@ -2769,7 +2775,10 @@ impl RustEmitter {
         // before the call — otherwise a re-entrant method (one that, directly
         // or through a callee, mutates the same object) panics `already
         // borrowed` (§CR.4.1).
-        if let Some(cf) = self.callee_receiver_reads_through_borrow(&call.callee) {
+        if let Some(cf) = self
+            .callee_receiver_reads_through_borrow(&call.callee)
+            .filter(|cf| !self.field_is_sync_inline(&cf.object))
+        {
             self.emit_call_with_hoisted_receiver(call, cf, false);
             return;
         }

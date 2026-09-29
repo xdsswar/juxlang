@@ -390,15 +390,13 @@ pub enum Code {
     /// visible has a hidden stand-in on the dispatch trait, and anywhere else
     /// it is `E0414`. Nothing emits it; the number is not reused.
     E0437_FieldThroughPolymorphicBase,
-    /// E0438 — **Polymorphic recursion that cannot be erased** (ERRATA
-    /// E141, E142, E143, E144): a function calling itself at an
-    /// ever-larger type argument is compiled by erasing the type arguments of
-    /// every function and class on that cycle, each bound kept as a dispatch
-    /// object or an adapter, and a collection holding the parameter
-    /// (`T extends Rel<Vec<T>>`) linked to the value's own collection. What
-    /// is left is a bound holding the parameter inside a FOREIGN type that is
-    /// neither a Jux class nor a collection (`T extends Rel<Box<T>>`), which
-    /// has no conversion at all.
+    /// E0438 — *retired* (ERRATA E1XX-GAP40b). It was polymorphic recursion
+    /// that could not be erased (E137, E141..E144). Every bound on such a
+    /// cycle is now kept: a dispatch object, an adapter, a linked collection,
+    /// a copied `Box` / tuple / nullable, a same-pointer `Rc` / `Arc`. The one
+    /// case left, a parameter held inside a foreign type with no known shape,
+    /// has its own code, [`Code::E0620_ErasedThroughForeignType`]. Nothing
+    /// emits this one; the number is not reused.
     E0438_GenericVirtualMethod,
     /// E0442 — A **reference cast / type-test between unrelated types**
     /// (`(Dog) someString`, `x as Cat` where `x` can't be a `Cat`,
@@ -1001,6 +999,15 @@ pub enum Code {
     /// compiled and printed `0`.
     E0601_LocalNotDefinitelyAssigned,
 
+    /// E0620 -- a type parameter on a polymorphic-recursion cycle is held,
+    /// in a bound, inside a FOREIGN generic type whose shape the compiler does
+    /// not know (`T extends Rel<Cell<T>>`, a crate's own `Tree<T>`). The cycle
+    /// is compiled by erasure, and the erased code and the value's own code
+    /// see two Rust types there; a collection, a `Box`, a tuple, a nullable,
+    /// an `Rc` or an `Arc` is converted between them, anything else cannot be
+    /// (ERRATA E1XX-GAP40b). Replaces `E0438` for this one case.
+    E0620_ErasedThroughForeignType,
+
     // ---- Const evaluation (E0800–E0899) ----
     /// E0840 — A **const evaluation exceeded its resource limits** (§T.11.4) —
     /// too many operations or too deep a recursion while folding a const
@@ -1533,6 +1540,7 @@ impl Code {
             Code::W0491_DeprecatedUse            => "W0491",
             Code::E0600_FieldNotDefinitelyAssigned => "E0600",
             Code::E0601_LocalNotDefinitelyAssigned => "E0601",
+            Code::E0620_ErasedThroughForeignType => "E0620",
             Code::E0840_ConstEvalLimitExceeded   => "E0840",
             Code::E0841_NonConstInConstContext   => "E0841",
             Code::E0842_ConstEvalPanic           => "E0842",
