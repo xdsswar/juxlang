@@ -6466,6 +6466,111 @@ Named for T`) are not written onto each type it covers.
 boundary is closed. GAPS.md gap 45 is closed.
 
 ---
+
+## E1XX-SWEEPC4. Blanket impls and `FromIterator` on stubs, a library's unreadable interface said in Jux terms, and closer typos first
+
+**Conflict.** E151 left four things:
+
+1. A blanket impl's associated functions and constants (`impl<T: Default +
+   Clone> Maker for T`) reached no type: `Clock.make_default()` was `E0413`
+   on a type Rust gives it to.
+2. Of the standard library's traits with receiver-less items, only `Default`,
+   `From`, `TryFrom` and `FromStr` were surfaced. `FromIterator::from_iter`
+   (`Vec.from_iter(xs)`, `String.from_iter(chars)`, `HashMap.from_iter(
+   pairs)`) was not, and a generic std type's `Default` (`Vec.default()`) was
+   in the stub but lowered as `<std::vec::Vec as ...>`, which rustc refuses.
+3. **A leak.** When the toolchain could not document a crate, the build
+   printed the toolchain's own report: the leaker's run showed `link.exe
+   failed with code 1104` (a file the linker needed was held by another
+   process). The editor's notice named `rust-docs-json` and "crate stubs".
+4. `u32.from_strr` suggested `from` first: the typed name STARTS with it,
+   which the prefix measure scored as high as the one-letter typo
+   `from_str`.
+
+**Resolution.**
+
+1. **Blanket impls of the crate's own traits** give their associated
+   functions and constants to every type of the stub the bound is KNOWN to
+   cover (Bindgen §G.5.4f). The bound is decided from the stub's recorded
+   facts: `Clone`, `Debug`, `PartialEq`, `Default`, `Hash` by the derive
+   markers, the crate's own traits by `implements`, `Into<Y>` by `@RustFrom`
+   on `Y` (or the type being `Y`). A requirement nothing records (`Send`,
+   `Display`, `Copy`, a third crate's trait, a bound with other arguments)
+   makes the impl cover no type rather than every type. The impl's parameter
+   is the type in the member's signature. The standard library's blanket
+   impls with associated functions are identities (`impl<T> From<T> for T`,
+   `impl<T, U: Into<T>> TryFrom<U> for T`), which `std`'s documentation also
+   inlines as its own traits, and are not taken. A type's own impl list
+   repeats every blanket impl as if written for it; those copies are not
+   evidence and are skipped as before.
+2. **`FromIterator<A>` is `static T from_iter(Vec<A> iter)`.** The `Vec` is
+   passed by value (Rust iterates it), so the new collection is its own. An
+   item that is a borrow of anything but `str` or `char`, or the impl's own
+   parameter rather than the type's (`impl<P: AsRef<Path>> FromIterator<P>
+   for PathBuf`), is left out. A trait call on a GENERIC type writes `_` for
+   each of its parameters (`<std::vec::Vec<_> as
+   std::default::Default>::default()`), except the standard library's
+   defaulted allocator (`A`) and hasher (`S`), which take their defaults.
+   The borrow self-check reads a qualified path (`<T as Tr>::f`) as the
+   foreign function it names, not as a function value handed its argument.
+
+   The standard library's stable traits with receiver-less associated items,
+   and what was decided for each:
+
+   | trait | items | surfaced | why |
+   |---|---|---|---|
+   | `Default` | `default()` | yes (E151); generic types now lower | construction |
+   | `From<T>` | `from(T)` | yes (E151) | conversion |
+   | `TryFrom<T>` | `try_from(T)` | yes (E151) | conversion |
+   | `FromStr` | `from_str(&str)` | yes (E151) | parsing |
+   | `FromIterator<A>` | `from_iter(I)` | yes, as `from_iter(Vec<A>)` | construction from a collection |
+   | `Sum<A>`, `Product<A>` | `sum(I)`, `product(I)` | no | take an ITERATOR, not a collection; a program writes `items.sum()` |
+   | `Into`, `TryInto`, `Extend`, `Clone`, `ToOwned`, `IntoIterator` | instance methods only | no | nothing static to surface |
+   | `Step`, `FromResidual`, `ZeroablePrimitive` | associated fns / consts | no | unstable |
+   | `std::os::*` (`FromRawFd`, `FromRawHandle`, `OsStringExt`, ...) | `from_raw_*`, `from_vec`, ... | no | exist on one platform each (and are `unsafe`) |
+   | numeric `MIN`/`MAX`, `f64::EPSILON` | constants | already | inherent, not a trait's |
+3. **An unreadable interface is said in Jux terms.** The toolchain's report
+   is classified by what it says (a file in use, a download failure, no
+   matching release, a full disk, a toolchain that cannot describe it,
+   anything else) into "could not read the library `printpdf`'s interface (a
+   file it needs is in use); close the program that holds it ... and build
+   again". The raw report is printed only under `--verbose`. A crate whose
+   interface cannot be regenerated keeps its previous description when one
+   is cached: "...; using the cached description". Every stub-generation
+   message (the build's warning, `jux`'s stub sync report, the re-export
+   note, the editor's log) passes `stub_message_in_jux_terms`, which holds it
+   to the leak detector and to a check for toolchain text (`link.exe`,
+   `LNK1…`, `rustc`, `rustdoc`, `cargo`, `exit code:`); one that fails is
+   replaced, its original shown under `--verbose`. The editor's notice says
+   "the interface of 1 library dependency could not be read".
+4. **A closer edit ranks first.** A candidate the typed name merely starts
+   with, when the typed name is longer, scores below a one-edit match:
+   `from_strr` suggests `from_str`, `from`, `from_str_radix`. Changed by hand:
+   `tests/ui/foreign_hint_member_kind.expected`; no other pinned output moved.
+
+**Stubs.** `STD_STUB_CACHE_VERSION` 49, `CRATE_STUB_CACHE_VERSION` 25; the
+vendored snapshot gained its 14 `FromIterator` members and nothing else.
+
+**Tests.** `crates/juxc-bindgen/tests/sweepc4_fixture.rs` (real rustdoc JSON
+of `fixtures/sweepc4-src/lib.rs`: blanket impls over `Default + Clone`, over
+the crate's `Named`, and over `Send`; `FromIterator<u32>`; a type no bound
+covers); `bin/juxc/tests/trait_statics.rs`'s
+`blanket_and_from_iter_statics_run` builds and runs against that crate;
+`examples/trait_statics.jux` gains `Vec.from_iter`, `String.from_iter`,
+`HashMap.from_iter` and `Vec.default()`; in `crates/juxc-driver/src/stubs.rs`
+a REAL failed interface read (a dependency that does not compile) and the
+leaker's `link.exe` 1104 report, each held to the leak detector, every
+failure cause, the replacement of a leaking message, and the fixed messages.
+
+**Known boundary.** A blanket impl whose bound needs a fact the stub does
+not record is not surfaced, even where Rust would apply it. A blanket impl of
+a THIRD crate's trait is not either (the program may not depend on it).
+
+**Spec status:** `JUX-BINDGEN-ADDENDUM.md` §G.5.4f is amended;
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0413` row. E151's known boundary is
+closed. GAPS.md gap 47 is closed.
+
+---
 When you edit any addendum that touches one of the items above,
 either:
 

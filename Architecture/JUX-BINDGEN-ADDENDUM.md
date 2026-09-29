@@ -419,11 +419,16 @@ public class Clock implements Tick {
 }
 ```
 
-- **Which impls.** One written for the type itself, not a blanket, synthetic
-  or negative impl, of a trait the program's crate can name and means: the
+- **Which impls.** One written for the type itself, not a synthetic or
+  negative impl, of a trait the program's crate can name and means: the
   crate's own traits, and the standard library's construction and conversion
-  traits `Default`, `From`, `TryFrom` and `FromStr` (the others are marker
-  traits, operating-system extensions or unstable). A third crate's trait is
+  traits `Default`, `From`, `TryFrom`, `FromStr` and `FromIterator`. The
+  standard library's other stable traits with receiver-less items are left
+  out: `Sum` and `Product` take an iterator, not a collection, and a program
+  writes `items.sum()`; `Into`, `TryInto`, `Extend`, `Clone` and the rest
+  have only instance methods; `Step`, `FromResidual` and `AsciiChar`-style
+  items are unstable; the `std::os` extension traits exist on one platform
+  each. The numeric limits (`MIN`, `MAX`) are inherent already. A third crate's trait is
   left out, since the program may not depend on it. Only members without a
   receiver: a trait's instance methods reach the type through `implements`.
   A name the type's inherent impls declare stays theirs, as in Rust, and a
@@ -433,12 +438,30 @@ public class Clock implements Tick {
   (`throws ParseIntError`), or nothing when it is `Infallible`. One Jux
   signature is kept per name: `From<&str>` and `From<String>` are both
   `from(String)`; distinct ones overload.
+- **`FromIterator<A>`** is `static T from_iter(Vec<A> iter)`: any collection
+  of `A`, which Rust iterates by value, so the new value is its own
+  (`Vec.from_iter(xs)`, `String.from_iter(chars)`,
+  `HashMap.from_iter(pairs)`). An item type that is a borrow of anything but
+  a `str` or `char`, or the impl's own parameter rather than the type's
+  (`impl<P: AsRef<Path>> FromIterator<P> for PathBuf`), is left out.
+- **Blanket impls.** A blanket impl of one of the crate's own traits (`impl<T:
+  Default + Clone> Maker for T`) gives its associated functions and constants
+  to every type of the stub its bound is KNOWN to cover, from the stub's
+  recorded facts: the derive markers answer `Clone`, `Debug`, `PartialEq`,
+  `Default` and `Hash`, an `implements` clause answers the crate's own
+  traits, `@RustFrom` answers `Into<Y>`. A bound nothing records (`Send`,
+  `Display`, `Copy`, a third crate's trait) covers no type: a static is never
+  put on a type by guess. The standard library's blanket impls with
+  associated functions are identities (`impl<T> From<T> for T`) and are not
+  taken.
 - **Primitives.** A primitive's are on its `@RustPrimitive` class, including
   those `core` implements (`impl FromStr for u32`), and are called on the
   primitive's name: `u32.from_str("12")`, `u32.from(small)`.
 - **Lowering.** `<Type as Trait>::f(..)` and `<Type as Trait>::CONST`, with
   `_` for the trait's type arguments (`<String as std::convert::From<_>>::from`),
-  so Rust's own impl selection picks among the overloads.
+  so Rust's own impl selection picks among the overloads, and `_` for a
+  generic type's parameters (`<std::vec::Vec<_> as std::default::Default>`),
+  except the standard library's defaulted allocator and hasher.
 - **What the program sees.** The member, under the type's name. The trait's
   name appears in no diagnostic, hover or completion; the marker is the
   stub's.

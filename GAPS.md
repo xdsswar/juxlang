@@ -654,6 +654,19 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | a crate trait's `Clock.origin()`, `Clock.STEP` | `E0413`, `E0412` | through `<c3fix::Clock as c3fix::Tick>` |
 | `d.asSecs()` | did you mean `as_secs`, `from_secs`? | did you mean `as_secs`? |
 
+### Sweep C4 (added 2026-09-29)
+
+**47. CLOSED 2026-09-29 (ERRATA E1XX-SWEEPC4).** ~~Blanket impls and `FromIterator` were not on stubs, a failed interface read printed the toolchain's words, and a prefix outranked a typo.~~ A blanket impl of a crate's own trait gives its statics to every type the stub's recorded facts show it covers (never by guess); `FromIterator<A>` is `from_iter(Vec<A>)`; a generic type's trait call writes `_` for its parameters (`Vec.default()` now builds). A library whose interface cannot be read is reported in Jux terms ("a file it needs is in use", "it could not be downloaded", ...), keeps its cached description when it has one, and shows the toolchain's report only under `--verbose`; every stub-generation message is held to the leak detector. A one-edit typo ranks above a prefix. Std stub cache 49, crate 25. Tests: `crates/juxc-bindgen/tests/sweepc4_fixture.rs`, `bin/juxc/tests/trait_statics.rs`, `examples/trait_statics.jux`, the `stubs.rs` message tests (one a real failed read), `tests/ui/foreign_hint_member_kind` (updated by hand).
+
+| Probe | Before | Now |
+|---|---|---|
+| `Clock.make_default()` via `impl<T: Default + Clone> Maker for T` | `E0413` | through `<c4fix::Clock as c4fix::Maker>` |
+| a blanket impl over `T: Send` | nothing | nothing (a stub cannot decide `Send`) |
+| `Vec.from_iter(xs)`, `String.from_iter(cs)`, `HashMap.from_iter(pairs)` | `E0413` | a new collection |
+| `Vec.default()` | E0900 (rustc: missing generics) | an empty `Vec` |
+| a crate whose documentation fails to link (`LNK1104`) | `... link.exe failed with code 1104` | "could not read the library `printpdf`'s interface (a file it needs is in use); ..." |
+| `u32.from_strr("1")` | did you mean `from`, `from_str`, ...? | did you mean `from_str`, `from`, ...? |
+
 ---
 
 ## 4. Three streams stopped mid-flight
