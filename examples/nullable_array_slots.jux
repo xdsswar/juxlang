@@ -1,0 +1,44 @@
+// Nullable arrays, the `?` after the brackets (JUX-LANG-V1 §6.5.2): there may
+// be no array at all. Every place a type is written takes the form -- a local
+// with and without an initializer, a field, a parameter, a return -- and the
+// array a nullable slot holds is still the one array (an alias, not a copy).
+// `int?[]` is the other type: an array whose slots may be empty.
+//
+// DIFFERENTIAL: tools/java-differential/cases/153_nullable_array_slots
+
+class Holder {
+    public int[]? data = null;
+    public String[]? names;
+    public Holder() { this.names = null; }
+    public int[]? get() { return data; }
+    public void set(int[]? d) { this.data = d; }
+}
+
+public int[]? maybe(bool b) {
+    if (b) { return new int[]{1, 2}; }
+    return null;
+}
+
+public int count(int[]? xs) {
+    if (xs == null) { return -1; }
+    return xs.length;
+}
+
+public void main() {
+    int[]? xs;
+    xs = null;
+    print(count(xs));
+    int[]? ys = new int[3];
+    ys!![0] = 7;
+    print(count(ys) + " " + ys!![0]);
+    int?[] slots = new int?[2];
+    print(slots[0] == null);
+    int?[]? both = null;
+    print(both == null);
+    var h = new Holder();
+    h.set(ys);
+    h.get()!![1] = 9;
+    print(ys!![1]);
+    print(count(maybe(true)) + " " + count(maybe(false)));
+    print(h.names == null);
+}
