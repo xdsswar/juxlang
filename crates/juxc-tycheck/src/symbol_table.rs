@@ -763,9 +763,10 @@ impl SymbolTable {
             return generic_args.get(i).cloned();
         }
         // Another type, named as the stub spells it -- unqualified, and so
-        // read in the declaring type's own package.
+        // read in the declaring type's own package, or qualified when its
+        // family shares the simple name (ERRATA E148).
         let package = fqn.rsplit_once('.').map(|(pkg, _)| pkg).unwrap_or("");
-        let qualified = if package.is_empty() {
+        let qualified = if package.is_empty() || output.contains('.') {
             output
         } else {
             format!("{package}.{output}")
@@ -1086,7 +1087,13 @@ impl SymbolTable {
         }
         let bare = class_name.rsplit('.').next().unwrap_or(class_name);
         let derefs: Vec<String> = marker_strings(&class.annotations, "rustderefs");
+        // A marker names a type or trait by its simple name, or by its
+        // qualified one when its crate family shares the simple name (ERRATA
+        // E148), so both spellings of what the class has are held.
         let mut have: HashSet<String> = implements_chain.iter().map(|s| s.to_string()).collect();
+        let simple: Vec<String> =
+            have.iter().filter_map(|h| h.rsplit_once('.').map(|(_, b)| b.to_string())).collect();
+        have.extend(simple);
         let mut out: Vec<(&'a str, &'a InterfaceSig)> = Vec::new();
         let mut taken: HashSet<&'a str> = HashSet::new();
         // Deterministic: interfaces in key order.
@@ -1102,11 +1109,12 @@ impl SymbolTable {
                 let by_shape = iface
                     .implemented_by
                     .iter()
-                    .any(|shape| shape == bare || derefs.iter().any(|d| d == shape));
+                    .any(|shape| shape == bare || shape == class_name || derefs.iter().any(|d| d == shape));
                 let by_blanket = iface.blanket_over.iter().any(|b| have.contains(b));
                 if by_shape || by_blanket {
                     taken.insert(key.as_str());
                     have.insert(key.rsplit('.').next().unwrap_or(key.as_str()).to_string());
+                    have.insert(key.to_string());
                     out.push((key.as_str(), *iface));
                     grew = true;
                 }
@@ -1844,6 +1852,9 @@ pub struct EnumSig {
     /// Read like a class's fields (`this.mass`, a bare `mass`, `p.mass`), and
     /// set only by the constructor.
     pub fields: HashMap<String, FieldSig>,
+    /// The enum's `const` fields (implicitly static), by name: with the
+    /// variants and the static methods, everything `E.NAME` may name.
+    pub constants: HashMap<String, FieldSig>,
     /// The constructors a variant's arguments call (§7.7.4).
     pub constructors: Vec<ConstructorSig>,
     /// Span of the whole declaration.
@@ -5753,6 +5764,7 @@ fn insert_enum(
             is_external,
             rust_path: rust_path_annotation(&enum_decl.annotations),
             fields: enum_decl.fields.iter().map(|f| (f.name.text.clone(), field_sig(f))).collect(),
+            constants: enum_decl.constants.iter().map(|f| (f.name.text.clone(), field_sig(f))).collect(),
             constructors: enum_decl
                 .constructors
                 .iter()

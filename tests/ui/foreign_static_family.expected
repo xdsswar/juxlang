@@ -1,0 +1,6 @@
+foreign_static_family\app.jux:9:13: [E0413] error: no static method `fromSecs` on class `rust.fam.Clock` -- did you mean `from_secs`?
+foreign_static_family\app.jux:10:13: [E0412] error: no static field `EPOHC` on class `rust.fam.Clock` -- did you mean `EPOCH`?
+foreign_static_family\app.jux:11:13: [E0413] error: no static method `from_sec` on class `rust.fam.Clock` -- did you mean `from_secs`?
+foreign_static_family\app.jux:12:13: [E0413] error: no static method `withMargin` on class `rust.fam.inner.Frame` -- did you mean `with_margin`?
+foreign_static_family\app.jux:13:13: [E0413] error: no static method `nonee` on class `rust.fam.inner.Frame` -- did you mean `none`?
+foreign_static_family\app.jux:14:13: [E0412] error: no variant or constant `Fastt` on enum `rust.fam.Mode` -- did you mean `Fast`?

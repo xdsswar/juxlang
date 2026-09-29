@@ -600,6 +600,34 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `await Worker.spawn(() -> build())` returning a `Vec` | E0900 (rustc E0277) | works |
 | `other.items.push(x)` in a worker-shared class, `other` not shared | E0900 (rustc E0599) | works |
 | a shared-tier collection linked across erasure, written by a worker | (could not arise) | erased code sees the write |
+### Crate-boundary sweep B (added 2026-09-28)
+
+**43. CLOSED 2026-09-28 (ERRATA E148).** ~~The leftovers of the crate-boundary work (E128, E132, E134).~~ A library's error is the closest Jux exception by what it is, not by a table: an `io::Error` by its kind (`AccessDeniedException`, `FileAlreadyExistsException`, `SocketTimeoutException`, `InterruptedIOException`, `EOFException`, `FormatException`, all new `IOException`s, Java's names; `IllegalArgumentException`, `UnsupportedOperationException`), Rust's own errors by type, a crate's error by the shape bindgen reads off its rustdoc (a timeout, a serde-shaped or format error, a `FromStr` error of a number or of anything else, a not-found name, one built from an `io::Error`, and per enum variant), then by the errors it wraps; `LibraryException` only when nothing is closer. A library's error value prints as that exception (`NumberFormatException: invalid digit found in string`) wherever it is shown: printed, interpolated, joined, inside a `Result` (which now prints for an error with no `Clone` too) and in generic code. Two items of one simple name inside one crate (naga's `Error`s) are each declared in the nested package of their module (`rust.naga.front.wgsl.Error`), every signature names the exact one, and two imports of them are `E0303`. The names inside bindgen's string markers and `implements` clauses are qualified the way signatures are, and their readers resolve qualified names. A stack overflow on a crate's own thread running a Jux callback is Jux's report on Linux and macOS (the callback records its thread; an unrecorded thread is judged by its stack pointer at the fault), run on Linux (WSL, static musl) and Windows, type-checked for macOS and aarch64. Found and fixed on the way: a fully-qualified crate function call or foreign enum variant (`crate::rust::...`, E0900), a qualified class slot read as the trait of its last segment, a borrowed static-call argument cloned, a foreign free function looked up by last segment, a `catch` of a crate's error enum that never matched. `rust.std` stays flat (§G.6.2.1). Tests: `crates/juxc-bindgen/tests/sweepb_fixture.rs` (real rustdoc JSON of a fixture crate in naga's shape), `bin/juxc/tests/crate_errors.rs` (built and run against that crate), `foreign_errors_are_classified_by_their_shape`, `examples/foreign_errors_by_shape.jux`, `examples/runtime_library_error_by_shape.jux`, `examples/runtime_stack_overflow_crate_thread.jux`, `bin/jux/tests/runtime_failures.rs`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `catch (AccessDeniedException e)` around a crate write whose error wraps a `PermissionDenied` `io::Error` | `LibraryException` | caught |
+| a crate's `FromStr` error of a `Decimal` / of a `Version` | `LibraryException` | `NumberFormatException` / `IllegalArgumentException` |
+| a crate's `enum LookupError { KeyNotFound(..), Poisoned }` | `LibraryException` | `NoSuchElementException` / `LibraryException` |
+| `print(parse("x1"))` for a `Result<int, ParseIntError>` | `Err(ParseIntError(kind: InvalidDigit))` | `Err(NumberFormatException: invalid digit found in string)` |
+| `print($"${r}")` for a `Result<String, rust.std.Error>` | `<Result>` | `Err(FileNotFoundException: ...)` |
+| `Module.describe_parse_error(e)` taking naga-shaped `front::wgsl::Error` | the signature took the first `Error` | `&rust.sbfix.front.wgsl.Error` |
+| `rust.sbfix.front.spv.parse(words)`, `rust.sbfix.front.spv.Error.Truncated` | E0900 | work |
+| a lambda recursing forever on a `std::thread::Builder` thread (Linux) | `thread 'library' has overflowed its stack`, status 134 | `panic: stack overflow: ...`, status 101 |
+
+### Sweep C2 (added 2026-09-29)
+
+**44. CLOSED 2026-09-29 (ERRATA E149).** ~~A foreign static that does not exist reached rustc.~~ `Duration.ofMillis(5)` passed the checker and failed as E0900 (rustc E0425). Every static, constant and enum variant reached through a type is now checked against the type's declared members, however it was named (a bare `rust.std` name, an import, an import alias, a crate family's nested package, a qualified name), with a did-you-mean that knows Java spellings of Rust names. An enum's `E.NAME` was never checked, a Jux enum's included; it is `E0412` now. The safe type-path switch covers every type position, signatures included (E146's documented limit). Tests: `tests/ui/foreign_static_unknown`, `foreign_instance_method_unknown`, `foreign_constant_unknown`, `foreign_enum_variant_unknown`, `foreign_static_family` (hand-written stubs), `bin/jux/tests/safe_mode.rs`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `Duration.ofMillis(5)` (no import) | E0900 (rustc E0425) | `E0413` -- did you mean `from_millis`? |
+| `Duration.MILLIS` (no import) | E0900 | `E0412` -- did you mean `MILLISECOND`? |
+| `rust.fam.inner.Clock.from_sec(2)` (a family alias) | E0900 | `E0413` -- did you mean `from_secs`? |
+| `FpCategory.Nann` | E0900 | `E0412` -- did you mean `Nan`? |
+| `Color.Blu` on a Jux enum | E0900 | `E0412` |
+| `Timer.fromSecs(3)` through `import ... Clock as Timer` | `E0413` | `E0413` -- did you mean `from_secs`? |
+| a signature naming another package's type, its root lost (hook `path`) | not rescued | heals |
 
 **42b. CLOSED 2026-09-29 (ERRATA E1XX-SWEEPA2).** ~~A worker got a copy of a captured collection, and an app hid a borrow conflict.~~ The type of every value a `Worker.spawn` closure captures joins E147's shared tier, so a captured collection or array crosses as its own thread-safe handle: the worker and the spawning code hold one collection, as in Java. `E0702` keeps no copy case (it stays for function values, interface handles, streams, `ref` bindings and what holds them); a collection of collections and a record holding a collection are transferable. A for-each head whose method-call chain reads a field through the object's cell (`for (var raw : text.lines())` in a method) binds that read before the loop instead of holding the cell for the whole loop, and a loop label stays on the loop. `tests/apps.rs` runs every app under `JUX_SELFCHECK=1`. Tests: `examples/worker_captures_shared.jux` (Java differential case 161), `examples/foreach_head_guard.jux` (case 160), `examples/worker_captures.jux`.
 

@@ -78,9 +78,15 @@ const EXCLUDED: &[(&str, &str)] = &[
     // specific (3 on Windows, SIGABRT elsewhere). `tests/examples_ffi.rs`
     // checks what it prints and that it did not finish.
     ("ffi_unwind_barrier", "aborts by design; covered by tests/examples_ffi.rs"),
-    // A stack overflow is reported in Jux terms on Windows only; elsewhere the
-    // runtime's own report stands, so there is no one output to pin.
+    // A stack overflow is reported in Jux terms on Windows, Linux and macOS
+    // (x86_64, aarch64); on any other target the runtime's own report stands,
+    // so there is no one output to pin.
     ("runtime_stack_overflow", "output differs by platform; covered by tests/runtime_failures.rs"),
+    // The same, on a thread `std::thread::spawn` started for a Jux lambda.
+    (
+        "runtime_stack_overflow_crate_thread",
+        "output differs by platform; covered by tests/runtime_failures.rs",
+    ),
 ];
 
 /// How many examples to compile at once.

@@ -6262,6 +6262,14 @@ impl RustEmitter {
     /// for the method's whole signature and body: `T` there is the method's
     /// (ERRATA E135).
     pub(crate) fn emit_method(&mut self, method: &FnDecl) {
+        // The declaration is the code being emitted while its signature is:
+        // the safe level's type-path switch (sweep C2) asks for it there.
+        let prev = self.body_span.replace(method.span);
+        self.emit_method_at_level(method);
+        self.body_span = prev;
+    }
+
+    fn emit_method_at_level(&mut self, method: &FnDecl) {
         // An override of a supertype method whose type parameter is bounded
         // by the supertype's own parameter lowers its bound as the trait does
         // (ERRATA E137).

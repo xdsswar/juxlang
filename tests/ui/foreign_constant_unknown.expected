@@ -1,0 +1,2 @@
+foreign_constant_unknown.jux:4:13: [E0412] error: no static field `MILLIS` on class `rust.std.Duration` -- did you mean `MILLISECOND`?
+foreign_constant_unknown.jux:5:13: [E0412] error: no static field `Zero` on class `rust.std.Duration` -- did you mean `ZERO`?

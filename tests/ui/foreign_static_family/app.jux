@@ -1,0 +1,17 @@
+// A foreign static reached through an import alias, or through a crate
+// family's nested package (ERRATA E132, E133), is checked against the stub,
+// as one reached through its own name is (sweep C2).
+import rust.fam.Clock as Timer;
+import rust.fam.Mode;
+import rust.fam.inner.Frame;
+
+void main() {
+    var a = Timer.fromSecs(3);
+    var b = Timer.EPOHC;
+    var c = rust.fam.inner.Clock.from_sec(2);
+    var d = rust.fam.inner.Frame.withMargin(4);
+    var e = Frame.nonee();
+    var f = Mode.Fastt;
+    var ok = Timer.from_secs(1);
+    print(ok.as_secs());
+}

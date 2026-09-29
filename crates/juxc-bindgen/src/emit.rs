@@ -141,6 +141,16 @@ fn render_type(out: &mut String, t: &StubType) {
     if t.is_tuple_struct {
         let _ = writeln!(out, "@RustTuple");
     }
+    // The Jux exception an error of this type surfaces as (Bindgen G.5.4),
+    // with the definition path the running program knows the type by.
+    if let Some(shape) = &t.error {
+        let _ = writeln!(out, "@RustError(\"{}\")", shape.class);
+        let _ = writeln!(out, "@RustTypeName(\"{}\")", shape.type_name);
+        if !shape.variants.is_empty() {
+            let list: Vec<String> = shape.variants.iter().map(|(v, c)| format!("{v}:{c}")).collect();
+            let _ = writeln!(out, "@RustErrorVariants(\"{}\")", list.join(";"));
+        }
+    }
     // The variants written with NAMED fields (`Op::SetFillColor { col }`),
     // each with its field names: `SetFillColor:col;MoveTo:x,y`. The names ride
     // here rather than in the payload because a Rust field may be named like a

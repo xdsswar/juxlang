@@ -1344,7 +1344,7 @@ impl RustEmitter {
         }
         if ctor_is_foreign_result {
             self.w
-                .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e))");
+                .push_str(").unwrap_or_else(|__e| crate::__jux_raise!(__e))");
         }
         // `new Path("a/b")`: Rust's `Path::new` hands back a `&Path`, and the
         // value Jux keeps is the owned form (see `external_owned_form`).
@@ -1809,6 +1809,19 @@ impl RustEmitter {
                     self.w.push_str(".to_string()");
                     return;
                 }
+                // A foreign function named in full (`rust.naga.front.wgsl.
+                // parse_str`, the callee of a re-shaped qualified call) is its
+                // real Rust path (ERRATA E148).
+                if qn.segments.len() > 1 {
+                    let joined = qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+                    let foreign = joined.starts_with("rust.") || joined.starts_with("c.") || joined.starts_with("cpp.");
+                    if let Some(real) =
+                        self.symbols.functions.get(&joined).filter(|_| foreign).and_then(|f| f.rust_path.clone())
+                    {
+                        self.w.push_str(&real);
+                        return;
+                    }
+                }
                 // Dot-separated Jux paths become `::`-separated Rust paths.
                 // Module mapping is a TODO — for milestone 1 we emit
                 // identical structure on faith.
@@ -1874,7 +1887,7 @@ impl RustEmitter {
                     self.w.push('(');
                     self.emit_call(c);
                     self.w
-                        .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e))");
+                        .push_str(").unwrap_or_else(|__e| crate::__jux_raise!(__e))");
                 } else {
                     self.emit_call(c);
                 }
@@ -3133,6 +3146,10 @@ impl RustEmitter {
         // body doesn't inherit it. The wrapper-capture clone block is kept —
         // it gives the bare closure the same share-on-capture semantics.
         let bare = std::mem::take(&mut self.lambda_bare_target);
+        // A closure a crate calls may run on a thread the crate started: its
+        // body first records that thread's stack (once per thread), so the
+        // stack-overflow handler can tell running off it from any other fault.
+        let foreign_boundary = std::mem::take(&mut self.lambda_foreign_boundary) && bare;
         let clone_params = std::mem::take(&mut self.lambda_clone_params) && bare;
         let int_to_ordering = std::mem::take(&mut self.lambda_int_to_ordering) && bare;
         let return_slot = self.lambda_return_slot.take();
@@ -3198,6 +3215,9 @@ impl RustEmitter {
             }
         }
         self.w.push_str("| ");
+        if foreign_boundary {
+            self.w.push_str("{ crate::jux_enter_callback(); ");
+        }
         // A lambda PARAM shadows an outer `ref`/FnMut-cell local of the same
         // name inside the body — temporarily drop those names from `ref_locals`
         // so the body reads the param value directly, not `param.borrow()`
@@ -3400,6 +3420,9 @@ impl RustEmitter {
             self.w.push(')');
         }
         if clone_params {
+            self.w.push_str(" }");
+        }
+        if foreign_boundary {
             self.w.push_str(" }");
         }
         self.byref_param_names = prev_byref_names;

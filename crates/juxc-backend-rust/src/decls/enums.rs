@@ -685,9 +685,28 @@ impl RustEmitter {
         // show helper below. The bound used to be added here, and it made
         // `Maybe<int?>` an illegal type argument although `int?` is a legal
         // type (ERRATA E99, E107).
+        // Nor a `Clone` bound: printing copies nothing, and a payload of a
+        // type with no `Clone` (a library's error in a `Result<T, E>`, which
+        // is the common case: `io::Error` has none) still prints, as the Jux
+        // exception it is (ERRATA E148). Every parameter keeps `Debug`,
+        // which is what renders it.
         if !enum_decl.generic_params.is_empty() {
             let none: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let order: Vec<String> = enum_decl
+                .generic_params
+                .iter()
+                .filter(|p| !p.is_const())
+                .map(|p| p.name.text.clone())
+                .collect();
+            let display_scope = crate::decls::clone_bounds::RelaxedScope {
+                fqn: self.relaxed_scope.fqn.clone(),
+                set: order.iter().cloned().collect(),
+                order,
+                keep_debug: true,
+            };
+            let prev = std::mem::replace(&mut self.relaxed_scope, display_scope);
             self.emit_generic_params_with_bounds(&enum_decl.generic_params, &none);
+            self.relaxed_scope = prev;
         }
         self.w.push_str(" std::fmt::Display for ");
         self.w.push_str(&to_rust_ident(&enum_decl.name.text));

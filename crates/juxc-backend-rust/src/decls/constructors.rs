@@ -317,6 +317,19 @@ impl RustEmitter {
         ctor: &juxc_ast::ConstructorDecl,
         ctor_idx: usize,
     ) {
+        // The declaration is the code being emitted while its signature is:
+        // the safe level's type-path switch (sweep C2) asks for it there.
+        let prev = self.body_span.replace(ctor.span);
+        self.emit_constructor_inner(class_decl, ctor, ctor_idx);
+        self.body_span = prev;
+    }
+
+    fn emit_constructor_inner(
+        &mut self,
+        class_decl: &juxc_ast::ClassDecl,
+        ctor: &juxc_ast::ConstructorDecl,
+        ctor_idx: usize,
+    ) {
         // (Migrated to Writer indent-aware API)
         // Caller (`emit_class_decl`) is at level 0; the ctor signature
         // sits at depth 1 (inside the `impl` block), and the body at

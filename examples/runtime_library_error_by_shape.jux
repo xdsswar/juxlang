@@ -1,0 +1,10 @@
+// A library's error that nothing catches ends the program as the Jux
+// exception its shape says (Bindgen G.5.4, ERRATA E148): a missing
+// environment variable is a `NoSuchElementException`, never Rust's `VarError`.
+import rust.std.var as env_var;
+
+void main() {
+    print("before");
+    print(env_var("JUX_SWEEP_B_SURELY_NOT_SET"));
+    print("never");
+}

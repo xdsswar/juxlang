@@ -674,11 +674,13 @@ impl RustEmitter {
                 // takes when it is written in its own right (`PathBuf` is a
                 // collection): a `Path` is a value, and every use of one reads
                 // it as a value.
+                // The marker may name the owned type qualified, when its crate
+                // family shares the simple name (ERRATA E148).
                 let owned_name = juxc_ast::QualifiedName {
-                    segments: vec![juxc_ast::Ident {
-                        text: owned.clone(),
-                        span: ty.name.span,
-                    }],
+                    segments: owned
+                        .split('.')
+                        .map(|seg| juxc_ast::Ident { text: seg.to_string(), span: ty.name.span })
+                        .collect(),
                     span: ty.name.span,
                 };
                 let real = self.external_class_real_path(&owned_name).unwrap_or(owned);
@@ -756,9 +758,21 @@ impl RustEmitter {
             // outward; the lifted sibling lives in the same module,
             // so the mangled bare name resolves directly.
             let mut resolved_path: Option<String> = self.enclosing_nested_type(bare);
+            // Safe level (gap 34, sweep C2): a type the PROGRAM declares is
+            // named from the crate root in every type position, the header
+            // emitters' (a parameter, a return, a field, an impl's trait and
+            // target) included, whatever module the code sits in. The fast
+            // level names a same-package type by its bare name, and the test
+            // hook `path` drops the root from a cross-package one.
+            if resolved_path.is_none() && self.safe_here() && !self.names_a_type_param(bare) {
+                resolved_path = self
+                    .resolve_bare_type_fqn(bare)
+                    .filter(|fqn| self.fqn_is_program_type(fqn))
+                    .map(|fqn| format!("crate::{}", juxc_lex::to_rust_path(&fqn)));
+            }
             if resolved_path.is_none() {
                 if let Some(fqn) = self.resolve_bare_type_fqn(bare) {
-                    if fqn.contains('.') {
+                    if fqn.contains('.') && (self.safe_here() || !self.broken_here(crate::BreakKind::Path)) {
                         let cur_pkg = self.current_package_path();
                         let fqn_pkg = fqn
                             .rsplit_once('.')
