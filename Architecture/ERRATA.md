@@ -6467,7 +6467,7 @@ boundary is closed. GAPS.md gap 45 is closed.
 
 ---
 
-## E1XX-SWEEPC4. Blanket impls and `FromIterator` on stubs, a library's unreadable interface said in Jux terms, and closer typos first
+## E152. Blanket impls and `FromIterator` on stubs, a library's unreadable interface said in Jux terms, and closer typos first
 
 **Conflict.** E151 left four things:
 

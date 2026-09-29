@@ -76,7 +76,7 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// 48: associated functions and constants a type has through a trait impl,
 /// marked `@RustTrait` (ERRATA E151).
 /// 49: `FromIterator::from_iter` among the trait-impl statics (ERRATA
-/// E1XX-SWEEPC4).
+/// E152).
 const STD_STUB_CACHE_VERSION: u32 = 49;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
@@ -135,7 +135,7 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// 24: trait-impl associated functions and constants, `@RustTrait` (ERRATA
 /// E151).
 /// 25: `FromIterator`, and a blanket impl's statics on the types it covers
-/// (ERRATA E1XX-SWEEPC4).
+/// (ERRATA E152).
 const CRATE_STUB_CACHE_VERSION: u32 = 25;
 
 /// The first-line marker a generated crate stub must carry to be trusted.

@@ -1,4 +1,4 @@
-//! Blanket impls and `FromIterator` (ERRATA E1XX-SWEEPC4): a blanket impl of
+//! Blanket impls and `FromIterator` (ERRATA E152): a blanket impl of
 //! one of the crate's own traits gives its associated functions and
 //! constants to every type of the stub its bound is KNOWN to cover, from the
 //! stub's recorded facts, and to no other; `FromIterator<A>` is a static

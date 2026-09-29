@@ -1,6 +1,6 @@
 //! Blanket impls of a crate's own traits, whose associated functions and
 //! constants reach every type the bound covers, and `FromIterator`
-//! (ERRATA E1XX-SWEEPC4).
+//! (ERRATA E152).
 
 /// A crate trait implemented directly.
 pub trait Named {
