@@ -1,0 +1,59 @@
+// Ten thousand elements through an erased path (ERRATA E1XX-GAP40b).
+//
+// `fill` and `total` sit on a polymorphic-recursion cycle, so they are
+// compiled by erasure: their `Vec<T>` is a list of boxed values linked to the
+// caller's `Vec<Cell>` as one collection (E144). Each side keeps a copy and the
+// link knows which copies are current, so a run of accesses from one side --
+// ten thousand pushes, then ten thousand indexed reads -- costs one pass to
+// bring the other side up to date, not one pass per access. A re-copy per
+// borrow made this loop quadratic.
+
+import rust.std.*;
+
+interface Weighed { int weight(); }
+
+class Cell implements Weighed {
+    int w;
+    Cell(int w) { this.w = w; }
+    public int weight() { return w; }
+}
+
+class Wrap<T extends Weighed> implements Weighed {
+    T inner;
+    Wrap(T inner) { this.inner = inner; }
+    public int weight() { return 1 + inner.weight(); }
+}
+
+<T extends Weighed> int fill(Vec<T> into, T x, int n, int depth) {
+    if (depth > 0) {
+        var deeper = new Vec<Wrap<T>>();
+        return fill<Wrap<T>>(deeper, new Wrap<T>(x), n, depth - 1);
+    }
+    for (int i = 0; i < n; i++) {
+        into.push(x);
+    }
+    var sum = 0;
+    for (int i = 0; i < n; i++) {
+        sum += into[i].weight();
+    }
+    return sum;
+}
+
+<T extends Weighed> int total(Vec<T> xs, int depth) {
+    if (depth > 0) { return total<Wrap<T>>(new Vec<Wrap<T>>(), depth - 1); }
+    var sum = 0;
+    for (int i = 0; i < xs.len(); i++) {
+        sum += xs[i].weight();
+    }
+    return sum;
+}
+
+public void main() {
+    var cells = new Vec<Cell>();
+    print(fill<Cell>(cells, new Cell(2), 10000, 0));
+    print(cells.len());
+    print(fill<Cell>(new Vec<Cell>(), new Cell(1), 10000, 2));
+    print(total<Cell>(cells, 0));
+    cells.push(new Cell(5));
+    print(total<Cell>(cells, 0));
+}
