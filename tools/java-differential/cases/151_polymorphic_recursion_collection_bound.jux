@@ -1,5 +1,5 @@
 // A bound that holds the type parameter inside a collection, on a
-// polymorphic-recursion cycle (ERRATA E1XX-COLLREF, formerly E0438).
+// polymorphic-recursion cycle (ERRATA E144, formerly E0438).
 //
 // `pack` calls itself at an ever-larger type argument, so it is compiled by
 // erasure: at run time its `T` is one boxed type, and a `Vec<T>` it builds is

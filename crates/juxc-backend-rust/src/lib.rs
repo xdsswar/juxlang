@@ -1083,7 +1083,7 @@ pub fn jux_erased_type_id<X: 'static>(_: &X) -> std::any::TypeId {
     std::any::TypeId::of::<X>()
 }
 /// A collection seen from both sides of an erasure boundary (ERRATA
-/// E1XX-COLLREF): the erased code holds a `Vec<JuxErased>`, the code that
+/// E144): the erased code holds a `Vec<JuxErased>`, the code that
 /// knows the element type a `Vec<X>`. The typed collection is the one
 /// storage; the erased cell is kept as a mirror of it, refreshed from it
 /// each time the cell is borrowed (`pull`) and written back into it when a
@@ -1841,7 +1841,7 @@ struct RustEmitter {
     /// parameter, boxed where they are emitted (ERRATA E141).
     pub(crate) erase_on_emit: std::collections::HashMap<crate::erasure::EraseKey, crate::erasure::EraseMark>,
     /// Collection values to link into the erased slot they fill (ERRATA
-    /// E1XX-COLLREF), keyed like `erase_on_emit`.
+    /// E144), keyed like `erase_on_emit`.
     pub(crate) link_on_emit: std::collections::HashMap<crate::erasure::EraseKey, crate::erasure::LinkMark>,
     /// The expressions being boxed or unboxed right now, so the recursive
     /// emission of the value itself does not wrap it again.
@@ -5276,7 +5276,7 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("    }\n");
         w.push_str("}\n");
         // A program with an erased part links collections across the erasure
-        // boundary (ERRATA E1XX-COLLREF): a cell may be a mirror of a typed
+        // boundary (ERRATA E144): a cell may be a mirror of a typed
         // collection, refreshed when it is read. Every other program keeps
         // the plain cell, and pays nothing for the possibility.
         let links = !symbols.erasure.classes.is_empty() || !symbols.erasure.fns.is_empty();

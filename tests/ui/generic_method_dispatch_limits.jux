@@ -3,7 +3,7 @@
 // dispatch object, through an adapter when the bound names the parameter
 // (`T extends Ranked<T>`), converting the erased value at each position
 // (ERRATA E1XX-GAP39g .. E143), and linking a collection of the parameter
-// (`Rel<Vec<T>>`) so both sides share it (E1XX-COLLREF). A position holding
+// (`Rel<Vec<T>>`) so both sides share it (E144). A position holding
 // the parameter inside a FOREIGN type that is neither a Jux class nor a
 // collection (`Rel<Box<T>>`) has no conversion at all, so that bound is
 // refused (E0438).

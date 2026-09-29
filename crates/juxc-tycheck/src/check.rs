@@ -11908,7 +11908,7 @@ impl<'a> Checker<'a> {
     /// copy that is only read is indistinguishable from the original, but one
     /// that is written drops the write silently, which is the surprise §6.5.1
     /// exists to rule out. So the copy has to be asked for (`clone()`), or the
-    /// worker's result returned (ERRATA E1XX-COLLREF).
+    /// worker's result returned (ERRATA E144).
     fn check_worker_collection_write(&mut self, l: &juxc_ast::LambdaExpr, name: &str, ty: &Ty) {
         let mut inner = ty;
         while let Ty::Nullable(t) = inner {

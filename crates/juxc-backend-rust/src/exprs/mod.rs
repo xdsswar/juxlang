@@ -1370,7 +1370,7 @@ impl RustEmitter {
         // unboxed to the type the checker gave it.
         if self.erasure_active() {
             // A collection crossing the boundary is linked, not boxed (ERRATA
-            // E1XX-COLLREF).
+            // E144).
             if self.emit_linked(expr) {
                 return;
             }

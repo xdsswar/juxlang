@@ -5622,11 +5622,11 @@ depth 3), pinned by the output Java prints and differential case
 **Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10 and
 `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0438` row are amended; E142's
 remaining refusals are resolved, except the one above. GAPS.md gap 39i is
-closed. Item 3 is resolved by E1XX-COLLREF.
+closed. Item 3 is resolved by E144.
 
 ---
 
-## E1XX-COLLREF. A collection is shared on every channel, across erasure too
+## E144. A collection is shared on every channel, across erasure too
 
 **Conflict.** `JUX-LANG-V1.md` §6.5.1 says a collection is a reference on the
 same terms as a class instance: assignment, an argument, a return, a field, an

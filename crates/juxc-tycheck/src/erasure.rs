@@ -19,7 +19,7 @@
 //! it is seen. An erased value keeps each bound as a dispatch object, through
 //! an adapter when the bound names the parameter (ERRATA E142, E143), and a
 //! collection holding the parameter is linked to one storage on both sides
-//! (E1XX-COLLREF). A bound holding the parameter inside a foreign type that
+//! (E144). A bound holding the parameter inside a foreign type that
 //! is neither a Jux class nor a collection has no conversion, and such a
 //! cycle is `E0438`.
 
@@ -142,7 +142,7 @@ pub fn plan(symbols: &SymbolTable) -> Erasure {
     // boxing site, which knows the value's type, keeps it as the bound's
     // dispatch object too. A bound that is not a fixed type (one naming a
     // type parameter, `T extends Comparable<T>`) is kept through an adapter
-    // (E143), and a collection of the parameter is linked (E1XX-COLLREF); a
+    // (E143), and a collection of the parameter is linked (E144); a
     // foreign type holding it that is neither is `E0438`.
     let grower = fns.iter().next().cloned().or_else(|| closure.unbounded.values().next().cloned()).unwrap_or_default();
     let mut refused: Vec<(String, String, juxc_ast::TypeParam)> = Vec::new();
@@ -285,7 +285,7 @@ fn collect_classes_naming(
 /// through an adapter when it is a Jux interface at the declaration's
 /// parameters (`T extends Ranked<T>`), each argument a parameter, a type
 /// with none, a Jux class or record (erased with the family), or a
-/// collection holding the parameter (linked, E1XX-COLLREF); a bound that is
+/// collection holding the parameter (linked, E144); a bound that is
 /// another parameter is the identity (ERRATA E143).
 fn erasable(p: &juxc_ast::TypeParam, params: &[juxc_ast::TypeParam], symbols: &SymbolTable) -> bool {
     if p.is_const() {
@@ -312,7 +312,7 @@ fn erasable(p: &juxc_ast::TypeParam, params: &[juxc_ast::TypeParam], symbols: &S
 /// Whether `t` holds a type parameter inside a collection (`Vec<T>`,
 /// `HashMap<String, Vec<T>>`, `T[]`): the erased code and the value see two
 /// Rust types for it, and the adapter links the two so they share one
-/// storage (ERRATA E1XX-COLLREF). Every argument of the collection is a
+/// storage (ERRATA E144). Every argument of the collection is a
 /// parameter, a type with none, a Jux class (erased with the family), or a
 /// collection of the same kind.
 pub fn linked(t: &juxc_ast::TypeRef, params: &[juxc_ast::TypeParam], symbols: &SymbolTable) -> bool {

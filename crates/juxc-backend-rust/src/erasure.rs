@@ -13,7 +13,7 @@
 //!   of those type parameters, and unboxed (`.get::<X>()`, `X` being the type
 //!   the checker gave the expression) where it is read out of one;
 //! - a COLLECTION of one of those parameters (`Vec<T>`, `T[]`) is linked
-//!   rather than boxed (ERRATA E1XX-COLLREF): the erased `Vec<JuxErased>`
+//!   rather than boxed (ERRATA E144): the erased `Vec<JuxErased>`
 //!   becomes a mirror of the typed `Vec<X>`, refreshed from it on each
 //!   borrow and written back into it when a mutable borrow ends
 //!   (`jux_link_unerase` / `jux_link_erase` in the prelude), so both sides
@@ -42,7 +42,7 @@ pub(crate) struct EraseMark {
     pub(crate) param: String,
 }
 
-/// A collection value crossing into an erased slot (ERRATA E1XX-COLLREF):
+/// A collection value crossing into an erased slot (ERRATA E144):
 /// the slot's declared type, the value's own type, the slot's type
 /// parameters (erased), and what each of them keeps when an element is
 /// boxed.
@@ -318,7 +318,7 @@ impl RustEmitter {
             self.erase_on_emit.insert(Self::erase_key(arg), EraseMark { written, bounds, decl_params, param });
         }
         // A collection of the parameter (`Vec<T> acc`) is the same collection
-        // on both sides, linked rather than copied (ERRATA E1XX-COLLREF).
+        // on both sides, linked rather than copied (ERRATA E144).
         let decl_params: Vec<String> = callee.bounds.keys().cloned().collect();
         for (i, arg) in call.args.iter().enumerate() {
             let Some(slot) = callee.params.get(i).filter(|t| self.link_reaches(t, &callee.erased)).cloned() else {
@@ -361,7 +361,7 @@ impl RustEmitter {
     }
 
     /// Emit `expr`, whose collection crosses an erasure boundary, linked to
-    /// the form on the other side (ERRATA E1XX-COLLREF): into the erased
+    /// the form on the other side (ERRATA E144): into the erased
     /// slot `mark.slot` when it is marked in `link_on_emit`, out of one into
     /// its typed form when [`Self::erased_link_read`] says so. `false` when
     /// neither applies.
@@ -494,7 +494,7 @@ impl RustEmitter {
                 .insert(Self::erase_key(arg), EraseMark { written, bounds, decl_params: params.clone(), param });
         }
         // A collection of the class's parameters is linked, not copied
-        // (ERRATA E1XX-COLLREF).
+        // (ERRATA E144).
         let bounds: std::collections::HashMap<String, Vec<TypeRef>> =
             params.iter().map(|p| (p.clone(), self.erased_class_param_bounds(&key, p))).collect();
         for (i, arg) in n.args.iter().enumerate() {
@@ -877,7 +877,7 @@ impl RustEmitter {
     }
 
     /// Where the type parameter `a` of a bound sits for the adapter: the
-    /// parameter itself, a collection holding it (ERRATA E1XX-COLLREF), or
+    /// parameter itself, a collection holding it (ERRATA E144), or
     /// neither.
     pub(crate) fn pos_of(&self, a: &TypeRef, params: &[String]) -> Pos {
         if is_bare_param(a, params) && !a.nullable {
@@ -941,7 +941,7 @@ impl RustEmitter {
     }
 
     /// A closure converting one value of the linked shape `slot` between its
-    /// erased form and `typed` (ERRATA E1XX-COLLREF): erased to typed when
+    /// erased form and `typed` (ERRATA E144): erased to typed when
     /// `to_typed`, typed to erased otherwise. `leaves` are the names in
     /// `slot` that the erased side holds as `JuxErased`. A collection is
     /// converted by LINKING it, so both sides share its one storage; an
@@ -1489,7 +1489,7 @@ pub(crate) enum Pos {
     /// No parameter, or one held inside a Jux class, which is erased with
     /// the family: the same Rust type on both sides.
     Kept,
-    /// The parameter inside a collection (`Vec<T>`, ERRATA E1XX-COLLREF):
+    /// The parameter inside a collection (`Vec<T>`, ERRATA E144):
     /// the erased side and the value's side are two Rust types for one
     /// collection, linked to one storage. `shape` is the argument with the
     /// parameters it holds renamed `__JuxL0`, `__JuxL1`, … in order of first

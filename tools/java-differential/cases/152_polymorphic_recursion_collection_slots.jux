@@ -1,5 +1,5 @@
 // A collection of an erased type parameter crossing into or out of the
-// erased part of a program (ERRATA E1XX-COLLREF).
+// erased part of a program (ERRATA E144).
 //
 // A function on a polymorphic-recursion cycle is compiled by erasure, so its
 // `Vec<T>` is a list of boxed values: a different Rust list from the caller's

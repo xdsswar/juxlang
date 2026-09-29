@@ -1,5 +1,5 @@
 // A worker gets its own copy of a captured collection or array (§18.2), so a
-// write to it would never reach the caller's: E0702 (ERRATA E1XX-COLLREF).
+// write to it would never reach the caller's: E0702 (ERRATA E144).
 // Reading the copy is fine, and so is writing a copy the closure asked for.
 import rust.std.*;
 

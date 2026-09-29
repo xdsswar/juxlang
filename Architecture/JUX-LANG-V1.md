@@ -1165,14 +1165,14 @@ collection or array by value (JUX-ASYNC-ADDENDUM §18.2), because a handle
 cannot cross threads. A copy that is only read cannot be told from the
 original, so the closure may read it freely; a write to it would be lost
 without a word, so it is `E0702`. Return what the worker computes, or ask for
-the copy (`var mine = xs.clone();`) and write that (`ERRATA.md` E1XX-COLLREF).
+the copy (`var mine = xs.clone();`) and write that (`ERRATA.md` E144).
 
 **Across erasure the collection is still one collection.** A function on a
 polymorphic-recursion cycle is compiled by erasure (JUX-TYPE-SYSTEM-ADDENDUM
 §T.4.6), so its `Vec<T>` and a caller's `Vec<Item>` are two Rust types. Where
 one meets the other -- an argument, a return, a field, a bound's method -- the
 two are linked to one storage, never copied: a write through either is seen
-through the other (`ERRATA.md` E1XX-COLLREF).
+through the other (`ERRATA.md` E144).
 
 #### 6.5.2. Arrays Are Reference Types
 
