@@ -2887,6 +2887,19 @@ impl<'a> Parser<'a> {
             }
             _ => return None,
         }
+        // The dotted segments of a qualified name BEFORE its generic
+        // arguments (`rust.std.Range<u32>`, which bindgen writes for a type
+        // whose simple name its crate shares, ERRATA E1XX-SWEEPB); scanned
+        // only after them, the `<` after `rust` ended the type there and the
+        // method was read as a field.
+        while matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Dot))
+            && matches!(
+                self.tokens.get(i + 1).map(|t| &t.kind),
+                Some(TokenKind::Ident(_))
+            )
+        {
+            i += 2;
+        }
         // Generic args `<…>` (glued `>>` closes two levels).
         if matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Lt)) {
             i += 1;

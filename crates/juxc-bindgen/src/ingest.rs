@@ -589,8 +589,7 @@ fn plan_family_clashes(
         }
     }
 
-    let mut out = FamilyClashes::default();
-    out.declared = types.keys().cloned().collect();
+    let mut out = FamilyClashes { declared: types.keys().cloned().collect(), ..FamilyClashes::default() };
     for (name, cands) in types {
         if cands.len() < 2 {
             continue;
