@@ -2300,6 +2300,12 @@ struct RustEmitter {
     /// `Rc<dyn Fn>`, since `impl Fn`/`FnMut`/`FnOnce` accept a bare closure.
     /// Take-and-cleared by [`Self::emit_lambda`].
     pub(crate) lambda_bare_target: bool,
+    /// Set with [`Self::lambda_bare_target`] when the lambda is handed to a
+    /// crate (a foreign function's closure parameter), which may run it on a
+    /// thread of its own: the body starts with `crate::jux_enter_callback()`,
+    /// which records that thread's stack the first time it runs Jux code, so a
+    /// stack overflow there is reported in Jux terms (Linux and macOS).
+    pub(crate) lambda_foreign_boundary: bool,
     /// Set with [`Self::lambda_bare_target`] when the foreign closure slot is
     /// called with references (`filter`'s `&Item`): the lambda clones each
     /// argument out, so its body sees the owned values a Jux lambda takes.
@@ -7188,8 +7194,11 @@ mod jux_stack_overflow {
             AddVectoredExceptionHandler(1, handler);
         }
     }
-    /// Every thread is covered by the one vectored handler.
+    /// Every thread is covered by the one vectored handler, a crate's own
+    /// threads included.
     pub fn enter_thread() {}
+    #[inline(always)]
+    pub fn enter_callback() {}
 }
 /// Linux and macOS (gap 38): the kernel raises `SIGSEGV` (or `SIGBUS`) when a
 /// thread runs off the end of its stack. Each thread that runs Jux code
@@ -7227,6 +7236,21 @@ mod jux_stack_overflow {
         const RLIM_INFINITY: u64 = u64::MAX;
         /// `si_addr`: after three `int`s, padded to the union's alignment.
         pub const SI_ADDR: usize = 16;
+        /// The faulting thread's stack pointer, read from the `ucontext_t`
+        /// the handler is given (the kernel's layout, which glibc and musl
+        /// share). x86_64: `uc_flags`, `uc_link` and the 24-byte `uc_stack`
+        /// put `uc_mcontext.gregs` at 40, and `REG_RSP` is `gregs[15]`.
+        #[cfg(target_arch = "x86_64")]
+        pub unsafe fn stack_pointer(context: *const u8) -> usize {
+            std::ptr::read_unaligned(context.add(40 + 15 * 8) as *const usize)
+        }
+        /// aarch64: after `uc_flags`, `uc_link`, `uc_stack` and the 128-byte
+        /// `uc_sigmask`, `uc_mcontext` is aligned to 16 (176); in it
+        /// `fault_address` and `regs[31]` come before `sp`.
+        #[cfg(target_arch = "aarch64")]
+        pub unsafe fn stack_pointer(context: *const u8) -> usize {
+            std::ptr::read_unaligned(context.add(176 + 8 + 31 * 8) as *const usize)
+        }
         #[repr(C)]
         pub struct SigAction {
             pub handler: usize,
@@ -7289,6 +7313,22 @@ mod jux_stack_overflow {
         /// `si_addr`: after `si_signo`, `si_errno`, `si_code`, `si_pid`,
         /// `si_uid` and `si_status`.
         pub const SI_ADDR: usize = 24;
+        /// The faulting thread's stack pointer. `ucontext_t` holds a pointer
+        /// to its machine context at 48 (after `uc_onstack`, `uc_sigmask`,
+        /// the 24-byte `uc_stack`, `uc_link` and `uc_mcsize`); the context
+        /// starts with the 16-byte exception state, then the thread state.
+        /// x86_64: `rsp` is its eighth register.
+        #[cfg(target_arch = "x86_64")]
+        pub unsafe fn stack_pointer(context: *const u8) -> usize {
+            let mcontext = std::ptr::read_unaligned(context.add(48) as *const *const u8);
+            if mcontext.is_null() { 0 } else { std::ptr::read_unaligned(mcontext.add(16 + 7 * 8) as *const usize) }
+        }
+        /// arm64: `sp` follows `x[29]`, `fp` and `lr`.
+        #[cfg(target_arch = "aarch64")]
+        pub unsafe fn stack_pointer(context: *const u8) -> usize {
+            let mcontext = std::ptr::read_unaligned(context.add(48) as *const *const u8);
+            if mcontext.is_null() { 0 } else { std::ptr::read_unaligned(mcontext.add(16 + 29 * 8 + 16) as *const usize) }
+        }
         #[repr(C)]
         pub struct SigAction {
             pub handler: usize,
@@ -7349,10 +7389,31 @@ mod jux_stack_overflow {
     pub fn is_overflow(addr: usize, (low, top): (usize, usize)) -> bool {
         top != 0 && addr < top && addr >= low.saturating_sub(BELOW)
     }
+    /// How near the faulting thread's stack pointer a fault is its stack
+    /// running out, for a thread whose stack was never recorded. Running off
+    /// a stack faults at the stack pointer or within the frame being set up
+    /// (a frame larger than a page is probed a page at a time, from the top
+    /// down), and memory that close to the stack pointer is either the stack
+    /// itself, which never faults, or the guard below it.
+    const NEAR_SP: usize = 64 << 10;
+    /// Whether a fault at `addr`, on a thread whose stack pointer was `sp`,
+    /// is that thread's stack running out.
+    pub fn is_overflow_near(addr: usize, sp: usize) -> bool {
+        sp != 0 && addr != 0 && addr >= sp.saturating_sub(NEAR_SP) && addr <= sp.saturating_add(NEAR_SP)
+    }
     unsafe extern "C" fn handler(signal: i32, info: *mut u8, context: *mut u8) {
         let addr = if info.is_null() { 0 } else { std::ptr::read_unaligned(info.add(sys::SI_ADDR) as *const usize) };
         let bounds = STACK.try_with(|c| c.get()).unwrap_or((0, 0));
-        if is_overflow(addr, bounds) {
+        // A thread whose stack nobody recorded (one a crate started, running
+        // code that never reached a Jux callback) is judged by its stack
+        // pointer at the fault, read from the signal's context: a plain
+        // memory read, so the handler stays async-signal-safe. Asking
+        // `pthread` for the thread's stack here is not: glibc's
+        // `pthread_getattr_np` allocates (the thread's CPU set, and on the
+        // main thread it reads `/proc/self/maps`), and macOS's
+        // `pthread_get_stacksize_np` may take the thread-list lock.
+        let unknown_overflow = bounds.1 == 0 && !context.is_null() && is_overflow_near(addr, sys::stack_pointer(context));
+        if is_overflow(addr, bounds) || unknown_overflow {
             write(2, MESSAGE.as_ptr(), MESSAGE.len());
             _exit(101);
         }
@@ -7388,9 +7449,20 @@ mod jux_stack_overflow {
             }
         }
     }
-    /// Record a thread the program started.
+    /// Record a thread the program started. Idempotent: a thread already
+    /// recorded (the main thread, a `Worker` entering a second time, a crate
+    /// thread that ran a callback before) keeps what it has.
     pub fn enter_thread() {
-        record(false);
+        if STACK.try_with(|c| c.get().1 == 0).unwrap_or(false) {
+            record(false);
+        }
+    }
+    /// The first thing a closure handed to a crate runs: the crate may run it
+    /// on a thread of its own, which nothing else would record. After the
+    /// first call on a thread this is one thread-local read.
+    #[inline]
+    pub fn enter_callback() {
+        enter_thread();
     }
     pub fn install() {
         record(true);
@@ -7415,11 +7487,20 @@ mod jux_stack_overflow {
 mod jux_stack_overflow {
     pub fn install() {}
     pub fn enter_thread() {}
+    #[inline(always)]
+    pub fn enter_callback() {}
 }
 /// Called first on every thread the program starts that runs Jux code (a
 /// `Worker`), so a stack overflow there is reported like one on `main`.
 pub fn jux_enter_thread() {
     jux_stack_overflow::enter_thread();
+}
+/// Called first in every closure the program hands to a crate, which may run
+/// it on a thread the crate started: that thread's stack is recorded the
+/// first time, so a stack overflow there is reported like one on `main`.
+#[inline]
+pub fn jux_enter_callback() {
+    jux_stack_overflow::enter_callback();
 }
 "##);
         // `now_ms()` helper — wall-clock reading in milliseconds
@@ -7610,6 +7691,7 @@ pub fn jux_enter_thread() {
             pattern_depth: 0,
             pattern_string_guards: Vec::new(),
             lambda_bare_target: false,
+            lambda_foreign_boundary: false,
             lambda_clone_params: false,
             lambda_int_to_ordering: false,
             lambda_return_slot: None,

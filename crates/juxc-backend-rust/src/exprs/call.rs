@@ -3996,6 +3996,7 @@ impl RustEmitter {
             // params (not external) keep the `Rc` representation.
             if self.callee_param_is_foreign_fn(&call.callee, i) {
                 self.lambda_bare_target = true;
+                self.lambda_foreign_boundary = true;
                 self.lambda_clone_params = self.callee_closure_takes_refs(&call.callee, i);
                 self.lambda_int_to_ordering = self.callee_closure_returns_ordering(&call.callee, i);
             }
@@ -7793,6 +7794,7 @@ impl RustEmitter {
         // which does not implement `FnMut`.
         if matches!(arg, Expr::Lambda(_)) && self.callee_param_is_foreign_fn(&call.callee, i) {
             self.lambda_bare_target = true;
+            self.lambda_foreign_boundary = true;
             self.lambda_clone_params = self.callee_closure_takes_refs(&call.callee, i);
             self.lambda_int_to_ordering = self.callee_closure_returns_ordering(&call.callee, i);
         }

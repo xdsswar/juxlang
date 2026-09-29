@@ -81,6 +81,11 @@ const EXCLUDED: &[(&str, &str)] = &[
     // A stack overflow is reported in Jux terms on Windows only; elsewhere the
     // runtime's own report stands, so there is no one output to pin.
     ("runtime_stack_overflow", "output differs by platform; covered by tests/runtime_failures.rs"),
+    // The same, on a thread `std::thread::spawn` started for a Jux lambda.
+    (
+        "runtime_stack_overflow_crate_thread",
+        "output differs by platform; covered by tests/runtime_failures.rs",
+    ),
 ];
 
 /// How many examples to compile at once.

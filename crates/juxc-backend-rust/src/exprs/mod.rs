@@ -3176,6 +3176,10 @@ impl RustEmitter {
         // body doesn't inherit it. The wrapper-capture clone block is kept —
         // it gives the bare closure the same share-on-capture semantics.
         let bare = std::mem::take(&mut self.lambda_bare_target);
+        // A closure a crate calls may run on a thread the crate started: its
+        // body first records that thread's stack (once per thread), so the
+        // stack-overflow handler can tell running off it from any other fault.
+        let foreign_boundary = std::mem::take(&mut self.lambda_foreign_boundary) && bare;
         let clone_params = std::mem::take(&mut self.lambda_clone_params) && bare;
         let int_to_ordering = std::mem::take(&mut self.lambda_int_to_ordering) && bare;
         let return_slot = self.lambda_return_slot.take();
@@ -3241,6 +3245,9 @@ impl RustEmitter {
             }
         }
         self.w.push_str("| ");
+        if foreign_boundary {
+            self.w.push_str("{ crate::jux_enter_callback(); ");
+        }
         // A lambda PARAM shadows an outer `ref`/FnMut-cell local of the same
         // name inside the body — temporarily drop those names from `ref_locals`
         // so the body reads the param value directly, not `param.borrow()`
@@ -3443,6 +3450,9 @@ impl RustEmitter {
             self.w.push(')');
         }
         if clone_params {
+            self.w.push_str(" }");
+        }
+        if foreign_boundary {
             self.w.push_str(" }");
         }
         self.byref_param_names = prev_byref_names;
