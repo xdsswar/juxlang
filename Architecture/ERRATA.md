@@ -6246,7 +6246,7 @@ amended. No diagnostic code is added. GAPS.md "Sweep B" is closed.
 
 ---
 
-## E1XX-SWEEPC2. A foreign type's statics, constants and variants are checked, and the safe level roots every type path
+## E149. A foreign type's statics, constants and variants are checked, and the safe level roots every type path
 
 **Conflict.** `Duration.ofMillis(5)` passed the checker and failed in rustc
 (`E0900`, rustc `E0425`): Rust's constructors are `from_millis` and
