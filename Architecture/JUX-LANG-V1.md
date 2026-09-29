@@ -1167,7 +1167,7 @@ of E145).
 a collection or array holds the caller's own (JUX-ASYNC-ADDENDUM §18.2): what
 the worker adds or stores, the caller sees, as with a list a Java thread
 captures. A copy is made only when the program asks for one (`var mine =
-xs.clone();`), here as everywhere (`ERRATA.md` E1XX-SWEEPA2, which replaces
+xs.clone();`), here as everywhere (`ERRATA.md` E150, which replaces
 the copy of E144).
 
 **Across erasure the collection is still one collection.** A function on a

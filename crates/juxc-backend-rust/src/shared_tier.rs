@@ -19,7 +19,7 @@
 //! worker also hands its result back (`await Worker.spawn(..)`), so the result
 //! type of every `Worker.spawn` counts too, and so does every value a
 //! `Worker.spawn` closure captures: the worker and the code that spawned it
-//! hold ONE collection, as two Java threads do (ERRATA E1XX-SWEEPA2).
+//! hold ONE collection, as two Java threads do (ERRATA E150).
 //!
 //! **Granularity.** A collection moves between names freely -- an argument, a
 //! return, a field store, a generic parameter, an element of another

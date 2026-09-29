@@ -2708,7 +2708,7 @@ impl RustEmitter {
         // Rust keeps the temporaries of a `for` head alive for the WHOLE loop,
         // so the object's guard was held across the body, and any write to the
         // object in it -- a call of one of its own methods that changes it --
-        // stopped with "already in use" (ERRATA E23, E1XX-SWEEPA2). The value
+        // stopped with "already in use" (ERRATA E23, E150). The value
         // read through the guard is bound first, and the loop walks what the
         // rest of the head makes of it; the binding lives as long as the loop,
         // which is what an iterator borrowing it (`lines()`) needs.

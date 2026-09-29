@@ -1,5 +1,5 @@
 // A `Worker.spawn` closure shares the collections it captures (ERRATA
-// E1XX-SWEEPA2).
+// E150).
 //
 // Before, a worker got its own copy of a captured collection or array, and a
 // write to the copy was E0702. Now the worker holds the caller's collection,

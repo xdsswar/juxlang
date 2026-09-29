@@ -112,7 +112,7 @@ fn jux(dir: &Path, args: &[String], input: &[u8]) -> Result<String, String> {
         .args(args)
         // The borrow self-check, as the example corpus runs it: a hit is a
         // latent "already in use" failure the user would have met at run
-        // time (ERRATA E23, E1XX-SWEEPA2).
+        // time (ERRATA E23, E150).
         .env("JUX_SELFCHECK", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

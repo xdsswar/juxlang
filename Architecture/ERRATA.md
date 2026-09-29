@@ -774,7 +774,7 @@ array capture, including §18.2's own `parallelSum` example over `int[] data`,
 failed in rustc, and so did a closure reaching `this` and a capture of a
 function value, an interface or a stream.
 
-**Resolution.** *(Superseded by E1XX-SWEEPA2: a captured collection is
+**Resolution.** *(Superseded by E150: a captured collection is
 shared with the worker, not copied, and none of the collection cases below
 is refused any more.)* A worker takes a captured collection or array by value, one
 level deep, as §18.2 already says for every capture: the worker gets its own
@@ -5696,7 +5696,7 @@ A probe of every channel found four places that did not:
    read a captured collection or array; a mutating method on it, or a store
    into it, is refused with the two ways to say what was meant: return the
    worker's result, or copy explicitly (`var mine = xs.clone();`).
-   *(Superseded by E1XX-SWEEPA2: the capture is shared, and the write is the
+   *(Superseded by E150: the capture is shared, and the write is the
    caller's.)*
 
 The for-each rule is unchanged: a loop walks a shallow snapshot (§6.5.1), so a
@@ -6327,7 +6327,7 @@ amended. E146's known boundary on the path switch is closed. GAPS.md gap 42
 is closed.
 
 ---
-## E1XX-SWEEPA2. A worker shares the collections it captures
+## E150. A worker shares the collections it captures
 
 **Conflict.** E27 and E144 resolution 5 gave a `Worker.spawn` closure its own
 copy of a captured collection or array, one level deep, and refused a write

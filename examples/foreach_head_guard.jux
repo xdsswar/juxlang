@@ -1,5 +1,5 @@
 // A for-each head that reads a field of the object whose method runs the loop
-// (ERRATA E1XX-SWEEPA2).
+// (ERRATA E150).
 //
 // `for (var line : text.lines())` inside a method reads `this.text` through
 // the object's cell. Rust keeps every temporary of a `for` head alive for the

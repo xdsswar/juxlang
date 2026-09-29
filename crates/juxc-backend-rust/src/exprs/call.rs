@@ -2003,7 +2003,7 @@ impl RustEmitter {
                     // A captured collection or array is in the shared tier
                     // (`shared_tier.rs`): its handle crosses as itself, an
                     // `Arc` bump, so the worker and the caller hold ONE
-                    // collection, as in Java (ERRATA E1XX-SWEEPA2).
+                    // collection, as in Java (ERRATA E150).
                     // A method's closure reaching `this` takes a clone of the
                     // handle, which the worker pass has made atomic.
                     let capture_this = matches!(call.args.first(), Some(Expr::Lambda(l)) if self.lambda_captures_this(l));

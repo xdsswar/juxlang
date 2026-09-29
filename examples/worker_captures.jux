@@ -1,5 +1,5 @@
 // What a `Worker.spawn` closure can take to another thread, and what it gets
-// (JUX-ASYNC-ADDENDUM §18.2, ERRATA E27, E1XX-SWEEPA2).
+// (JUX-ASYNC-ADDENDUM §18.2, ERRATA E27, E150).
 //
 // A worker shares what it captures, as a Java thread does. A collection or an
 // array is the caller's own, behind a thread-safe handle, so a change the

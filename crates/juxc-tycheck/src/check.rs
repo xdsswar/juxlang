@@ -12230,7 +12230,7 @@ impl Checker<'_> {
                 "a `ref` binding is a shared cell, which is task-local: copy the value into a local first, or share an `AtomicInt`".to_string()
             } else {
                 // A captured collection or array is SHARED with the worker
-                // (ERRATA E1XX-SWEEPA2): a write in the closure is a write
+                // (ERRATA E150): a write in the closure is a write
                 // to the caller's collection, so nothing more is checked.
                 match self.worker_capture_blocker(&ty, 0) {
                     Some(why) => why,
@@ -12349,7 +12349,7 @@ impl Checker<'_> {
                 if let Some((_, record)) = self.symbols.resolve_record(name) {
                     for c in &record.components {
                         // A collection component crosses as the shared handle
-                        // it is (ERRATA E1XX-SWEEPA2).
+                        // it is (ERRATA E150).
                         let Some(why) = self.symbols.typeref_share_blocker(&c.ty) else { continue };
                         return Some(format!(
                             "`{bare}.{}` holds {why}; copy the values the worker needs into locals first",
@@ -12372,7 +12372,7 @@ impl Checker<'_> {
     }
 
     /// The element type of a captured collection or array. The collection is
-    /// shared with the worker (ERRATA E1XX-SWEEPA2), so each element must
+    /// shared with the worker (ERRATA E150), so each element must
     /// itself be transferable; a collection of collections is, as its inner
     /// collections are shared the same way.
     fn worker_element_blocker(&self, element: &Ty, depth: usize) -> Option<String> {
