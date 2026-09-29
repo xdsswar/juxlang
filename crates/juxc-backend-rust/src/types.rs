@@ -699,7 +699,7 @@ impl RustEmitter {
             let handle =
                 self.collection_is_handle(&ty.name) && !std::mem::take(&mut self.plain_collection_once);
             if handle {
-                self.w.push_str("crate::JuxArr<");
+                self.w.push_str(self.coll_handle_open(&ty.name));
             }
             self.w.push_str(&real);
             if !ty.generic_args.is_empty() {

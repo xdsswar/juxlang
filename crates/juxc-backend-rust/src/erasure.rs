@@ -1075,10 +1075,13 @@ impl RustEmitter {
                 };
                 let tt = format!("{open}|__jux_lc: &{ei}| __jux_lc.iter(){}.collect::<{ti}>(){close}", map(&elem_tt));
                 let te = format!("{open}|__jux_lc: &{ti}| __jux_lc.iter(){}.collect::<{ei}>(){close}", map(&elem_te));
+                // Both handles named: the link runtime is generic over the
+                // single-threaded and the shared-tier handle (ERRATA
+                // E1XX-SWEEPA), which a closure's element types cannot pick.
                 if to_typed {
-                    format!("{open}|__jux_lh: &{eh}| crate::jux_link_unerase(__jux_lh, {tt}, {te}){close}")
+                    format!("{open}|__jux_lh: &{eh}| crate::jux_link_unerase::<{eh}, {th}, _, _>(__jux_lh, {tt}, {te}){close}")
                 } else {
-                    format!("{open}|__jux_lh: &{th}| crate::jux_link_erase(__jux_lh, {tt}, {te}){close}")
+                    format!("{open}|__jux_lh: &{th}| crate::jux_link_erase::<{eh}, {th}, _, _>(__jux_lh, {tt}, {te}){close}")
                 }
             }
         }

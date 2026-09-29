@@ -700,7 +700,12 @@ impl RustEmitter {
                 self.w.push(')');
                 return;
             }
-            self.w.push_str("std::rc::Rc::ptr_eq(&");
+            // A collection or array in the shared tier is a `JuxSync`, whose
+            // identity is its `Arc` (ERRATA E1XX-SWEEPA).
+            let shared = !left_wrapper
+                && !right_wrapper
+                && (self.expr_handle_is_sync(&b.left) || self.expr_handle_is_sync(&b.right));
+            self.w.push_str(if shared { "crate::JuxSync::ptr_eq(&" } else { "std::rc::Rc::ptr_eq(&" });
             self.emit_expr(&b.left);
             if left_wrapper {
                 self.w.push_str(".0");

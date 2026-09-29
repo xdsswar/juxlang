@@ -3873,9 +3873,6 @@ impl RustEmitter {
             if a.op.is_none() && self.erasure_active() {
                 self.mark_link_field_store(f, &a.value);
             }
-            if a.op.is_none() {
-                self.mark_sync_field_store(&a.target, &a.value);
-            }
             if a.op.is_none() && self.erased_field_slot(f) {
                 let bounds = self.erased_field_bounds(f);
                 self.erase_on_emit.insert(

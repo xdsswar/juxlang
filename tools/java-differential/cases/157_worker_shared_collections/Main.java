@@ -36,12 +36,19 @@ public class Main {
         int total = 0;
         for (String s : log) { total += s.length(); }
         System.out.println(total);
+        log.add("z");
+        System.out.println(r.count());
 
         r.items.add("main");
         List<String> items = r.items;
         System.out.println(items.size() + " " + r.items.size());
+        items.add("alias");
+        System.out.println(r.items.size());
 
         r.items = more;
+        System.out.println(r.items.size() + " " + more.size());
+        more.add("e");
+        r.items.add("f");
         System.out.println(r.items.size() + " " + more.size());
 
         List<String> f = r.fresh();

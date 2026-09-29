@@ -521,7 +521,8 @@ impl RustEmitter {
         if !element_is_string {
             return false;
         }
-        self.w.push_str("crate::jux_arr(");
+        self.w.push_str(self.coll_ctor_for_qn(&target.name));
+        self.w.push('(');
         self.emit_expr(&f.object);
         self.w.push_str(".map(String::from).collect::<");
         self.plain_collection_once = true;
@@ -1482,9 +1483,9 @@ impl RustEmitter {
                         // every other Jux collection aliases (`var b = a;`
                         // reached rustc as E0382).
                         "all" => {
-                            self.w.push_str(
-                                "crate::__jux_spawn(async move { crate::jux_arr(futures::future::join_all(vec![",
-                            );
+                            self.w.push_str("crate::__jux_spawn(async move { ");
+                            self.w.push_str(self.std_vec_ctor());
+                            self.w.push_str("(futures::future::join_all(vec![");
                             for (i, arg) in call.args.iter().enumerate() {
                                 if i > 0 {
                                     self.w.push_str(", ");
@@ -1544,7 +1545,8 @@ impl RustEmitter {
                             self.emit_exception_of_payload_closure();
                             // The same handle `all` gets, for the same
                             // reason: the settled results are a collection.
-                            self.w.push_str("crate::jux_arr(futures::future::join_all(vec![");
+                            self.w.push_str(self.std_vec_ctor());
+                            self.w.push_str("(futures::future::join_all(vec![");
                             for (i, arg) in call.args.iter().enumerate() {
                                 if i > 0 {
                                     self.w.push_str(", ");
@@ -1872,7 +1874,7 @@ impl RustEmitter {
                     // of the contents, read out here and re-wrapped inside
                     // the closure. The checker has already refused elements
                     // that could not come along (E0702).
-                    let mut detached: Vec<(String, bool)> = Vec::new();
+                    let mut detached: Vec<(String, bool, &'static str)> = Vec::new();
                     // A method's closure reaching `this` takes a clone of the
                     // handle, which the worker pass has made atomic.
                     let capture_this = matches!(call.args.first(), Some(Expr::Lambda(l)) if self.lambda_captures_this(l));
@@ -1939,7 +1941,8 @@ impl RustEmitter {
                                 .or_else(|| use_types.get(&name).cloned());
                             if let Some(ty) = known {
                                 if let Some(nullable) = self.worker_collection_capture(&ty) {
-                                    detached.push((name, nullable));
+                                    let ctor = self.handle_ctor_for_ty(Some(&ty));
+                                    detached.push((name, nullable, ctor));
                                 } else if !matches!(ty, juxc_tycheck::Ty::Primitive(_)) {
                                     rebinds.push(name);
                                 }
@@ -1967,7 +1970,7 @@ impl RustEmitter {
                             self.w.push_str(&to_rust_ident(name));
                             self.w.push_str(".borrow().clone(); ");
                         }
-                        for (name, nullable) in &detached {
+                        for (name, nullable, _) in &detached {
                             let id = to_rust_ident(name);
                             if *nullable {
                                 self.w.push_str(&format!("let {id} = {id}.as_ref().map(|v| v.borrow().clone()); "));
@@ -2084,8 +2087,9 @@ impl RustEmitter {
                             // Declared in the Jux stdlib but emitted here, so
                             // the array handle (§6.5.2) is applied by hand.
                             let handle = self.arrays_are_handles_here();
+                            let (open, close) = self.array_handle_new("String");
                             if handle {
-                                self.w.push_str("crate::jux_arr(");
+                                self.w.push_str(open);
                             }
                             self.w.push_str("std::fs::read_to_string(&(");
                             self.emit_call_args(call);
@@ -2093,7 +2097,7 @@ impl RustEmitter {
                                 ")).unwrap_or_else(|e| crate::jux_io_fail(e)).lines().map(|l| l.to_string()).collect::<Vec<_>>()",
                             );
                             if handle {
-                                self.w.push_str(")");
+                                self.w.push_str(close);
                             }
                             return;
                         }
@@ -2107,14 +2111,15 @@ impl RustEmitter {
                             // Same as `readLines`: a fresh sequence into an
                             // array-typed slot, which is a handle (§6.5.2).
                             let handle = self.arrays_are_handles_here();
+                            let (open, close) = self.array_handle_new("String");
                             if handle {
-                                self.w.push_str("crate::jux_arr(");
+                                self.w.push_str(open);
                             }
                             self.w.push_str("std::fs::read_dir(&(");
                             self.emit_call_args(call);
                             self.w.push_str(")).unwrap_or_else(|e| crate::jux_io_fail(e)).filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>()");
                             if handle {
-                                self.w.push_str(")");
+                                self.w.push_str(close);
                             }
                             return;
                         }
@@ -2757,13 +2762,7 @@ impl RustEmitter {
             // `.0.borrow()` (field-path receiver), both the receiver
             // guard AND the argument guards must drop before the call —
             // hoist both. Otherwise args-only suffices.
-            // A collection stored inline in a worker-shared object is called
-            // in place, under the object's lock (ERRATA E145):
-            // hoisting it out would call the method on a copy.
-            if let Some(cf) = self
-                .callee_receiver_reads_through_borrow(&call.callee)
-                .filter(|cf| !self.field_is_sync_inline(&cf.object))
-            {
+            if let Some(cf) = self.callee_receiver_reads_through_borrow(&call.callee) {
                 self.emit_call_with_hoisted_receiver(call, cf, true);
             } else {
                 self.emit_call_with_hoisted_args(call);
@@ -2775,10 +2774,7 @@ impl RustEmitter {
         // before the call — otherwise a re-entrant method (one that, directly
         // or through a callee, mutates the same object) panics `already
         // borrowed` (§CR.4.1).
-        if let Some(cf) = self
-            .callee_receiver_reads_through_borrow(&call.callee)
-            .filter(|cf| !self.field_is_sync_inline(&cf.object))
-        {
+        if let Some(cf) = self.callee_receiver_reads_through_borrow(&call.callee) {
             self.emit_call_with_hoisted_receiver(call, cf, false);
             return;
         }
@@ -5909,7 +5905,8 @@ impl RustEmitter {
             // element that is itself a reference is still shared afterwards.
             if method == "clone" && call.args.is_empty() && self.collection_name_is_handle(name) {
                 if let Expr::Field(f) = &*call.callee {
-                    self.w.push_str("crate::jux_arr(");
+                    self.w.push_str(self.handle_ctor_for_ty(Some(&recv_ty)));
+                    self.w.push('(');
                     self.emit_stdlib_receiver(&f.object);
                     self.w.push_str(".clone())");
                     return true;
@@ -7293,7 +7290,8 @@ impl RustEmitter {
         }
         self.w.line("async move {");
         self.w.indent_inc();
-        self.w.line("crate::jux_arr(");
+        let ctor = format!("{}(", self.std_vec_ctor());
+        self.w.line(&ctor);
         self.w.indent_inc();
         self.w.line("futures::future::join_all(__jux_items.into_iter().map(");
         self.w.indent_inc();
@@ -7543,10 +7541,9 @@ impl RustEmitter {
     /// The type of a receiver expression, from the two places the emitter
     /// records it: a declared local, else the span-keyed inference map.
     /// `Some(nullable)` when a `Worker.spawn` capture of type `ty` is a
-    /// collection or array HANDLE, which crosses as a copy of its contents;
-    /// `None` for everything else. An array that is already a plain or an
-    /// atomic value here (inside a worker-shared class, or of exceptions)
-    /// needs nothing.
+    /// collection or array HANDLE, which crosses as a copy of its contents
+    /// (§18.2), in whichever tier it has; `None` for everything else. An
+    /// array of exceptions is shared as it stands, as it always was.
     pub(crate) fn worker_collection_capture(&self, ty: &juxc_tycheck::Ty) -> Option<bool> {
         let (inner, nullable) = match ty {
             juxc_tycheck::Ty::Nullable(t) => (&**t, true),
@@ -7558,7 +7555,7 @@ impl RustEmitter {
                     juxc_tycheck::Ty::User { name, .. } => name.as_str(),
                     _ => "",
                 };
-                self.arrays_are_handles_here() && !self.array_handle_is_sync(element_name)
+                self.arrays_are_handles_here() && !self.array_elem_is_throwable(element_name)
             }
             juxc_tycheck::Ty::User { name, .. } => self.collection_name_is_handle(name),
             _ => false,

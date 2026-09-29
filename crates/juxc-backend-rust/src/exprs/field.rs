@@ -332,9 +332,7 @@ impl RustEmitter {
                 // sibling fields of the same object panic for no reason.
                 // ...unless it is a foreign value's own field (`doc.pages`),
                 // which the crate holds as a plain container.
-                let handle = self.collection_name_is_handle(&name)
-                    && !self.is_foreign_struct_field(&f.object)
-                    && !self.field_is_sync_inline(&f.object);
+                let handle = self.collection_name_is_handle(&name) && !self.is_foreign_struct_field(&f.object);
                 let prev_recv = self.emitting_method_receiver;
                 let prev_out = self.emitting_out_place;
                 let prev_lv = self.emitting_lvalue;

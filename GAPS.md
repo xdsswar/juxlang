@@ -564,6 +564,20 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `BTreeMap<T, int>` keyed by an erased or generic `T` | E0900 (rustc E0277) | works, matches Java |
 | 10,000 pushes and reads through an erased function | quadratic | about 60 ms (debug build) |
 
+**Sweep A. CLOSED 2026-09-28 (ERRATA E1XX-SWEEPA).** ~~Collections of an object shared with workers were copies.~~ The atomic handle is now an `Arc` of a REENTRANT lock (`Mutex` + `Condvar` + owner thread + depth) around a `RefCell`, so two reads of one collection in a statement and a guard held across a call that reads the same object cannot deadlock, and a same-thread borrow conflict is the Jux-worded E23 error. The representation selector has a shared collection tier: a collection type (and arrays) that can reach a worker, through a worker-shared class's fields, properties, method parameters and results, or a `Worker.spawn` result, is `JuxSync<..>` everywhere in the program, so there is nothing to convert: a getter hands back the object's own list, a caller's list stored in the object stays the caller's, and writes on either side, on any thread, are seen on the other, as in Java. E145's crossings and its four `E0702` copy cases are removed; `E0702` keeps only the write to a worker's captured collection (§18.2's deliberate copy). A program where no collection reaches a worker keeps `Rc<JuxCell>` everywhere. The erasure link (E144) works over both handles, keeping a shared-tier typed side current for other threads. Tests: `examples/worker_shared_threads.jux` (Java differential case 158), `examples/worker_shared_reentrant.jux` (case 159), `examples/worker_shared_collections.jux` (case 157), `tests/ui/worker_shared_collection_copy`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `var l = reg.getLog(); l.push(x);` on a worker-shared `reg` | `E0702` | the push is in `reg`'s log |
+| `var it = reg.items; it[0] = x;`; `var mine = this.log; mine.push(x)` inside the class | `E0702` | writes the object's list |
+| `new Registry(xs)` / `reg.items = xs`, then `xs.push(x)` | `reg` held a copy | `reg` sees the push |
+| four workers pushing into one object's list and map | per-object lock, copies out | one list and map, every push kept |
+| `this.xs[0] + this.xs[1]` under a worker-shared object | (would deadlock a `Mutex`) | 7, no deadlock |
+| `int[] cells` field of a worker-shared class | E0900 (rustc E0277) | works, shared |
+| `await Worker.spawn(() -> build())` returning a `Vec` | E0900 (rustc E0277) | works |
+| `other.items.push(x)` in a worker-shared class, `other` not shared | E0900 (rustc E0599) | works |
+| a shared-tier collection linked across erasure, written by a worker | (could not arise) | erased code sees the write |
+
 ---
 
 ## 4. Three streams stopped mid-flight

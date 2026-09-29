@@ -521,11 +521,6 @@ where
         }
     }
     diagnostics.append(&mut typed.diagnostics);
-    // A write to a collection copied out of a worker-shared object would be
-    // lost (E0702, ERRATA E145).
-    for (idx, d) in juxc_backend_rust::worker_copy_diagnostics(&units, &typed.symbols, &typed.expr_types) {
-        diagnostics.push(d.with_file(idx));
-    }
     // Rewrite named-argument / default-parameter call sugar into plain
     // positional calls (per the checker's recorded plans) so the
     // backend and its analyses never see the sugar.
@@ -644,11 +639,6 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
         }
     }
     diagnostics.append(&mut typed.diagnostics);
-    // A write to a collection copied out of a worker-shared object would be
-    // lost (E0702, ERRATA E145).
-    for (idx, d) in juxc_backend_rust::worker_copy_diagnostics(&units, &typed.symbols, &typed.expr_types) {
-        diagnostics.push(d.with_file(idx));
-    }
     // Rewrite named-argument / default-parameter call sugar into plain
     // positional calls (per the checker's recorded plans) so the
     // backend and its analyses never see the sugar.
@@ -814,11 +804,6 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
         typed = juxc_tycheck::typecheck_workspace(&units);
     }
     diagnostics.append(&mut typed.diagnostics);
-    // A write to a collection copied out of a worker-shared object would be
-    // lost (E0702, ERRATA E145).
-    for (idx, d) in juxc_backend_rust::worker_copy_diagnostics(&units, &typed.symbols, &typed.expr_types) {
-        diagnostics.push(d.with_file(idx));
-    }
     // Rewrite named-argument / default-parameter call sugar into plain
     // positional calls (per the checker's recorded plans) so the
     // backend and its analyses never see the sugar.

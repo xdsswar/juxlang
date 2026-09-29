@@ -1,0 +1,108 @@
+// Collections shared between threads through an object (ERRATA E1XX-SWEEPA).
+//
+// A class whose objects cross a worker boundary is shared between threads,
+// and so are the collections it holds: a list or map in such an object is ONE
+// collection, whichever thread writes it and whichever name reaches it, as in
+// Java. Four workers write the same list and map at once; a list the caller
+// hands in stays the caller's list; a getter's result is the object's own
+// list, and a write through it is a write to the object; a method of the
+// shared class writes a collection of an object that is NOT shared; a worker
+// hands a new list back. Output is deterministic: every worker is awaited
+// before anything is printed, and what is printed is a size, a sum or a
+// sorted walk.
+//
+// DIFFERENTIAL: tools/java-differential/cases/158_worker_shared_threads
+
+import rust.std.*;
+
+class Board {
+    private Vec<int> nums = new Vec<int>();
+    private HashMap<String, int> tally = new HashMap<String, int>();
+    private Vec<String> inbox;
+
+    public Board(Vec<String> inbox) { this.inbox = inbox; }
+
+    public void record(String who, int v) {
+        this.nums.push(v);
+        var now = this.tally.get(who) ?? 0;
+        this.tally.insert(who, now + 1);
+        this.inbox.push(who);
+    }
+
+    // A collection of an object that is not itself shared with workers.
+    public void stamp(Note n) { n.lines.push("stamped " + this.nums.len()); }
+
+    public Vec<int> getNums() { return this.nums; }
+    public HashMap<String, int> getTally() { return this.tally; }
+    public Vec<String> getInbox() { return this.inbox; }
+}
+
+class Note {
+    public Vec<String> lines = new Vec<String>();
+}
+
+// A worker's result: a list built on the worker's thread, handed back.
+public Vec<int> evens(Board b) {
+    var out = new Vec<int>();
+    for (var v : b.getNums()) {
+        if (v % 2 == 0) { out.push(v); }
+    }
+    return out;
+}
+
+public int fill(Board b, String who, int from, int n) {
+    for (int i = 0; i < n; i++) {
+        b.record(who, from + i);
+    }
+    // A getter hands back the object's own list, so this push is the
+    // object's too, from this worker's thread.
+    b.getNums().push(1000);
+    return n;
+}
+
+public async void main() {
+    var inbox = new Vec<String>();
+    inbox.push("start");
+    var b = new Board(inbox);
+
+    var w1 = Worker.spawn(() -> fill(b, "ann", 0, 250));
+    var w2 = Worker.spawn(() -> fill(b, "bob", 1000, 250));
+    var w3 = Worker.spawn(() -> fill(b, "cy", 2000, 250));
+    var w4 = Worker.spawn(() -> fill(b, "dee", 3000, 250));
+    var done = await w1 + await w2 + await w3 + await w4;
+    print(done);
+
+    // Every write of every thread is in the one list.
+    var nums = b.getNums();
+    print(nums.len());
+    var sum = 0;
+    for (var v : nums) { sum += v; }
+    print(sum);
+
+    // The map, walked in key order.
+    var keys = new Vec<String>();
+    for (var k : b.getTally().keys()) { keys.push(k); }
+    keys.sort();
+    for (var k : keys) {
+        print(k + " " + (b.getTally().get(k) ?? 0));
+    }
+
+    // The caller's list IS the object's list: the workers' pushes are in it,
+    // and a push here reaches the object.
+    print(inbox.len());
+    inbox.push("end");
+    print(b.getInbox().len());
+    print(b.getInbox()[0] + " " + b.getInbox()[inbox.len() - 1]);
+
+    // A write through the getter's result is a write to the object.
+    nums.push(7);
+    print(b.getNums().len());
+
+    var note = new Note();
+    b.stamp(note);
+    print(note.lines[0]);
+
+    var ev = await Worker.spawn(() -> evens(b));
+    print(ev.len());
+    print((b.getNums() === nums) + " " + (b.getNums() === ev));
+}

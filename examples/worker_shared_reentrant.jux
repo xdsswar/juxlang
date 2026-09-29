@@ -1,0 +1,78 @@
+// One statement reading a worker-shared collection more than once (ERRATA
+// E1XX-SWEEPA).
+//
+// A collection held by an object shared with workers sits behind a lock, and
+// the lock is REENTRANT: `xs[0] + xs[1]` takes it twice on one thread, and a
+// guard held while a method of the same object runs lets that method read it
+// again. A non-reentrant lock would deadlock on each line below. Three workers
+// run the same statements at once, which is where a lock that did not exclude
+// other threads would lose a push.
+//
+// DIFFERENTIAL: tools/java-differential/cases/159_worker_shared_reentrant
+
+import rust.std.*;
+
+class Pair {
+    public Vec<int> xs = new Vec<int>();
+    public Vec<int> log = new Vec<int>();
+    public int[] cells = new int[4];
+
+    public Pair() {
+        this.xs.push(3);
+        this.xs.push(4);
+    }
+
+    // Two reads of one list, and of one array, in one expression.
+    public int both() { return this.xs[0] + this.xs[1]; }
+    public int corners() { return this.cells[0] + this.cells[3]; }
+
+    // A read of the list inside a loop over the same list, through a method
+    // of the same object.
+    public int weight(int v) { return v * (int) this.xs.len(); }
+    public int weighed() {
+        var total = 0;
+        for (var v : this.xs) { total += this.weight(v); }
+        return total;
+    }
+
+    // Read and write of one list, or one array, in one statement: the read
+    // completes first.
+    public void grow() { this.xs.push(this.xs[0] + this.xs[1]); }
+    public void bump() {
+        this.cells[0] = this.cells[0] + 1;
+        this.cells[3] = this.cells[0] + this.cells[3];
+    }
+}
+
+public int run(Pair p, int n) {
+    var seen = 0;
+    for (int i = 0; i < n; i++) {
+        seen += p.both() + p.xs[0] + p.xs[1];
+        p.log.push(p.xs[0] * p.xs[1]);
+    }
+    return seen;
+}
+
+public async void main() {
+    var p = new Pair();
+    print(p.both());
+    print(p.xs[0] + p.xs[1] + (int) p.xs.len());
+    print(p.weighed());
+
+    var a = Worker.spawn(() -> run(p, 100));
+    var b = Worker.spawn(() -> run(p, 100));
+    var c = Worker.spawn(() -> run(p, 100));
+    print(await a + await b + await c);
+    var sum = 0;
+    for (var v : p.log) { sum += v; }
+    print(p.log.len() + " " + sum);
+
+    p.bump();
+    p.bump();
+    print(p.corners() + " " + p.cells[0] * p.cells[3]);
+
+    p.grow();
+    p.grow();
+    print(p.xs.len() + " " + p.xs[2] + " " + p.xs[3]);
+    print(p.both() + p.xs[(int) p.xs.len() - 1]);
+}

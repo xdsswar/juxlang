@@ -338,6 +338,45 @@ pub(crate) fn compute_worker_shared_class_fqns(
     out
 }
 
+/// Call `sink` for every `Worker.spawn(..)` call in `unit`: in a function, and
+/// in a method, constructor or operator of a class.
+pub(crate) fn for_each_worker_spawn_call(unit: &juxc_ast::CompilationUnit, sink: &mut dyn FnMut(&juxc_ast::CallExpr)) {
+    let mut in_body = |b: &Block| {
+        walk_block(b, &mut |e| {
+            if let Expr::Call(c) = e {
+                if is_worker_spawn_callee(&c.callee) {
+                    sink(c);
+                }
+            }
+        });
+    };
+    for item in &unit.items {
+        match item {
+            juxc_ast::TopLevelDecl::Function(f) => {
+                if let Some(b) = &f.body {
+                    in_body(b);
+                }
+            }
+            juxc_ast::TopLevelDecl::Class(cd) => {
+                for m in &cd.methods {
+                    if let Some(b) = &m.body {
+                        in_body(b);
+                    }
+                }
+                for ctor in &cd.constructors {
+                    in_body(&ctor.body);
+                }
+                for op in &cd.operators {
+                    if let Some(b) = &op.body {
+                        in_body(b);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// `Worker.spawn` — the one call form that starts another OS thread (§18.2).
 pub(crate) fn is_worker_spawn_callee(callee: &Expr) -> bool {
     let Expr::Field(f) = callee else { return false };
