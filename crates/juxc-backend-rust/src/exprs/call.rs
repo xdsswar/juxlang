@@ -240,6 +240,20 @@ fn fold_concat_for_print<'a>(operands: &[&'a Expr]) -> (String, Vec<&'a Expr>) {
     (template, runtime)
 }
 
+/// The identifiers of a dotted name read as a chain of field accesses
+/// (`rust.naga.front`), or `None` when `e` is anything else.
+fn field_chain_segments(e: &Expr) -> Option<Vec<juxc_ast::Ident>> {
+    match e {
+        Expr::Path(qn) => Some(qn.segments.clone()),
+        Expr::Field(f) if !f.safe => {
+            let mut segments = field_chain_segments(&f.object)?;
+            segments.push(f.field.clone());
+            Some(segments)
+        }
+        _ => None,
+    }
+}
+
 impl RustEmitter {
     /// True when `call` targets a foreign (`.jux.d`) function or static method
     /// whose `throws E` clause maps a Rust `Result<T, E>` return (§G.5.4) — the
@@ -621,6 +635,12 @@ impl RustEmitter {
                 }
                 foreign_hit.unwrap_or(false)
             }
+            // A function by its fully-qualified name (the re-shaped
+            // `rust.naga.front.wgsl.parse_str(src)`).
+            Expr::Path(qn) => {
+                let joined = qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+                self.symbols.functions.get(&joined).is_some_and(|s| s.is_foreign_result)
+            }
             // Method call `recv.method(args)` — two shapes:
             //  - Static `ClassName.method(...)`: the receiver is a type name.
             //  - Instance `value.method(...)`: resolve the receiver's inferred
@@ -873,6 +893,23 @@ impl RustEmitter {
         let Expr::Field(f) = &*call.callee else {
             return None;
         };
+        // A FOREIGN free function called by its fully-qualified name
+        // (`rust.naga.front.wgsl.parse_str(src)`, which a crate with several
+        // functions of one name needs, ERRATA E1XX-SWEEPB) is the call of the
+        // function's own path, which every question about a foreign function
+        // looks up exactly.
+        if let Some(mut segments) = field_chain_segments(&f.object) {
+            segments.push(f.field.clone());
+            let joined = segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+            let foreign_fn = self.symbols.functions.contains_key(&joined)
+                && (joined.starts_with("rust.") || joined.starts_with("c.") || joined.starts_with("cpp."));
+            if foreign_fn && segments.len() > 1 {
+                return Some(CallExpr {
+                    callee: Box::new(Expr::Path(juxc_ast::QualifiedName { segments, span: f.span })),
+                    ..call.clone()
+                });
+            }
+        }
         if matches!(&*f.object, Expr::Path(_)) {
             return None;
         }
@@ -2677,6 +2714,10 @@ impl RustEmitter {
                             if upcast {
                                 self.w.push_str(".into()");
                             } else if !nullable
+                                // A borrowed slot lends the value; a copy of it
+                                // would be lent and dropped, and a foreign type
+                                // may have no `Clone` at all (an error enum).
+                                && !is_ref
                                 && (self.wrapper_value_needs_clone(arg)
                                     || self.value_place_needs_clone(arg))
                             {

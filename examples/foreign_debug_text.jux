@@ -3,7 +3,9 @@
 // A type with a text form of its own prints that. One without prints its
 // structure the way a Jux record prints, `Name(field: value)`: a nullable
 // field's value is the value or `null`, a string is its text, a cell prints
-// what it holds, and a list keeps its brackets.
+// what it holds, and a list keeps its brackets. A library's ERROR prints as
+// the Jux exception it is, `Class: message`, where its type is known and
+// inside generic code alike (ERRATA E1XX-SWEEPB).
 import rust.std.Duration;
 import rust.std.FromUtf8Error;
 import rust.std.OnceLock;
@@ -42,8 +44,8 @@ void main() {
     // A duration's own form.
     print(Duration.from_millis(1500uL));
 
-    // An error's structure, reached where only its structure is known: a
-    // struct inside a struct, a nullable field, a list of numbers.
+    // An error, printed where its type is known and where only its
+    // structure is (inside a generic class): the Jux exception it is.
     Vec<ubyte> bytes = new Vec<ubyte>();
     bytes.push(104 as ubyte);
     bytes.push(255 as ubyte);

@@ -1,0 +1,15 @@
+already exists
+an IOException too
+a name with a NUL is an illegal argument
+format: stream did not contain valid UTF-8
+a FormatException is an IOException
+no such element: environment variable not found
+illegal argument: cannot convert float seconds to Duration: value is negative
+Ok(12)
+Err(NumberFormatException: invalid digit found in string)
+NumberFormatException: invalid digit found in string
+interpolated: NumberFormatException: invalid digit found in string
+joined: NumberFormatException: invalid digit found in string
+shown as a FileNotFoundException: true
+with no error number: true
+done

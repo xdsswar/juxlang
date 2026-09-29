@@ -1,0 +1,4 @@
+before
+Exception in thread "main" jux.std.exceptions.NoSuchElementException: environment variable not found
+    at examples/runtime_library_error_by_shape.jux:8:5
+[exit: 101]

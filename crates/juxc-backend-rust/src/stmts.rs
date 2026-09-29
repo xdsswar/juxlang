@@ -1502,10 +1502,13 @@ impl RustEmitter {
     /// the foreign type itself unwraps the Rust value when it is one.
     fn emit_catch_downcast_head(&mut self, ty: &juxc_ast::TypeRef) {
         let fqn = self.resolve_catch_ty_fqn(ty);
-        let foreign = fqn
-            .as_deref()
-            .and_then(|f| self.symbols.classes.get(f))
-            .is_some_and(|c| c.is_external);
+        // A library's error type is as often an ENUM as a struct (naga's
+        // `back::spv::Error`), and a clause naming one gets the Rust value
+        // just the same.
+        let foreign = fqn.as_deref().is_some_and(|f| {
+            self.symbols.classes.get(f).is_some_and(|c| c.is_external)
+                || self.symbols.enums.get(f).is_some_and(|e| e.is_external)
+        });
         let jux_class = fqn.as_deref().is_some_and(|f| self.symbols.classes.contains_key(f));
         self.w.push_str("match ");
         if foreign {
@@ -2760,7 +2763,7 @@ impl RustEmitter {
         if self.foreign_iterator_next(&f.iter).is_some_and(|m| m.is_foreign_result) {
             let v = to_rust_ident(&f.var_name.text);
             self.w.line(&format!(
-                "let {v} = {v}.unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e));"
+                "let {v} = {v}.unwrap_or_else(|__e| crate::__jux_raise!(__e));"
             ));
         }
         // Register the loop variable's element type in `local_types` for the

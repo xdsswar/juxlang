@@ -86,6 +86,19 @@ fn an_uncaught_library_error_is_a_jux_exception() {
     assert!(!text.contains("ParseFloatError"), "{text}");
 }
 
+/// A library's error with no row of its own is reported as the Jux
+/// exception its shape says, never as a `LibraryException` when a closer
+/// class exists, and never under its Rust type name (ERRATA E1XX-SWEEPB).
+#[test]
+fn an_uncaught_library_error_is_the_closest_jux_exception() {
+    assert_jux_failure(
+        "runtime_library_error_by_shape",
+        "Exception in thread \"main\" jux.std.exceptions.NoSuchElementException: environment variable not found",
+    );
+    let (text, _) = run("runtime_library_error_by_shape");
+    assert!(!text.contains("VarError") && !text.contains("LibraryException"), "{text}");
+}
+
 /// A stack overflow never reaches a panic hook. The prelude reports it
 /// itself: a vectored exception handler on Windows, a `SIGSEGV`/`SIGBUS`
 /// handler on an alternate signal stack on Linux and macOS (gap 38).

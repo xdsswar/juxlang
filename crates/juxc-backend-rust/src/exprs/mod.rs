@@ -1349,7 +1349,7 @@ impl RustEmitter {
         }
         if ctor_is_foreign_result {
             self.w
-                .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e))");
+                .push_str(").unwrap_or_else(|__e| crate::__jux_raise!(__e))");
         }
         // `new Path("a/b")`: Rust's `Path::new` hands back a `&Path`, and the
         // value Jux keeps is the owned form (see `external_owned_form`).
@@ -1819,6 +1819,19 @@ impl RustEmitter {
                     self.w.push_str(".to_string()");
                     return;
                 }
+                // A foreign function named in full (`rust.naga.front.wgsl.
+                // parse_str`, the callee of a re-shaped qualified call) is its
+                // real Rust path (ERRATA E1XX-SWEEPB).
+                if qn.segments.len() > 1 {
+                    let joined = qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+                    let foreign = joined.starts_with("rust.") || joined.starts_with("c.") || joined.starts_with("cpp.");
+                    if let Some(real) =
+                        self.symbols.functions.get(&joined).filter(|_| foreign).and_then(|f| f.rust_path.clone())
+                    {
+                        self.w.push_str(&real);
+                        return;
+                    }
+                }
                 // Dot-separated Jux paths become `::`-separated Rust paths.
                 // Module mapping is a TODO — for milestone 1 we emit
                 // identical structure on faith.
@@ -1882,7 +1895,7 @@ impl RustEmitter {
                     self.w.push('(');
                     self.emit_call(c);
                     self.w
-                        .push_str(").unwrap_or_else(|__e| crate::__jux_raise_foreign(crate::__jux_show!(__e), __e))");
+                        .push_str(").unwrap_or_else(|__e| crate::__jux_raise!(__e))");
                 } else {
                     self.emit_call(c);
                 }

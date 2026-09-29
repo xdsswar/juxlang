@@ -3319,6 +3319,20 @@ impl crate::RustEmitter {
         let bare = qn.segments.last()?.text.as_str();
         let is_foreign =
             |k: &str| k.starts_with("rust.") || k.starts_with("c.") || k.starts_with("cpp.");
+        // The function the unit's own imports name, first: two crates, or two
+        // modules of one crate, may each have a function of this name
+        // (`rust.std.write` and `rust.sbfix.write`, the two `parse`s of
+        // `rust.naga.front`), and only one of them is the callee (ERRATA
+        // E1XX-SWEEPB).
+        if qn.segments.len() == 1 {
+            if let Some((key, sig)) = self.lookup_function_here(bare) {
+                return is_foreign(key).then_some(sig);
+            }
+        } else {
+            // Called by its fully-qualified name: exactly that function.
+            let joined = qn.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+            return self.symbols.functions.get(&joined).filter(|_| is_foreign(&joined));
+        }
         let mut found = None;
         for (k, sig) in &self.symbols.functions {
             if k.rsplit('.').next() != Some(bare) {
@@ -5282,6 +5296,28 @@ impl crate::RustEmitter {
         let Some(target_bare) = target_ty.name.segments.last().map(|s| s.text.as_str()) else {
             return IfaceCoercion::None;
         };
+        // A QUALIFIED slot type means exactly the type it names. A crate may
+        // declare an interface and a class of one simple name
+        // (`rust.naga.Error`, a trait, beside `rust.naga.back.spv.Error`), and
+        // read by its last segment the class slot looked like the trait's
+        // (ERRATA E1XX-SWEEPB).
+        if target_ty.name.segments.len() > 1 {
+            let joined: String =
+                target_ty.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join(".");
+            let canonical = self.symbols.canonical_type_fqn(&joined);
+            let names_a_value_type = [joined.as_str(), canonical.as_str()].iter().any(|k| {
+                self.symbols.classes.contains_key(*k)
+                    || self.symbols.enums.contains_key(*k)
+                    || self.symbols.records.contains_key(*k)
+            });
+            if names_a_value_type && !self.symbols.interfaces.contains_key(&canonical) {
+                let polybase = self.symbols.classes.get(&canonical).is_some_and(|c| !c.is_external)
+                    && self.is_poly_base_class(target_bare);
+                if !polybase {
+                    return IfaceCoercion::None;
+                }
+            }
+        }
         // The target slot is a dynamic-dispatch trait object — either an
         // interface (`Rc<dyn Iface>`) or a **polymorphic base class**
         // (`Rc<dyn <Name>Kind>`, Stage-2). Anything else stays concrete.

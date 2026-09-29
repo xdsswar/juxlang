@@ -182,6 +182,14 @@ impl crate::RustEmitter {
     /// How to spell the type `fqn` from the unit being emitted: its bare name
     /// when it lives in this package, a `crate::`-rooted path otherwise.
     pub(crate) fn rust_path_for_type_fqn(&self, fqn: &str) -> String {
+        // A FOREIGN type is spelled by its real Rust path (§G.9.2), whatever
+        // Jux package declares it: `rust.naga.back.spv.Error` written in full
+        // is `naga::back::spv::Error`, never a `crate::rust::...` module
+        // (ERRATA E1XX-SWEEPB).
+        let external_class = self.symbols.classes.get(fqn).filter(|c| c.is_external).and_then(|c| c.rust_path.clone());
+        if let Some(real) = external_class.or_else(|| self.external_enum_real_path(fqn)) {
+            return real;
+        }
         match fqn.rsplit_once('.') {
             Some((pkg, bare)) => {
                 let here = self.current_package_path();
@@ -643,6 +651,12 @@ impl crate::RustEmitter {
     /// signature so existing call sites still compile; new code
     /// can pass `false` and get the right behavior.
     pub(crate) fn emit_fqn_path_in_rust(&mut self, fqn: &str, _force_root: bool) {
+        // A foreign type by its real Rust path (see `rust_path_for_type_fqn`).
+        let external_class = self.symbols.classes.get(fqn).filter(|c| c.is_external).and_then(|c| c.rust_path.clone());
+        if let Some(real) = external_class.or_else(|| self.external_enum_real_path(fqn)) {
+            self.w.push_str(&real);
+            return;
+        }
         if let Some(pkg) = fqn_package(fqn) {
             self.w.push_str("crate::");
             for seg in pkg.split('.') {
