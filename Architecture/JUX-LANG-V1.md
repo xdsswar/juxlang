@@ -1158,7 +1158,11 @@ reading it out of the object hands back a copy rather than an alias. Mutating
 it through the owning object -- `registry.add(x)` -- behaves normally; only
 lifting the collection out into a second name loses the aliasing. This is the
 one place §6.5.1 does not reach, and it is called out here rather than left to
-be discovered.
+be discovered. Because the copy is silent, it may only be READ: writing a
+collection read out of such an object (a getter's result, a field bound to a
+local, inside or outside the class) is `E0702`, which points at the object's
+own methods or at `clone()` (`ERRATA.md` E1XX-GAP40b). A collection handed IN
+to such an object is copied into it the same way.
 
 **A worker's copy is read-only.** A `Worker.spawn` closure takes a captured
 collection or array by value (JUX-ASYNC-ADDENDUM §18.2), because a handle
@@ -2652,6 +2656,8 @@ users.forEach(User::greet);
 ```
 
 Closures infer their capture mode (shared borrow, exclusive borrow, or move) from the body and from how they are used. The user does not annotate capture mode.
+
+A lambda with no slot to take a function type from (`var get = () -> items;`) has the function type its own parameters and body give it: each parameter's written type, and what the body produces -- an expression body's value, a block body's first returned value, or `void`. So `get().push(1)` calls `push` on the collection `get` returns. A parameter written without a type (`var add = (a, b) -> a + b;`) takes its type from a use: a call, or a function-typed slot the lambda is passed to. A lambda that nothing uses gives it none, and is `E0453` (`ERRATA.md` E1XX-GAP40b).
 
 A captured variable stays usable after the lambda that captures it, as in Java. A closure may outlive the scope that built it, so it holds its own copy of what it reads: a value (`String`, a record) is copied, and a reference (an object, an array, a collection) is shared, so both sides see the same object. The copy is made only when the enclosing code reads the variable again, or when the lambda is built repeatedly (inside a loop around the variable's declaration, or inside another lambda). A capture that is the variable's last use takes the value as it is. A lambda that reads a field without writing `this` captures the object, the same as `this.field`.
 

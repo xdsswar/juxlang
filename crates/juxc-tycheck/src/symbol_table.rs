@@ -2260,8 +2260,6 @@ pub fn build_workspace(
     check_abstract_methods_implemented(&table, diagnostics);
     check_diamond_default_conflicts(&table, diagnostics);
     check_interface_on_exception_class(&table, diagnostics);
-    // E0438 is decided after the check, over the closed instantiations
-    // (`generic_dispatch::unclosable_diagnostics`, ERRATA E137).
     check_method_modifier_combinations(&table, diagnostics);
     check_constructor_overloads(&table, diagnostics);
     check_method_overloads(&table, diagnostics);

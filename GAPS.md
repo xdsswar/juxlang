@@ -548,6 +548,22 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `pack<T extends Rel<Box<T>>>` | `E0438` | `E0438` (no conversion into `Box` exists) |
 | `Worker.spawn(() -> { xs.push(1); ... })` on a captured `Vec` | the push reached only the worker's copy | `E0702` |
 
+**40b. CLOSED 2026-09-28 (ERRATA E1XX-GAP40b).** ~~What gap 40 left open.~~ Every container a polymorphic-recursion bound can hold the parameter in converts between the erased code and the value's own: a collection or array is linked, a tuple, a `Box` and a nullable are rebuilt, an `Rc` or `Arc` crosses as the same pointer. `E0438` is retired; a foreign generic type with no known shape (`OnceLock<T>`) is the new `E0620`. A collection crossing into or out of a worker-shared class converts instead of failing to compile, and a WRITE to a copy read out of one is `E0702` (real `Arc<Mutex>` sharing was not taken: two reads of one collection in a statement would deadlock the non-reentrant lock, and the representation selector has no collection tier). A `var` lambda has the function type its parameters and body give it, and one with an untyped parameter that nothing uses is `E0453`. `int[]? xs;` parses as a local. An erased or generic container key orders and hashes. A linked collection copies only when the side accessing it changes, so a loop over one is linear. Tests: `examples/polymorphic_recursion_foreign_bounds.jux` (Java differential case 156), `examples/polymorphic_recursion_arc_bound.jux`, `examples/worker_shared_collections.jux` (case 157), `examples/var_lambda_types.jux` (case 154), `examples/nullable_array_slots.jux` (case 153), `examples/polymorphic_recursion_ordered_keys.jux` (case 155), `examples/stress_linked_collection.jux`, `tests/ui/erased_through_foreign_type`, `tests/ui/worker_shared_collection_copy`, `tests/ui/lambda_param_uninferable`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `T extends Pairs<(T, int)> & Maybe<T?> & Shares<Rc<T>> & Boxes<Box<T>>` on a cycle | `E0438` / E0900 | works, matches Java |
+| the same with `Arc<T>` | `E0438` | works, `Arc.ptr_eq` holds |
+| `T extends Rel<OnceLock<T>>` on a cycle | `E0438` | `E0620` |
+| `var l = reg.getLog(); print(l.len());` on a worker-shared `reg` | E0900 | a copy, read |
+| `var l = reg.getLog(); l.push(x);` | E0900 | `E0702` |
+| `reg.items.push(x)`, `reg.items.len()`, `reg.items = xs`, `reg.addAll(xs)` | E0900 | work |
+| `var gv = () -> v; gv().push(1);` | E0900 | works, matches Java |
+| `var f = (x) -> x + 1;` never used | E0900 (rustc E0282) | `E0453` |
+| `int[]? xs;` as a local | parse error | works, matches Java |
+| `BTreeMap<T, int>` keyed by an erased or generic `T` | E0900 (rustc E0277) | works, matches Java |
+| 10,000 pushes and reads through an erased function | quadratic | about 60 ms (debug build) |
+
 ---
 
 ## 4. Three streams stopped mid-flight

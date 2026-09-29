@@ -497,6 +497,17 @@ pub(crate) struct Checker<'a> {
     /// lambda. A parameter declared without a type has the slot's type, both
     /// for checking the body and in `expr_types` at the parameter's name.
     pub(crate) lambda_slot_params: Option<Vec<Ty>>,
+    /// The types a lambda's block body returns, collected while it is
+    /// checked, for the function type of a lambda with no slot to take one
+    /// from (`var gv = () -> { return v; }`, ERRATA E1XX-GAP40b).
+    pub(crate) lambda_returns: Option<Vec<Ty>>,
+    /// Each lambda's function type as far as its parameters and body say,
+    /// by span: what a `var` declaration of it takes.
+    pub(crate) lambda_fn_types: std::collections::HashMap<Span, Ty>,
+    /// `var` lambdas whose parameters have no written type, with the first
+    /// such parameter: nothing but a later use can give them one, so one that
+    /// is never used is `E0453` at the end of the body.
+    pub(crate) uninferable_lambdas: Vec<(String, Span, String)>,
     /// Set while checking a lambda passed into a Rust closure slot that
     /// returns `Ordering` (a comparator, Operators §O.2.1): its result must
     /// be an integer or an `Ordering`. Take-and-cleared by the lambda arm.
@@ -656,6 +667,9 @@ impl<'a> Checker<'a> {
             value_switch_spans: Vec::new(),
             unsafe_block_depth: 0,
             lambda_slot_params: None,
+            lambda_returns: None,
+            lambda_fn_types: std::collections::HashMap::new(),
+            uninferable_lambdas: Vec::new(),
             lambda_is_comparator: false,
             callee_fn_key: None,
             in_foreach_iter: false,
@@ -682,6 +696,21 @@ impl<'a> Checker<'a> {
     /// argument), then clear the per-body tracking sets. Called at the end of
     /// each function/method/constructor walk.
     fn flush_uninferable_news(&mut self) {
+        for (name, span, param) in std::mem::take(&mut self.uninferable_lambdas) {
+            if !self.used_names.contains(&name) {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        code::Code::E0453_GenericInferenceNoSolution,
+                        format!(
+                            "cannot infer the type of `{param}`, a parameter of the lambda `{name}`: the lambda \
+                             is never called or passed anywhere that would give it one",
+                        ),
+                    )
+                    .with_span(span)
+                    .with_help(format!("write the parameter's type: `(int {param}) -> …`")),
+                );
+            }
+        }
         let candidates = std::mem::take(&mut self.uninferable_news);
         for (name, span) in candidates {
             if !self.used_names.contains(&name) {
@@ -6402,6 +6431,22 @@ impl<'a> Checker<'a> {
                     self.check_expr(e);
                     infer_expr(e, &self.env, self.symbols)
                 });
+                // `var gv = () -> v;` takes the lambda's own function type, so a
+                // call of it has a type (`gv().push(1)`, ERRATA E1XX-GAP40b).
+                // A parameter with no written type is left for a use to pin.
+                let inferred = match (&v.ty, &v.init, inferred) {
+                    (None, Some(Expr::Lambda(l)), Some(Ty::Unknown)) => {
+                        let fn_ty = self.lambda_fn_types.get(&l.span).cloned();
+                        if let Some(p) = l.params.iter().find(|p| p.ty.is_none()) {
+                            self.uninferable_lambdas.push((v.name.text.clone(), v.span, p.name.text.clone()));
+                        }
+                        if let Some(t) = &fn_ty {
+                            self.expr_types.insert(l.span, t.clone());
+                        }
+                        Some(fn_ty.unwrap_or(Ty::Unknown))
+                    }
+                    (_, _, inferred) => inferred,
+                };
                 let destructure = juxc_ast::record_destructure_arity(&v.name.text);
                 let final_ty = match (&declared, &inferred) {
                     (Some(d), Some(i)) if destructure.is_some() => {
@@ -6735,6 +6780,17 @@ impl<'a> Checker<'a> {
                 // mutably borrow `self` to walk the expression below
                 // without a borrow conflict on `current_return`.
                 let expected = self.current_return.clone();
+                // A lambda's own `return` (a method nested in it has a return
+                // type of its own): what the lambda's function type returns.
+                if expected.is_none() && self.lambda_returns.is_some() {
+                    let t = match opt {
+                        Some(e) => infer_expr(e, &self.env, self.symbols),
+                        None => Ty::Void,
+                    };
+                    if let Some(r) = self.lambda_returns.as_mut() {
+                        r.push(t);
+                    }
+                }
                 // An array returned where the function returns `T[]` or `T[N]`.
                 if let (Some(Ty::Array { kind, .. }), Some(e)) = (&expected, opt) {
                     self.note_array_slot(e, *kind == crate::ty::ArrayKind::Dynamic, expr_span(e));
@@ -8189,6 +8245,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
+                let mut param_tys: Vec<Ty> = Vec::new();
                 for (i, p) in l.params.iter().enumerate() {
                     let ty = match &p.ty {
                         Some(t) => ty_from_ref(t, &self.env, self.symbols),
@@ -8200,8 +8257,10 @@ impl<'a> Checker<'a> {
                             None => Ty::Unknown,
                         },
                     };
+                    param_tys.push(ty.clone());
                     self.env.declare(&p.name.text, ty);
                 }
+                let saved_returns = self.lambda_returns.replace(Vec::new());
                 for (name, declared) in restore {
                     if !l.params.iter().any(|p| p.name.text == name) {
                         self.env.declare(&name, declared);
@@ -8220,6 +8279,24 @@ impl<'a> Checker<'a> {
                 match &l.body {
                     juxc_ast::LambdaBody::Expr(e) => self.check_expr(e),
                     juxc_ast::LambdaBody::Block(b) => self.check_block(b),
+                }
+                // The lambda's own function type, from its parameters and what
+                // its body produces (ERRATA E1XX-GAP40b): an expression body is
+                // its value, a block body the first value it returns, or
+                // nothing. What a `var` declaration of the lambda takes.
+                let returned = std::mem::replace(&mut self.lambda_returns, saved_returns).unwrap_or_default();
+                if !l.is_async {
+                    let return_type = match &l.body {
+                        juxc_ast::LambdaBody::Expr(e) => infer_expr(e, &self.env, self.symbols),
+                        juxc_ast::LambdaBody::Block(_) => match returned.first() {
+                            Some(t) => returned.iter().find(|t| !matches!(t, Ty::Unknown)).unwrap_or(t).clone(),
+                            None => Ty::Void,
+                        },
+                    };
+                    self.lambda_fn_types.insert(
+                        l.span,
+                        Ty::Fn { params: param_tys, return_type: Box::new(return_type), is_async: false },
+                    );
                 }
                 if comparator {
                     self.check_comparator_result(l);
@@ -12253,6 +12330,12 @@ impl<'a> Checker<'a> {
     }
 
     fn check_call(&mut self, c: &CallExpr) {
+        // A local called by name is used: a call pins its parameters.
+        if let Expr::Path(qn) = c.callee.as_ref() {
+            if let [only] = qn.segments.as_slice() {
+                self.used_names.insert(only.text.clone());
+            }
+        }
         // `transmute<A, B>(value)` (Layout-ABI §L.7.4), the built-in, when no
         // function of that name is declared.
         if self.is_builtin_transmute(c) {

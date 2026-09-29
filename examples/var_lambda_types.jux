@@ -1,0 +1,47 @@
+// A `var` lambda has the function type its parameters and body give it
+// (JUX-LANG-V1 §7.9, ERRATA E1XX-GAP40b), so what calling it returns is known
+// and usable like any other value: `gv().push(1)` pushes into the collection
+// the lambda hands back, which is the captured one, shared (§6.5.1).
+//
+// DIFFERENTIAL: tools/java-differential/cases/154_var_lambda_types
+
+import rust.std.*;
+
+class Node {
+    public int v = 0;
+    public void bump() { v += 1; }
+}
+
+public void main() {
+    var v = new Vec<int>();
+    var gv = () -> v;
+    gv().push(1);
+    var got = gv();
+    got.push(2);
+    print(v.len());
+
+    var a = new Node();
+    var gn = () -> a;
+    gn().bump();
+    print(a.v);
+
+    var sq = (int k) -> k * k;
+    print(sq(5) + 1);
+
+    var add = (x, y) -> x + y;
+    print(add(3, 4));
+
+    var pick = (bool first) -> {
+        if (first) { return v; }
+        return new Vec<int>();
+    };
+    pick(true).push(3);
+    pick(false).push(99);
+    print(v.len());
+
+    var say = () -> { print("hi"); };
+    say();
+
+    var name = () -> "x" + v.len();
+    print(name().length());
+}

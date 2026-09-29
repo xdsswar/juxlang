@@ -537,7 +537,9 @@ impl RustEmitter {
             // / `Hash` (§T.2.1). Scoped to this signature, so the sets never
             // carry over to the next declaration.
             self.collect_fn_equality_bound_params(fn_decl);
+            let keys = self.add_fn_key_bound_params(fn_decl);
             self.emit_generic_params_with_bounds(&combined_generics, &defaulted);
+            self.drop_key_bound_params(&keys);
             self.eq_bound_params.clear();
             self.hashed_params.clear();
         }

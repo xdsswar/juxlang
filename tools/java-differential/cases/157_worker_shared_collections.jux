@@ -1,0 +1,61 @@
+// Collections of an object shared with workers (ERRATA E1XX-GAP40b).
+//
+// A class whose objects cross a worker boundary keeps its collections under
+// the object's own lock (JUX-LANG-V1 §6.5.1). Everything that goes through the
+// object is the one collection: a method that adds to it, a mutating call on
+// the field itself (`reg.items.push(x)`), a store into the field. What is READ
+// OUT of the object -- a getter's result, a field bound to a local, a list
+// handed in -- is a copy, and a copy is only ever read: writing one is `E0702`.
+// Every one of these crossings used to fail to compile.
+//
+// DIFFERENTIAL: tools/java-differential/cases/157_worker_shared_collections
+
+import rust.std.*;
+
+class Registry {
+    private Vec<String> log = new Vec<String>();
+    public Vec<String> items = new Vec<String>();
+    public void handle(String s) { this.log.push(s); }
+    public void addAll(Vec<String> more) { for (var m : more) { this.log.push(m); } }
+    public Vec<String> getLog() { return this.log; }
+    public Vec<String> fresh() { var v = new Vec<String>(); v.push("f"); return v; }
+    public int count() { return this.log.len(); }
+}
+
+public int work(Registry r, String tag, int n) {
+    for (int i = 0; i < n; i++) { r.handle(tag); }
+    r.items.push(tag);
+    return n;
+}
+
+public async void main() {
+    var r = new Registry();
+    var a = Worker.spawn(() -> work(r, "a", 3));
+    var b = Worker.spawn(() -> work(r, "b", 2));
+    await a;
+    await b;
+    print(r.count() + " " + r.items.len());
+
+    var more = new Vec<String>();
+    more.push("c");
+    more.push("d");
+    r.addAll(more);
+    var log = r.getLog();
+    print(log.len());
+    var total = 0;
+    for (var s : log) { total += s.length(); }
+    print(total);
+
+    r.items.push("main");
+    var items = r.items;
+    print(items.len() + " " + r.items.len());
+
+    r.items = more;
+    print(r.items.len() + " " + more.len());
+
+    var f = r.fresh();
+    f.push("mine");
+    var c = r.getLog().clone();
+    c.push("extra");
+    print(f.len() + " " + c.len() + " " + r.count());
+}

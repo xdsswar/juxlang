@@ -1,0 +1,30 @@
+// Polymorphic recursion is compiled by erasure, and a bound that holds the
+// parameter inside a container is converted between the erased code and the
+// value's own code: a collection is linked, a `Box`, a tuple or a nullable is
+// copied, an `Rc` or `Arc` keeps its identity (ERRATA E144, E1XX-GAP40b). A
+// foreign type whose shape the compiler does not know, `OnceLock<T>` here, has no
+// conversion at all: E0620.
+import rust.std.OnceLock;
+
+interface Rel<L> { int weigh(L c); }
+
+class Item implements Rel<OnceLock<Item>> {
+    int w;
+    Item(int w) { this.w = w; }
+    public int weigh(OnceLock<Item> c) { return w; }
+}
+
+class Crate<T extends Rel<OnceLock<T>>> implements Rel<OnceLock<Crate<T>>> {
+    T inner;
+    Crate(T inner) { this.inner = inner; }
+    public int weigh(OnceLock<Crate<T>> c) { return 1; }
+}
+
+<T extends Rel<OnceLock<T>>> int pack(T x, int n) {
+    if (n == 0) { return 0; }
+    return pack<Crate<T>>(new Crate<T>(x), n - 1);
+}
+
+public void main() {
+    print(pack<Item>(new Item(4), 3));
+}

@@ -2321,6 +2321,66 @@ impl RustEmitter {
         self.ord_key_params = ord;
     }
 
+    /// A function's or method's OWN type parameters used as a container key
+    /// in its signature or in a local it declares (`<T> void put(BTreeMap<T,
+    /// int> m, T k)`), ADDED to the key sets the enclosing declaration
+    /// collected; the names added are returned, for [`Self::drop_key_bound_params`].
+    /// A generic function over a keyed container reached rustc as "the trait
+    /// bound `T: Ord` is not satisfied" (ERRATA E1XX-GAP40b).
+    pub(crate) fn add_fn_key_bound_params(&mut self, f: &juxc_ast::FnDecl) -> Vec<String> {
+        if f.generic_params.is_empty() {
+            return Vec::new();
+        }
+        let mut types: Vec<juxc_ast::TypeRef> = f.params.iter().map(|p| p.ty.clone()).collect();
+        if let ReturnType::Type(t) | ReturnType::AsyncType(t) = &f.return_type {
+            types.push(t.clone());
+        }
+        if let Some(body) = &f.body {
+            juxc_ast::visit::for_each_node(body, &mut |n| match n {
+                juxc_ast::visit::Node::Stmt(juxc_ast::Stmt::VarDecl(v)) => {
+                    if let Some(t) = &v.ty {
+                        types.push(t.clone());
+                    }
+                }
+                juxc_ast::visit::Node::Expr(juxc_ast::Expr::NewObject(n)) if !n.generic_args.is_empty() => {
+                    types.push(juxc_ast::TypeRef {
+                        name: n.class_name.clone(),
+                        generic_args: n.generic_args.iter().cloned().map(juxc_ast::GenericArg::Type).collect(),
+                        nullable: false,
+                        array_shape: None,
+                        fn_shape: None,
+                        ptr_depth: 0,
+                        span: n.span,
+                    });
+                }
+                _ => {}
+            });
+        }
+        let (prev_hash, prev_ord) = (self.hash_key_params.clone(), self.ord_key_params.clone());
+        let (prev_eq, prev_hashed) = (self.eq_bound_params.clone(), self.hashed_params.clone());
+        self.collect_key_bound_params(&f.generic_params, types.iter());
+        let added: Vec<String> = self
+            .hash_key_params
+            .iter()
+            .chain(self.ord_key_params.iter())
+            .filter(|p| !prev_hash.contains(*p) && !prev_ord.contains(*p))
+            .cloned()
+            .collect();
+        self.hash_key_params.extend(prev_hash);
+        self.ord_key_params.extend(prev_ord);
+        self.eq_bound_params.extend(prev_eq);
+        self.hashed_params.extend(prev_hashed);
+        added
+    }
+
+    /// Undo [`Self::add_fn_key_bound_params`].
+    pub(crate) fn drop_key_bound_params(&mut self, added: &[String]) {
+        for p in added {
+            self.hash_key_params.remove(p);
+            self.ord_key_params.remove(p);
+        }
+    }
+
     /// The operators whose Rust trait bridge a GENERIC class gets: equality,
     /// hash and ordering. `operator string` is bridged on its own path, and
     /// the arithmetic bridges are still non-generic only.
@@ -6151,7 +6211,9 @@ impl RustEmitter {
                 &method.body.iter().collect::<Vec<_>>(),
                 &[],
             );
+            let keys = self.add_fn_key_bound_params(method);
             self.emit_generic_params_with_bounds(&combined, &defaulted);
+            self.drop_key_bound_params(&keys);
         }
         self.w.push('(');
         for (i, param) in method.params.iter().enumerate() {
@@ -6438,7 +6500,9 @@ impl RustEmitter {
                 &method.body.iter().collect::<Vec<_>>(),
                 &[],
             );
+            let keys = self.add_fn_key_bound_params(method);
             self.emit_generic_params_with_bounds(&combined_method_generics, &defaulted);
+            self.drop_key_bound_params(&keys);
         }
         let param_into_marks = std::mem::replace(&mut self.param_into_marks, prev_marks).unwrap_or_default();
         self.w.push('(');

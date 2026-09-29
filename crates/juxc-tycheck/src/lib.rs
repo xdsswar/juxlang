@@ -399,12 +399,13 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     // from the result and `E0457` checks every use against the same table.
     symbols.clone_needs = clone_needs::compute(units, &symbols, &all_expr_types);
     // The instantiations the program builds, closed over its generic calls
-    // (ERRATA E137), and a dispatch that cannot close is `E0438`.
+    // (ERRATA E137).
     let seeds: Vec<ty::Ty> = all_expr_types.values().cloned().collect();
     symbols.instantiations = instantiations::close(&symbols, &all_inst_facts, &seeds);
     // Polymorphic recursion is lowered by erasure (ERRATA E141): the
-    // erased classes have one instantiation, and only what cannot be erased
-    // is left for `E0438`.
+    // erased classes have one instantiation, and only a parameter held in a
+    // foreign type with no known shape is left, as `E0620` (`E0438` is
+    // retired, ERRATA E1XX-GAP40b).
     symbols.erasure = erasure::plan(&symbols);
     erasure::normalize_instantiations(&mut symbols);
     if !symbols.erasure.refused.is_empty() {
@@ -413,9 +414,6 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         }
         // Said once, at the bound, rather than again at each dispatch.
         symbols.instantiations.unbounded.clear();
-    }
-    for (idx, d) in generic_dispatch::unclosable_diagnostics(&symbols) {
-        tc.diagnostics.push(d.with_file(idx));
     }
     // `E0457`: every use checked against that table, so the checker, not
     // rustc, reports a member used over a type argument that cannot meet it.

@@ -57,8 +57,11 @@ mod rep_select;
 pub use rep_select::RepViolation;
 mod sizeof_emit;
 mod stmts;
+mod sync_boundary;
 mod types;
 mod worker;
+mod worker_copies;
+pub use worker_copies::worker_copy_diagnostics;
 mod writer;
 
 #[cfg(test)]
@@ -978,6 +981,21 @@ impl PartialOrd for JuxErased {
         }
     }
 }
+/// A total order, for an erased key in a `BTreeMap` / `BTreeSet` (ERRATA
+/// E1XX-GAP40b): the value's own `<=>` when it has one, else its type and
+/// then its identity, which is what its `==` falls back to as well.
+impl Ord for JuxErased {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let own = match self.vt.cmp {
+            Some(c) if self.same_kind(other) => c(&*self.value, &*other.value),
+            _ => Option::None,
+        };
+        match own {
+            Some(o) => o,
+            _ => (self.vt.type_id, self.__jux_identity()).cmp(&(other.vt.type_id, other.__jux_identity())),
+        }
+    }
+}
 impl std::hash::Hash for JuxErased {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self.vt.hash {
@@ -1082,100 +1100,110 @@ pub fn jux_erased_rebox<R: Clone + 'static>(r: R, vt: &std::rc::Rc<JuxErasedVtab
 pub fn jux_erased_type_id<X: 'static>(_: &X) -> std::any::TypeId {
     std::any::TypeId::of::<X>()
 }
-/// A collection seen from both sides of an erasure boundary (ERRATA
-/// E144): the erased code holds a `Vec<JuxErased>`, the code that
-/// knows the element type a `Vec<X>`. The typed collection is the one
-/// storage; the erased cell is kept as a mirror of it, refreshed from it
-/// each time the cell is borrowed (`pull`) and written back into it when a
-/// mutable borrow of the cell ends (`push`), so a write through either name
-/// is seen through the other, as it is for one collection with two names.
-pub struct JuxLink {
-    alive: std::rc::Rc<dyn Fn() -> bool>,
-    pull: std::rc::Rc<dyn Fn()>,
-    push: std::rc::Rc<dyn Fn()>,
+/// A collection seen from both sides of an erasure boundary (ERRATA E144,
+/// E1XX-GAP40b): the erased code holds a `Vec<JuxErased>`, the code that
+/// knows the element type a `Vec<X>`. The two cells are one collection. Each
+/// side holds a copy of it and the pair knows which copies are current: a
+/// borrow of a side whose copy is out of date first brings it up to date
+/// from the other, and a mutable borrow makes its side the only current one.
+/// A run of accesses from one side costs nothing extra, so a loop over the
+/// collection stays linear; only switching sides after a write copies.
+pub struct JuxLinkPair {
+    /// Bit 1: the erased copy is current. Bit 2: the typed copy is.
+    state: std::cell::Cell<u8>,
+    erased: std::rc::Rc<dyn std::any::Any>,
     typed: std::rc::Rc<dyn std::any::Any>,
+    to_e: Box<dyn Fn(&dyn std::any::Any, &dyn std::any::Any)>,
+    to_t: Box<dyn Fn(&dyn std::any::Any, &dyn std::any::Any)>,
 }
-type JuxLinkBack = (std::rc::Rc<dyn Fn() -> bool>, std::rc::Rc<dyn std::any::Any>);
 thread_local! {
-    static JUX_LINKS: std::cell::RefCell<std::collections::HashMap<usize, JuxLink>> =
+    static JUX_LINKS: std::cell::RefCell<std::collections::HashMap<usize, (std::rc::Rc<JuxLinkPair>, bool)>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
-    static JUX_LINKS_BACK: std::cell::RefCell<std::collections::HashMap<usize, JuxLinkBack>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static JUX_LINKS_PRUNED: std::cell::Cell<usize> = const { std::cell::Cell::new(64) };
 }
 fn jux_link_key<T: ?Sized>(c: &JuxCell<T>) -> usize {
     c as *const JuxCell<T> as *const () as usize
 }
-/// Refresh the erased cell `key` from its typed collection when it is a
-/// mirror; `key` when it is one, `0` when it is not.
-pub fn jux_link_pull(key: usize) -> usize {
+/// Bring the cell `key` up to date when it is one side of a link, before it
+/// is borrowed; a mutable borrow (`write`) leaves only its side current.
+pub fn jux_link_touch(key: usize, write: bool) {
     let hit = JUX_LINKS.with(|m| match m.try_borrow() {
-        Ok(m) if !m.is_empty() => m.get(&key).map(|l| (l.alive.clone(), l.pull.clone())),
+        Ok(m) if !m.is_empty() => m.get(&key).cloned(),
         _ => Option::None,
     });
-    match hit {
-        Some((alive, pull)) if alive() => {
-            pull();
-            key
+    if let Some((pair, is_erased)) = hit {
+        let mine = if is_erased { 1u8 } else { 2u8 };
+        if pair.state.get() & mine == 0 {
+            if is_erased {
+                (pair.to_e)(&*pair.erased, &*pair.typed);
+            } else {
+                (pair.to_t)(&*pair.erased, &*pair.typed);
+            }
+            pair.state.set(pair.state.get() | mine);
         }
-        _ => 0,
-    }
-}
-/// Write the erased cell `key` back into its typed collection.
-pub fn jux_link_push(key: usize) {
-    let hit = JUX_LINKS.with(|m| m.borrow().get(&key).map(|l| l.push.clone()));
-    if let Some(push) = hit {
-        push();
+        if write {
+            pair.state.set(mine);
+        }
     }
 }
 fn jux_link_register<EC: 'static, TC: 'static>(
     e: &std::rc::Rc<JuxCell<EC>>,
     t: &std::rc::Rc<JuxCell<TC>>,
-    to_t: std::rc::Rc<dyn Fn(&EC) -> TC>,
-    to_e: std::rc::Rc<dyn Fn(&TC) -> EC>,
+    to_t: impl Fn(&EC) -> TC + 'static,
+    to_e: impl Fn(&TC) -> EC + 'static,
 ) {
-    let we = std::rc::Rc::downgrade(e);
-    let (w1, w2, w3) = (we.clone(), we.clone(), we.clone());
-    let (t1, t2) = (t.clone(), t.clone());
-    let alive: std::rc::Rc<dyn Fn() -> bool> = std::rc::Rc::new(move || w1.strong_count() > 0);
-    let pull: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(move || {
-        if let Some(e) = w2.upgrade() {
-            // A cell borrowed already was refreshed when that borrow began.
-            let fresh = match t1.0.try_borrow() {
-                Ok(t) if e.0.try_borrow_mut().is_ok() => Some(to_e(&t)),
-                _ => Option::None,
+    let copy_e = move |e: &dyn std::any::Any, t: &dyn std::any::Any| {
+        if let (Some(e), Some(t)) = (e.downcast_ref::<JuxCell<EC>>(), t.downcast_ref::<JuxCell<TC>>()) {
+            let fresh = match t.0.try_borrow() {
+                Ok(t) => Some(to_e(&t)),
+                Err(_) => Option::None,
             };
             if let (Some(fresh), Ok(mut slot)) = (fresh, e.0.try_borrow_mut()) {
                 *slot = fresh;
             }
         }
-    });
-    let push: std::rc::Rc<dyn Fn()> = std::rc::Rc::new(move || {
-        if let Some(e) = w3.upgrade() {
-            let fresh = to_t(&e.0.borrow());
-            match t2.0.try_borrow_mut() {
-                Ok(mut slot) => *slot = fresh,
-                Err(_) => jux_cell_in_use(std::any::type_name::<TC>()),
+    };
+    let copy_t = move |e: &dyn std::any::Any, t: &dyn std::any::Any| {
+        if let (Some(e), Some(t)) = (e.downcast_ref::<JuxCell<EC>>(), t.downcast_ref::<JuxCell<TC>>()) {
+            let fresh = match e.0.try_borrow() {
+                Ok(e) => Some(to_t(&e)),
+                Err(_) => Option::None,
+            };
+            if let (Some(fresh), Ok(mut slot)) = (fresh, t.0.try_borrow_mut()) {
+                *slot = fresh;
             }
         }
-    });
-    let back_alive = alive.clone();
-    let back: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(we);
+    };
+    let erased: std::rc::Rc<dyn std::any::Any> = e.clone();
     let typed: std::rc::Rc<dyn std::any::Any> = t.clone();
+    let pair = std::rc::Rc::new(JuxLinkPair {
+        state: std::cell::Cell::new(3),
+        erased,
+        typed,
+        to_e: Box::new(copy_e),
+        to_t: Box::new(copy_t),
+    });
     JUX_LINKS.with(|m| {
         let mut m = m.borrow_mut();
-        m.retain(|_, l| (l.alive)());
-        m.insert(jux_link_key(&**e), JuxLink { alive, pull, push, typed });
-    });
-    JUX_LINKS_BACK.with(|m| {
-        let mut m = m.borrow_mut();
-        m.retain(|_, l| (l.0)());
-        m.insert(jux_link_key(&**t), (back_alive, back));
+        // A pair nobody else holds either side of is done with; dropped
+        // whenever the table has doubled since it was last swept.
+        let pruned = JUX_LINKS_PRUNED.with(|p| p.get());
+        if m.len() > 2 * pruned {
+            m.retain(|_, (p, _)| std::rc::Rc::strong_count(&p.erased) > 1 || std::rc::Rc::strong_count(&p.typed) > 1);
+            JUX_LINKS_PRUNED.with(|p| p.set(m.len().max(64)));
+        }
+        m.insert(jux_link_key(&**e), (pair.clone(), true));
+        m.insert(jux_link_key(&**t), (pair, false));
     });
 }
+/// The other side of the link `key` is one side of, when it is one.
+fn jux_link_other(key: usize, from_erased: bool) -> Option<std::rc::Rc<dyn std::any::Any>> {
+    JUX_LINKS.with(|m| {
+        m.borrow().get(&key).filter(|(_, e)| *e == from_erased).map(|(p, e)| if *e { p.typed.clone() } else { p.erased.clone() })
+    })
+}
 /// The typed collection an erased one is (`Vec<JuxErased>` read as a
-/// `Vec<X>`): the same storage, never a copy of it. A collection the erased
-/// code built moves into a typed one the first time it is asked for, and
-/// its cell becomes a mirror of that one.
+/// `Vec<X>`): the same collection, never a copy of it.
 pub fn jux_link_unerase<EC: 'static, TC: 'static>(
     e: &std::rc::Rc<JuxCell<EC>>,
     to_t: impl Fn(&EC) -> TC + 'static,
@@ -1184,26 +1212,23 @@ pub fn jux_link_unerase<EC: 'static, TC: 'static>(
     let any: std::rc::Rc<dyn std::any::Any> = e.clone();
     match any.downcast::<JuxCell<TC>>() {
         Ok(same) => same,
-        Err(_) => {
-            let key = jux_link_key(&**e);
-            let known = JUX_LINKS.with(|m| m.borrow().get(&key).filter(|l| (l.alive)()).map(|l| l.typed.clone()));
-            match known {
-                Some(t) => match t.downcast::<JuxCell<TC>>() {
-                    Ok(t) => t,
-                    Err(_) => jux_erased_mismatch(std::any::type_name::<TC>()),
-                },
-                _ => {
-                    let first = to_t(&e.0.borrow());
-                    let t = std::rc::Rc::new(JuxCell(std::cell::RefCell::new(first)));
-                    jux_link_register(e, &t, std::rc::Rc::new(to_t), std::rc::Rc::new(to_e));
-                    t
-                }
+        Err(_) => match jux_link_other(jux_link_key(&**e), true) {
+            Some(t) => match t.downcast::<JuxCell<TC>>() {
+                Ok(t) => t,
+                Err(_) => jux_erased_mismatch(std::any::type_name::<TC>()),
+            },
+            _ => {
+                jux_link_touch(jux_link_key(&**e), false);
+                let first = to_t(&e.0.borrow());
+                let t = std::rc::Rc::new(JuxCell(std::cell::RefCell::new(first)));
+                jux_link_register(e, &t, to_t, to_e);
+                t
             }
-        }
+        },
     }
 }
-/// The erased collection a typed one is seen as, a mirror of it; the same
-/// mirror each time the same collection crosses.
+/// The erased collection a typed one is seen as: the same one each time the
+/// same collection crosses.
 pub fn jux_link_erase<EC: 'static, TC: 'static>(
     t: &std::rc::Rc<JuxCell<TC>>,
     to_t: impl Fn(&EC) -> TC + 'static,
@@ -1212,19 +1237,106 @@ pub fn jux_link_erase<EC: 'static, TC: 'static>(
     let any: std::rc::Rc<dyn std::any::Any> = t.clone();
     match any.downcast::<JuxCell<EC>>() {
         Ok(same) => same,
+        Err(_) => match jux_link_other(jux_link_key(&**t), false) {
+            Some(e) => match e.downcast::<JuxCell<EC>>() {
+                Ok(e) => e,
+                Err(_) => jux_erased_mismatch(std::any::type_name::<EC>()),
+            },
+            _ => {
+                jux_link_touch(jux_link_key(&**t), false);
+                let first = to_e(&t.0.borrow());
+                let e = std::rc::Rc::new(JuxCell(std::cell::RefCell::new(first)));
+                jux_link_register(&e, t, to_t, to_e);
+                e
+            }
+        },
+    }
+}
+/// A shared pointer (`Rc<T>`, `Arc<T>`) seen from both sides of an erasure
+/// boundary (ERRATA E1XX-GAP40b). What it points at cannot change, so the two
+/// sides need no copy kept in step; what they need is identity: the same
+/// pointer crossing twice is the same pointer on the other side, and crossing
+/// back gives the original. The pair is remembered while either is in use.
+pub struct JuxSharePair {
+    a: Box<dyn std::any::Any>,
+    b: Box<dyn std::any::Any>,
+    unused: Box<dyn Fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>,
+}
+thread_local! {
+    static JUX_SHARES: std::cell::RefCell<std::collections::HashMap<usize, std::rc::Rc<JuxSharePair>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static JUX_SHARES_PRUNED: std::cell::Cell<usize> = const { std::cell::Cell::new(64) };
+}
+fn jux_share_find<P: Clone + 'static>(key: usize) -> Option<P> {
+    let pair = JUX_SHARES.with(|m| m.borrow().get(&key).cloned());
+    pair.and_then(|p| p.a.downcast_ref::<P>().or_else(|| p.b.downcast_ref::<P>()).cloned())
+}
+fn jux_share_keep<P1: 'static, P2: 'static>(
+    k1: usize,
+    k2: usize,
+    p1: P1,
+    p2: P2,
+    unused: impl Fn(&dyn std::any::Any, &dyn std::any::Any) -> bool + 'static,
+) {
+    let pair = std::rc::Rc::new(JuxSharePair { a: Box::new(p1), b: Box::new(p2), unused: Box::new(unused) });
+    JUX_SHARES.with(|m| {
+        let mut m = m.borrow_mut();
+        let pruned = JUX_SHARES_PRUNED.with(|p| p.get());
+        if m.len() > 2 * pruned {
+            m.retain(|_, p| !(p.unused)(&*p.a, &*p.b));
+            JUX_SHARES_PRUNED.with(|p| p.set(m.len().max(64)));
+        }
+        m.insert(k1, pair.clone());
+        m.insert(k2, pair);
+    });
+}
+/// The `Rc<Y>` the `Rc<X>` `r` is on the other side of a boundary.
+pub fn jux_share_rc<X: 'static, Y: 'static>(r: &std::rc::Rc<X>, conv: impl Fn(&X) -> Y) -> std::rc::Rc<Y> {
+    let any: std::rc::Rc<dyn std::any::Any> = r.clone();
+    match any.downcast::<Y>() {
+        Ok(same) => same,
         Err(_) => {
-            let key = jux_link_key(&**t);
-            let known = JUX_LINKS_BACK.with(|m| m.borrow().get(&key).filter(|l| (l.0)()).map(|l| l.1.clone()));
-            let mirror = known
-                .and_then(|w| w.downcast::<std::rc::Weak<JuxCell<EC>>>().ok())
-                .and_then(|w| w.upgrade());
-            match mirror {
-                Some(e) => e,
+            let key = std::rc::Rc::as_ptr(r) as *const () as usize;
+            match jux_share_find::<std::rc::Rc<Y>>(key) {
+                Some(y) => y,
                 _ => {
-                    let first = to_e(&t.0.borrow());
-                    let e = std::rc::Rc::new(JuxCell(std::cell::RefCell::new(first)));
-                    jux_link_register(&e, t, std::rc::Rc::new(to_t), std::rc::Rc::new(to_e));
-                    e
+                    let y = std::rc::Rc::new(conv(&**r));
+                    let k2 = std::rc::Rc::as_ptr(&y) as *const () as usize;
+                    jux_share_keep(key, k2, r.clone(), y.clone(), |a, b| {
+                        let count = |p: &dyn std::any::Any| match (p.downcast_ref::<std::rc::Rc<X>>(), p.downcast_ref::<std::rc::Rc<Y>>()) {
+                            (Some(x), _) => std::rc::Rc::strong_count(x),
+                            (_, Some(y)) => std::rc::Rc::strong_count(y),
+                            _ => 0,
+                        };
+                        count(a) <= 1 && count(b) <= 1
+                    });
+                    y
+                }
+            }
+        }
+    }
+}
+/// The `Arc<Y>` the `Arc<X>` `r` is on the other side of a boundary.
+pub fn jux_share_arc<X: 'static, Y: 'static>(r: &std::sync::Arc<X>, conv: impl Fn(&X) -> Y) -> std::sync::Arc<Y> {
+    let as_any: &dyn std::any::Any = r;
+    match as_any.downcast_ref::<std::sync::Arc<Y>>() {
+        Some(same) => same.clone(),
+        _ => {
+            let key = std::sync::Arc::as_ptr(r) as *const () as usize;
+            match jux_share_find::<std::sync::Arc<Y>>(key) {
+                Some(y) => y,
+                _ => {
+                    let y = std::sync::Arc::new(conv(&**r));
+                    let k2 = std::sync::Arc::as_ptr(&y) as *const () as usize;
+                    jux_share_keep(key, k2, r.clone(), y.clone(), |a, b| {
+                        let count = |p: &dyn std::any::Any| match (p.downcast_ref::<std::sync::Arc<X>>(), p.downcast_ref::<std::sync::Arc<Y>>()) {
+                            (Some(x), _) => std::sync::Arc::strong_count(x),
+                            (_, Some(y)) => std::sync::Arc::strong_count(y),
+                            _ => 0,
+                        };
+                        count(a) <= 1 && count(b) <= 1
+                    });
+                    y
                 }
             }
         }
@@ -1843,6 +1955,13 @@ struct RustEmitter {
     /// Collection values to link into the erased slot they fill (ERRATA
     /// E144), keyed like `erase_on_emit`.
     pub(crate) link_on_emit: std::collections::HashMap<crate::erasure::EraseKey, crate::erasure::LinkMark>,
+    /// Collection values crossing into (`true`: to the plain inline form)
+    /// or out of (`false`: to a handle) a worker-shared class (ERRATA
+    /// E1XX-GAP40b, `sync_boundary.rs`), keyed like `erase_on_emit`.
+    pub(crate) sync_args: std::collections::HashMap<crate::erasure::EraseKey, bool>,
+    /// The crossings being emitted now, so the conversion's own emission of
+    /// the value does not convert it again.
+    pub(crate) sync_now: std::collections::HashSet<crate::erasure::EraseKey>,
     /// The expressions being boxed or unboxed right now, so the recursive
     /// emission of the value itself does not wrap it again.
     pub(crate) erasing_now: std::collections::HashSet<(crate::erasure::EraseKey, bool)>,
@@ -5280,7 +5399,7 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         // collection, refreshed when it is read. Every other program keeps
         // the plain cell, and pays nothing for the possibility.
         let links = !symbols.erasure.classes.is_empty() || !symbols.erasure.fns.is_empty();
-        let pull_line = if links { "        jux_link_pull(jux_link_key(self));\n" } else { "" };
+        let pull_line = if links { "        jux_link_touch(jux_link_key(self), false);\n" } else { "" };
         w.push_str("impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for JuxCell<T> {\n");
         w.push_str("    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n");
         w.push_str(pull_line);
@@ -5309,8 +5428,9 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         // names the Jux type and the Jux line instead of Rust's bare
         // `already borrowed: BorrowMutError` at an emitted-Rust line.
         if links {
-            // The linked form: a borrow of a mirror cell refreshes it first,
-            // and a mutable one writes it back when it ends.
+            // The linked form: a borrow of one side of a link first brings
+            // that side up to date, and a mutable one makes it the only
+            // current side (`jux_link_touch`).
             w.push_str(concat!(
                 "impl<T: ?Sized> JuxCell<T> {\n",
                 "    pub const fn new(value: T) -> Self where T: Sized {\n",
@@ -5319,7 +5439,7 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
                 "    #[inline]\n",
                 "    #[track_caller]\n",
                 "    pub fn borrow(&self) -> std::cell::Ref<'_, T> {\n",
-                "        jux_link_pull(jux_link_key(self));\n",
+                "        jux_link_touch(jux_link_key(self), false);\n",
                 "        match self.0.try_borrow() {\n",
                 "            Ok(r) => r,\n",
                 "            Err(_) => jux_cell_in_use(std::any::type_name::<T>()),\n",
@@ -5327,41 +5447,11 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
                 "    }\n",
                 "    #[inline]\n",
                 "    #[track_caller]\n",
-                "    pub fn borrow_mut(&self) -> JuxRefMut<'_, T> {\n",
-                "        let key = jux_link_pull(jux_link_key(self));\n",
+                "    pub fn borrow_mut(&self) -> std::cell::RefMut<'_, T> {\n",
+                "        jux_link_touch(jux_link_key(self), true);\n",
                 "        match self.0.try_borrow_mut() {\n",
-                "            Ok(r) => JuxRefMut { guard: Some(r), key },\n",
+                "            Ok(r) => r,\n",
                 "            Err(_) => jux_cell_in_use(std::any::type_name::<T>()),\n",
-                "        }\n",
-                "    }\n",
-                "}\n",
-                "/// A mutable borrow of a cell that may mirror a linked collection.\n",
-                "pub struct JuxRefMut<'a, T: ?Sized> {\n",
-                "    guard: Option<std::cell::RefMut<'a, T>>,\n",
-                "    key: usize,\n",
-                "}\n",
-                "impl<'a, T: ?Sized> std::ops::Deref for JuxRefMut<'a, T> {\n",
-                "    type Target = T;\n",
-                "    fn deref(&self) -> &T {\n",
-                "        match &self.guard {\n",
-                "            Some(g) => g,\n",
-                "            _ => unreachable!(),\n",
-                "        }\n",
-                "    }\n",
-                "}\n",
-                "impl<'a, T: ?Sized> std::ops::DerefMut for JuxRefMut<'a, T> {\n",
-                "    fn deref_mut(&mut self) -> &mut T {\n",
-                "        match &mut self.guard {\n",
-                "            Some(g) => g,\n",
-                "            _ => unreachable!(),\n",
-                "        }\n",
-                "    }\n",
-                "}\n",
-                "impl<'a, T: ?Sized> Drop for JuxRefMut<'a, T> {\n",
-                "    fn drop(&mut self) {\n",
-                "        drop(self.guard.take());\n",
-                "        if self.key != 0 {\n",
-                "            jux_link_push(self.key);\n",
                 "        }\n",
                 "    }\n",
                 "}\n",
@@ -5448,8 +5538,8 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("impl<T: ?Sized + PartialEq> PartialEq for JuxCell<T> {\n");
         w.push_str("    fn eq(&self, other: &Self) -> bool {\n");
         if links {
-            w.push_str("        jux_link_pull(jux_link_key(self));\n");
-            w.push_str("        jux_link_pull(jux_link_key(other));\n");
+            w.push_str("        jux_link_touch(jux_link_key(self), false);\n");
+            w.push_str("        jux_link_touch(jux_link_key(other), false);\n");
         }
         w.push_str("        *self.0.borrow() == *other.0.borrow()\n");
         w.push_str("    }\n");
@@ -7468,6 +7558,8 @@ pub fn jux_enter_thread() {
             into_receivers: std::collections::HashMap::new(),
             erase_on_emit: std::collections::HashMap::new(),
             link_on_emit: std::collections::HashMap::new(),
+            sync_args: std::collections::HashMap::new(),
+            sync_now: std::collections::HashSet::new(),
             erasing_now: std::collections::HashSet::new(),
             into_via: Vec::new(),
             non_final_uses: std::collections::HashSet::new(),

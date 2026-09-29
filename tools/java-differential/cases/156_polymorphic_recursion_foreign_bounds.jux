@@ -1,0 +1,65 @@
+// A bound holding the type parameter inside a foreign container, on a
+// polymorphic-recursion cycle (ERRATA E1XX-GAP40b; each was `E0438`).
+//
+// The cycle is compiled by erasure, so where a bound's argument holds `T` the
+// erased code and the value's own code see two Rust types. Each container
+// converts on its own terms:
+//
+//   (T, int)  a tuple is a value: a new one, element by element, is exact
+//   T?        the value inside, when there is one
+//   Box<T>    a box is a value too: a new box around the converted value
+//   Rc<T>     a shared pointer is the SAME pointer each time it crosses, and
+//             crossing back gives the original, so `Rc.ptr_eq` holds
+//
+// DIFFERENTIAL: tools/java-differential/cases/156_polymorphic_recursion_foreign_bounds
+
+import rust.std.*;
+
+interface Pairs<P> { int score(P p); P make(); }
+interface Maybe<M> { int size(M m); M none(); }
+interface Shares<S> { bool same(S a, S b); S keep(S s); }
+interface Boxes<B> { int weigh(B b); }
+
+class Leaf implements Pairs<(Leaf, int)>, Maybe<Leaf?>, Shares<Rc<Leaf>>, Boxes<Box<Leaf>> {
+    int id;
+    Leaf(int id) { this.id = id; }
+    public int score((Leaf, int) p) { return p.0.id * 10 + p.1; }
+    public (Leaf, int) make() { return (this, 7); }
+    public int size(Leaf? m) { return m == null ? 0 : m!!.id; }
+    public Leaf? none() { return null; }
+    public bool same(Rc<Leaf> a, Rc<Leaf> b) { return Rc.ptr_eq(a, b); }
+    public Rc<Leaf> keep(Rc<Leaf> s) { return s; }
+    public int weigh(Box<Leaf> b) { return 5; }
+}
+
+class Wrap<T extends Pairs<(T, int)> & Maybe<T?> & Shares<Rc<T>> & Boxes<Box<T>>>
+        implements Pairs<(Wrap<T>, int)>, Maybe<Wrap<T>?>, Shares<Rc<Wrap<T>>>, Boxes<Box<Wrap<T>>> {
+    T inner;
+    Wrap(T inner) { this.inner = inner; }
+    public int score((Wrap<T>, int) p) { return 100 + p.1 + inner.score(inner.make()); }
+    public (Wrap<T>, int) make() { return (this, 8); }
+    public int size(Wrap<T>? m) { return m == null ? 0 : 1 + inner.size(inner); }
+    public Wrap<T>? none() { return null; }
+    public bool same(Rc<Wrap<T>> a, Rc<Wrap<T>> b) { return Rc.ptr_eq(a, b); }
+    public Rc<Wrap<T>> keep(Rc<Wrap<T>> s) { return s; }
+    public int weigh(Box<Wrap<T>> b) { return 6; }
+}
+
+<T extends Pairs<(T, int)> & Maybe<T?> & Shares<Rc<T>> & Boxes<Box<T>>> String run(T x, int n) {
+    if (n > 0) { return run<Wrap<T>>(new Wrap<T>(x), n - 1); }
+    var made = x.make();
+    var s = x.score(made);
+    var z = x.size(x.none()) * 100 + x.size(x);
+    var r = new Rc<T>(x);
+    var back = x.keep(r);
+    var same = x.same(r, back) && x.same(back, r);
+    var other = new Rc<T>(x);
+    var differs = x.same(r, other);
+    var w = x.weigh(new Box<T>(x));
+    return s + " " + z + " " + same + " " + differs + " " + w;
+}
+
+public void main() {
+    print(run<Leaf>(new Leaf(3), 0));
+    print(run<Leaf>(new Leaf(3), 2));
+}

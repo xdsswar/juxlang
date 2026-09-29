@@ -5706,12 +5706,106 @@ program, a list the value keeps and writes to later, a map; case
 constructor arguments, fields, a list of lists and an array; case
 `152_polymorphic_recursion_collection_slots`),
 `tests/ui/worker_collection_write`, and `tests/ui/generic_method_dispatch_limits`
-now holds the `Rel<Box<T>>` case.
+now holds the `Rel<Box<T>>` case (since removed: that case compiles, E1XX-GAP40b).
 
 **Spec status:** `JUX-LANG-V1.md` §6.5.1 states the erasure and worker rules;
 JUX-ASYNC-ADDENDUM §18.2 states the `E0702` write rule;
 `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10 and `JUX-DIAGNOSTICS-ADDENDUM.md`
 §D.4's `E0438` and `E0702` rows are amended. GAPS.md gap 40 is closed.
+Resolution 4's remaining case and the linked collection's cost are resolved
+by E1XX-GAP40b.
+
+---
+
+## E1XX-GAP40b. The rest of gap 40: foreign containers, worker copies, lambda types
+
+**Conflict.** E144 left six things open:
+
+1. **`E0438` for a bound holding the parameter inside a foreign type**
+   (`T extends Rel<Box<T>>`, and `Rc`, `Arc`, tuples, `T?`). A nullable one
+   (`Maybe<T?>`) was accepted by the checker and reached rustc (E0900).
+2. **A collection read out of a worker-shared object.** Such a class stores
+   its collections inline, under its own lock (§6.5.1's one exception), so
+   what is read out is a copy. Worse than the copy: every crossing between the
+   class's code and other code (a getter's result, a field read or written
+   from outside, a collection argument, `reg.items.len()`) mixed the plain
+   inline form with the handle form and failed to compile.
+3. **`var gv = () -> v;`** took no type, so `gv().push(1)` failed (E0900),
+   and `var f = (x) -> x + 1;` never used was rustc's E0282.
+4. **`int[]? xs;`** did not parse as a local (§6.5.2 allows it).
+5. **An erased key in a `BTreeMap` / `BTreeSet`** had no `Ord`. Behind it: a
+   generic function or method using its own type parameter as a container key
+   never got the `Ord` / `Eq + Hash` bound Rust's container methods need.
+6. **The linked collection's cost.** E144 re-copied the whole collection on
+   every borrow of the erased side, so a loop over one was quadratic.
+
+**Resolution.**
+
+1. **Every container a bound can hold the parameter in converts** between the
+   erased code and the value's own code, element by element and recursively:
+   a collection or runtime-sized array is LINKED (E144); a tuple, a `Box` and
+   a nullable are values and are rebuilt on each crossing, which is exact; an
+   `Rc` or `Arc` cannot change what it points at, so it crosses as the SAME
+   pointer each time (the pair is remembered while either is in use), and
+   `Rc.ptr_eq` holds. A foreign generic type whose shape the compiler does
+   not know (`T extends Rel<OnceLock<T>>`, a crate's own `Tree<T>`) has no
+   conversion at all, and is the new **`E0620`**. **`E0438` is retired**: its
+   dispatch half (E137) could no longer arise once every growing class is
+   erased, and its bound half is `E0620` for the one case left. The number is
+   not reused.
+2. **Crossings convert, and a written copy is refused.** Out of a
+   worker-shared class, an inline collection becomes a new handle; into it, a
+   handle's contents are copied into the inline slot; a mutating call on the
+   field through the object (`reg.items.push(x)`) runs in place, under the
+   object's lock. A copy is only ever read, where it cannot be told from the
+   original: WRITING one -- a local bound to a getter's result or to a field
+   read out of the object (outside it, or inside the class's own code), or a
+   mutating call directly on a getter's result -- is **`E0702`**, pointing at
+   the object's own methods or at `clone()`. Real sharing (an `Arc<Mutex>`
+   collection handle, E121's tier) was considered and not taken: a collection
+   with that handle would take a lock on every access, and two reads of one
+   collection in one statement, which the single-threaded handle allows,
+   would deadlock on a non-reentrant lock; the representation selector has no
+   collection tier to choose it with.
+3. **A lambda has a function type**: its parameters' types, and what its
+   body produces (an expression body's value, a block body's first returned
+   value, else `void`). A `var` declaration takes it, so a call of the lambda
+   has a type. A parameter written without a type is pinned by a use (a call,
+   or a function-typed slot the lambda is passed to); a lambda nothing uses is
+   **`E0453`**, asking for the type.
+4. `int[]? xs;` parses as a local declaration, as it does as a field,
+   parameter and return type.
+5. `JuxErased` has a total order (the value's own `<=>`, else its type and
+   identity), and a generic function or method gets `Ord` / `Eq + Hash` on
+   each of its own type parameters its signature or locals use as a key.
+6. **The link copies only when the side changes.** Each side keeps a copy
+   and the link records which copies are current: a borrow of an out-of-date
+   side brings it up to date once, a mutable borrow makes its side the only
+   current one, and a run of accesses from one side costs nothing extra. Ten
+   thousand pushes and indexed reads through an erased function run in about
+   60 ms in a debug build.
+
+Found along the way and fixed: a tuple literal holding `this` or a collection
+place moved it (`(this, 7)`, rustc E0507); a call through a type parameter's
+bound into a slot the bound makes nullable (`x.size(x)` over `Maybe<T?>`) did
+not lift the argument into `Some`.
+
+**Tests.** `examples/polymorphic_recursion_foreign_bounds.jux` (tuple,
+nullable, `Box`, `Rc`; Java differential case 156),
+`examples/polymorphic_recursion_arc_bound.jux`,
+`tests/ui/erased_through_foreign_type` (`E0620`, replacing
+`tests/ui/generic_method_dispatch_limits`);
+`examples/worker_shared_collections.jux` (case 157),
+`tests/ui/worker_shared_collection_copy`;
+`examples/var_lambda_types.jux` (case 154), `tests/ui/lambda_param_uninferable`;
+`examples/nullable_array_slots.jux` (case 153);
+`examples/polymorphic_recursion_ordered_keys.jux` (case 155);
+`examples/stress_linked_collection.jux`.
+
+**Spec status:** `JUX-LANG-V1.md` §6.5.1 and §7.9, JUX-ASYNC-ADDENDUM
+§18.2, `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10, and
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 (`E0438` retired, `E0453`, `E0620`,
+`E0702`) are amended. GAPS.md gap 40b is closed.
 
 ---
 When you edit any addendum that touches one of the items above,

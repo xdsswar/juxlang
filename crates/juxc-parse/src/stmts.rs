@@ -1609,6 +1609,13 @@ impl<'a> Parser<'a> {
                 i += 1;
             }
         }
+        // A nullable ARRAY, `int[]? xs;` (§6.5.2): the `?` after the
+        // brackets is the array's own, as `parse_type_ref` reads it.
+        if matches!(self.tokens.get(i.wrapping_sub(1)).map(|t| &t.kind), Some(TokenKind::RBracket))
+            && matches!(self.tokens.get(i).map(|t| &t.kind), Some(TokenKind::Question))
+        {
+            i += 1;
+        }
         // Optional trailing `*` raw-pointer markers — `int* p = …`,
         // `T** pp;`. The pointer suffix is the outermost type modifier, so
         // it comes after the array dims, matching `parse_type_ref`.

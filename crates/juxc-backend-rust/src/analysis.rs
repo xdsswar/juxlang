@@ -2887,6 +2887,28 @@ impl crate::RustEmitter {
                     }
                 }
             }
+            // A receiver typed by a type parameter reaches the method through
+            // one of its bounds, whose own parameters the bound fixes:
+            // `x.size(v)` over `T extends Maybe<T?>` fills `size(M m)` at
+            // `M = T?`, a nullable slot (ERRATA E1XX-GAP40b).
+            if let Some(juxc_tycheck::Ty::Param(p)) = self.receiver_ty_of(&f.object) {
+                let bounds = self.type_param_bounds.get(&p).cloned().unwrap_or_default();
+                for b in bounds {
+                    let bare = b.name.segments.last().map(|s| s.text.clone()).unwrap_or_default();
+                    let Some((_, iface)) = self.lookup_interface_by_bare_or_fqn(&bare) else { continue };
+                    let Some(m) = iface.methods.get(f.field.text.as_str()) else { continue };
+                    let Some(pt) = m.params.get(arg_idx).map(|p| &p.ty) else { continue };
+                    if pt.nullable {
+                        return true;
+                    }
+                    let pos = iface.generic_params.iter().position(|g| {
+                        pt.generic_args.is_empty() && pt.name.segments.len() == 1 && g.name.text == pt.name.segments[0].text
+                    });
+                    if let Some(arg) = pos.and_then(|i| b.generic_args.get(i)).and_then(|a| a.as_type()) {
+                        return arg.nullable;
+                    }
+                }
+            }
         }
         false
     }

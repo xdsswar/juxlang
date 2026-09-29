@@ -1,0 +1,1 @@
+lambda_param_uninferable.jux:8:5: [E0453] error: cannot infer the type of `x`, a parameter of the lambda `unused`: the lambda is never called or passed anywhere that would give it one

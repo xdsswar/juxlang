@@ -430,7 +430,7 @@ impl RustEmitter {
     }
 
     pub(crate) fn expr_is_collection_handle(&self, e: &Expr) -> bool {
-        if self.is_foreign_struct_field(e) {
+        if self.is_foreign_struct_field(e) || self.field_is_sync_inline(e) {
             return false;
         }
         match self.narrowed_receiver_ty_of(e) {
@@ -479,7 +479,7 @@ impl RustEmitter {
         recv: &Expr,
         method: &str,
     ) -> Option<&'static str> {
-        if self.is_foreign_struct_field(recv) {
+        if self.is_foreign_struct_field(recv) || self.field_is_sync_inline(recv) {
             return None;
         }
         let juxc_tycheck::Ty::User { name, .. } = self.narrowed_receiver_ty_of(recv)? else {
@@ -1365,6 +1365,11 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
+        // A collection crossing into or out of a worker-shared class converts
+        // between its two representations (ERRATA E1XX-GAP40b).
+        if !self.sync_class_fqns.is_empty() && self.emit_sync_boundary(expr) {
+            return;
+        }
         // **Erasure** (ERRATA E141): a value filling a slot declared as
         // an erased type parameter is boxed; one read out of such a slot is
         // unboxed to the type the checker gave it.
@@ -1547,6 +1552,15 @@ impl RustEmitter {
                         self.w.push_str(", ");
                     }
                     self.emit_expr(el);
+                    // A tuple holds its elements: `(this, 7)` or `(v, 7)` hands
+                    // on a share of the object or collection, as storing it
+                    // anywhere else does (§CR.4.1, §6.5.1), never the place.
+                    if self.wrapper_value_needs_clone(el) || self.value_place_needs_clone(el) {
+                        self.w.push_str(".clone()");
+                    }
+                }
+                if elems.len() == 1 {
+                    self.w.push(',');
                 }
                 self.w.push(')');
             }
