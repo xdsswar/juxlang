@@ -778,7 +778,8 @@ function value, an interface or a stream.
 level deep, as §18.2 already says for every capture: the worker gets its own
 copy. Changes in the worker stay in the worker, which is the one place a
 collection does not alias (§6.5.1 already made the same exception for a
-collection read out of a worker-shared object). A collection of collections, a
+collection read out of a worker-shared object, until E147 made that
+one shared). A collection of collections, a
 record holding a collection, and the values that are never transferable
 (function values, interface handles, streams) are `E0702`, named by value. A
 closure reading a field or method of its own class captures `this`, and the
@@ -5802,6 +5803,10 @@ nullable, `Box`, `Rc`; Java differential case 156),
 `examples/polymorphic_recursion_ordered_keys.jux` (case 155);
 `examples/stress_linked_collection.jux`.
 
+Resolution 2 is superseded by E147: the collections of a
+worker-shared object are shared, not copied, and none of its `E0702` cases
+remain.
+
 **Spec status:** `JUX-LANG-V1.md` §6.5.1 and §7.9, JUX-ASYNC-ADDENDUM
 §18.2, `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10, and
 `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 (`E0438` retired, `E0453`, `E0620`,
@@ -5960,6 +5965,92 @@ equivalence; `JUX-ENTRY-POINTS-ADDENDUM.md` §E.6 and
 `E0446`, `E0700`, `E0900`) are amended. E131's "Not changed" item on
 `Result.from` is superseded, and E130's known boundary is narrowed to what
 the known boundary above keeps. GAPS.md gap 41 is closed.
+## E147. Collections of an object shared with workers are shared
+
+**Conflict.** E145 resolution 2 kept a worker-shared class's collections
+INLINE, under the object's own lock, and converted at every crossing: a
+getter's result, a field read from outside, a list handed in were each a
+copy, and writing the copy was `E0702`. That is the one place JUX-LANG-V1
+§6.5.1 did not reach, and it is not Java's rule: in Java the list in the
+object is the list the getter returns, and the list a caller stores in the
+object stays the caller's list. E145 gave two reasons not to share: two reads
+of one collection in a statement (`xs[0] + xs[1]`) deadlock a non-reentrant
+`Mutex` (and `RwLock` may panic on a re-read by the same thread), and the
+representation selector (E121) had no collection tier. Probing the area found
+three more failures, each an internal compiler error (rustc E0277 or E0599):
+
+1. an ARRAY field of a worker-shared class (`int[] cells`): its handle was the
+   single-threaded `Rc`, which cannot be sent;
+2. a worker returning a collection, `await Worker.spawn(() -> build())`, the
+   very thing §18.2 recommends: the same;
+3. a method of a worker-shared class calling a collection method on a field of
+   an object that is NOT shared (`other.items.push(x)`): inside such a class
+   every collection was taken to be inline, so the handle got no borrow.
+
+**Resolution.**
+
+1. **A reentrant lock.** The atomic handle `JuxSync<T>` is an `Arc` of the
+   prelude's `JuxRLock<T>`: a `Mutex` over the owning thread's id and a depth
+   count, a `Condvar` other threads wait on, and the value in a `RefCell`.
+   The thread that holds the lock may take it again, so a statement that reads
+   one collection twice, and a guard held across a call that reads the same
+   object, cannot deadlock; every other thread waits until the holder has let
+   go of every guard. Inside the lock the value is a `RefCell`, so a mutable
+   borrow while the same thread holds a shared one is the Jux-worded borrow
+   error `JuxCell` already gives (E23), which the emitter's hoisting already
+   avoids, never undefined behaviour. std only, no `unsafe` beyond the
+   `Send`/`Sync` promise and the guard's ordered drop. A worker-shared class
+   now uses the same lock (it was an `Arc<Mutex>`, E121's `ArcMutex` row).
+2. **The shared tier.** The representation selector (E121) gains a collection
+   tier: a collection that can reach a worker is `JuxSync<Vec<T>>` instead of
+   `Rc<JuxCell<Vec<T>>>`, with the same `borrow` / `borrow_mut` surface, so
+   every rule the emitter follows for the single-threaded handle holds for it
+   unchanged (`shared_tier.rs`). What reaches a worker: the type of every
+   field, property, method parameter and result, and constructor parameter of
+   a worker-shared class, walked through type arguments, nullable and array
+   types and the components of a record held there; and the result type of
+   every `Worker.spawn`. Because a collection moves between names freely (an
+   argument, a return, a field store, a generic parameter, an element), the
+   tier is decided per collection TYPE CONSTRUCTOR, keyed by its Rust path:
+   when a `Vec` can reach a worker, every `Vec` in the program takes the tier,
+   and arrays go together likewise (a `T[]` slot meets every element type).
+   There is then no place where the two handles could meet, so nothing
+   converts. A program in which no collection reaches a worker keeps the
+   single-threaded handle everywhere and pays nothing.
+3. **What follows.** A getter hands back the object's own collection; a list
+   stored into the object (a field store, a constructor or method argument)
+   stays the caller's list; a write through any name, on any thread, is seen
+   through every other; `===` on two such collections compares the `Arc`.
+   The crossings of E145 (`sync_boundary.rs`) are gone, and so are its four
+   `E0702` cases (`worker_copies.rs`). `E0702` keeps one copy case, the one
+   §18.2 makes on purpose: a WRITE to a collection a `Worker.spawn` closure
+   captured, which is still the worker's own copy (E144).
+4. **Erasure.** A collection linked across an erasure boundary (E144) may be
+   in the shared tier on both sides. The link runtime is generic over the two
+   handles. For a shared-tier pair the typed side, which another thread may
+   write, is kept current at all times: a write through the erased side is
+   written back as soon as its guard drops, and the erased side catches up
+   whenever the typed side's write count has moved, whichever thread wrote it.
+   The erased side itself holds `JuxErased` values, which never leave their
+   thread.
+5. **Cost.** In a program where the tier is on, each access to a collection
+   of that type takes an uncontended lock and an atomic refcount instead of a
+   borrow flag and a plain one, including accesses that never meet a worker.
+   That is the price of deciding per type rather than per value.
+
+**Tests.** `examples/worker_shared_threads.jux` (four workers writing one
+list and one map through an object, a caller's list kept by it, a getter's
+result written; Java differential case 158),
+`examples/worker_shared_reentrant.jux` (`xs[0] + xs[1]`, `cells[0] +
+cells[3]`, a loop over a list calling a method that reads it, read-and-write
+in one statement, three workers at once; case 159),
+`examples/worker_shared_collections.jux` (case 157, now writing through every
+name it reads), `tests/ui/worker_shared_collection_copy` (only the capture
+write is refused).
+
+**Spec status:** `JUX-LANG-V1.md` §6.5.1, JUX-ASYNC-ADDENDUM §18.2 and
+`JUX-DIAGNOSTICS-ADDENDUM.md` §D.4 (`E0702`) are amended. E145 resolution 2
+is superseded. GAPS.md sweep A is closed.
 
 ---
 When you edit any addendum that touches one of the items above,

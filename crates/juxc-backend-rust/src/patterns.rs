@@ -1038,9 +1038,10 @@ impl RustEmitter {
             .filter(|(_, ty)| {
                 matches!(ty, juxc_tycheck::Ty::User { name, .. } if self.collection_name_is_handle(name))
             })
-            .map(|(name, _)| {
+            .map(|(name, ty)| {
                 let ident = to_rust_ident(name);
-                format!("let {ident} = crate::jux_arr({ident});")
+                let ctor = self.handle_ctor_for_ty(Some(ty));
+                format!("let {ident} = {ctor}({ident});")
             })
             .collect()
     }

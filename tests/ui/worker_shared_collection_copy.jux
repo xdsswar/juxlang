@@ -1,8 +1,10 @@
-// An object shared with workers keeps its collections under its own lock, so
-// one read out of it is a copy (JUX-LANG-V1 §6.5.1). Reading the copy is
-// fine; WRITING it would drop the write, so it is E0702 (ERRATA
-// E145). Writing through the object, a fresh list a method builds,
-// and an explicit `clone()` are all fine.
+// An object shared with workers shares its collections too (JUX-LANG-V1
+// §6.5.1, ERRATA E147): a getter's result, a field bound to a local
+// and a list read inside the class's own code are the object's own list, so
+// writing one is writing the object, and none of it is an error any more
+// (ERRATA E145 refused each of these writes as a write to a copy). The one
+// copy left is the one §18.2 makes on purpose: a worker's own capture of a
+// collection, which is still E0702 when written (ERRATA E144).
 import rust.std.*;
 
 class Registry {
@@ -12,7 +14,7 @@ class Registry {
     public Vec<String> getLog() { return this.log; }
     public Vec<String> fresh() { var v = new Vec<String>(); v.push("f"); return v; }
     public int count() { return this.log.len(); }
-    public void selfCopy() { var mine = this.log; mine.push("lost"); }
+    public void selfAlias() { var mine = this.log; mine.push("kept"); }
 }
 
 public int work(Registry r) { r.handle("w"); return 1; }
@@ -26,11 +28,15 @@ public async void main() {
     l.push("x");
     r.getLog().push("y");
     var it = r.items;
-    it[0] = "z";
+    it.push("z");
+    it[0] = "z2";
     r.items.push("in place");
     var f = r.fresh();
     f.push("ok");
     var c = r.getLog().clone();
     c.push("ok");
+    var local = new Vec<String>();
+    var copyWrite = Worker.spawn(() -> { local.push("lost"); return 0; });
+    await copyWrite;
     print(r.count() + " " + r.items.len());
 }

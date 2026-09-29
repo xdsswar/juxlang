@@ -1150,23 +1150,22 @@ Java answers this program with a `ConcurrentModificationException`; Jux gives
 it a meaning instead, because the alternative is a runtime failure whose cause
 is invisible in the source.
 
-**One exception: a class that crosses a worker boundary.** Its instances are
-shared between threads (JUX-ASYNC-ADDENDUM §18.2), and the whole object is
-protected by the lock that sharing installs. A collection *field* of such a
-class is stored directly in the object rather than behind its own handle, so
-reading it out of the object hands back a copy rather than an alias. Mutating
-it through the owning object -- `registry.add(x)` -- behaves normally; only
-lifting the collection out into a second name loses the aliasing. This is the
-one place §6.5.1 does not reach, and it is called out here rather than left to
-be discovered. Because the copy is silent, it may only be READ: writing a
-collection read out of such an object (a getter's result, a field bound to a
-local, inside or outside the class) is `E0702`, which points at the object's
-own methods or at `clone()` (`ERRATA.md` E145). A collection handed IN
-to such an object is copied into it the same way.
+**Across threads the collection is still one collection.** An object that
+crosses a worker boundary is shared between threads (JUX-ASYNC-ADDENDUM
+§18.2), and so is every collection or array it holds: a getter hands back the
+object's own list, a list the caller stores in the object (a field store, a
+constructor or method argument) stays the caller's list, and a write through
+any name, on any thread, is seen through every other, exactly as in Java. The
+same holds for the collection a worker hands back (`await Worker.spawn(..)`).
+Each access to such a collection is one atomic step under a lock that the
+accessing thread may take again, so `xs[0] + xs[1]` reads the collection twice
+without waiting on itself; as with a class, a read-then-write spread across
+statements is not atomic (`ERRATA.md` E147, which replaces the copies
+of E145).
 
 **A worker's copy is read-only.** A `Worker.spawn` closure takes a captured
-collection or array by value (JUX-ASYNC-ADDENDUM §18.2), because a handle
-cannot cross threads. A copy that is only read cannot be told from the
+collection or array by value (JUX-ASYNC-ADDENDUM §18.2): the worker gets a
+copy of its contents at the spawn point. A copy that is only read cannot be told from the
 original, so the closure may read it freely; a write to it would be lost
 without a word, so it is `E0702`. Return what the worker computes, or ask for
 the copy (`var mine = xs.clone();`) and write that (`ERRATA.md` E144).

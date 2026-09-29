@@ -849,7 +849,7 @@ impl RustEmitter {
         if is_async_main && self.symbols.package.is_empty() && !self.workspace_mode {
             self.w.line("fn main() {");
             self.w.indent_inc();
-            let args = if fn_decl.params.is_empty() { "" } else { crate::ENTRY_ARGS_EXPR };
+            let args = if fn_decl.params.is_empty() { String::new() } else { self.entry_args_expr() };
             self.emit_entry_call(
                 &format!("crate::__jux_block_on(__jux_async_main({args}))"),
                 crate::entry_returns_code(&fn_decl.return_type),
@@ -864,7 +864,7 @@ impl RustEmitter {
         if is_args_main && self.symbols.package.is_empty() && !self.workspace_mode {
             self.w.line("fn main() {");
             self.w.indent_inc();
-            let args = if fn_decl.params.is_empty() { "" } else { crate::ENTRY_ARGS_EXPR };
+            let args = if fn_decl.params.is_empty() { String::new() } else { self.entry_args_expr() };
             self.emit_entry_call(
                 &format!("__jux_args_main({args})"),
                 crate::entry_returns_code(&fn_decl.return_type),
@@ -888,7 +888,7 @@ impl RustEmitter {
         {
             self.w.line("fn main() {");
             self.w.indent_inc();
-            let args = if fn_decl.params.is_empty() { "" } else { crate::ENTRY_ARGS_EXPR };
+            let args = if fn_decl.params.is_empty() { String::new() } else { self.entry_args_expr() };
             let call = format!("{}({args})", to_rust_ident(&fn_decl.name.text));
             // An `async` entry runs under the futures executor, like an
             // `async main`; an `int` one hands its result to `process::exit`.

@@ -5752,9 +5752,9 @@ impl RustEmitter {
     /// True when this declared type lowers to the SINGLE-THREADED handle
     /// `crate::JuxArr<..>`, an `Rc` around the storage.
     ///
-    /// Every collection and array takes that handle unless its element type
-    /// forces the atomic flavour (see [`Self::array_handle_is_sync`]) or the
-    /// slot is a `const`, where there is no identity to share and the storage
+    /// Every collection and array takes that handle unless it is in the shared
+    /// tier (`shared_tier.rs`), an array's element type forces the atomic
+    /// flavour (see [`Self::array_handle_is_sync`]), or the slot is a `const`, where there is no identity to share and the storage
     /// is emitted bare. The distinction matters here because `JuxSync` IS
     /// `Send` and so needs none of the `thread_local!` treatment.
     fn type_ref_lowers_to_local_handle(&self, ty: &juxc_ast::TypeRef) -> bool {
@@ -5764,14 +5764,11 @@ impl RustEmitter {
             .last()
             .map(|s| s.text.as_str())
             .unwrap_or_default();
-        // An array's element is the type itself minus its shape; a
-        // collection's is its first type argument.
-        let element = if ty.array_shape.is_some() {
-            if !self.arrays_are_handles_here() {
-                return false;
-            }
-            bare
-        } else {
+        // An array's element is the type itself minus its shape.
+        if ty.array_shape.is_some() {
+            return self.arrays_are_handles_here() && !self.array_handle_is_sync(bare);
+        }
+        {
             // `String` answers yes to `collection_name_is_handle` -- it is an
             // external `Clone` type with `@MutSelf` methods -- but it lowers
             // to a plain `String`, not a handle. Every other caller asks
@@ -5783,17 +5780,8 @@ impl RustEmitter {
             {
                 return false;
             }
-            match ty.generic_args.first() {
-                Some(juxc_ast::GenericArg::Type(t)) => t
-                    .name
-                    .segments
-                    .last()
-                    .map(|s| s.text.as_str())
-                    .unwrap_or_default(),
-                _ => "",
-            }
-        };
-        !self.array_handle_is_sync(element)
+        }
+        !self.collection_qn_is_sync(&ty.name)
     }
 
     /// True when a static slot of this declared type can't live in the

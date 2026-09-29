@@ -213,49 +213,15 @@ impl RustEmitter {
         self.collection_name_is_handle(bare)
     }
 
-    /// The fully-qualified name of the class being emitted: its bare name in
-    /// the current unit's package.
-    pub(crate) fn enclosing_class_fqn(&self) -> Option<String> {
-        let bare = self.enclosing_class.as_deref()?;
-        let pkg = self
-            .current_unit_idx
-            .and_then(|i| self.symbols.units.get(i))
-            .map(|u| u.package.join("."))
-            .unwrap_or_default();
-        Some(if pkg.is_empty() {
-            bare.to_string()
-        } else {
-            format!("{pkg}.{bare}")
-        })
-    }
-
     /// [`Self::collection_is_handle`] keyed by a type NAME, bare or
     /// package-qualified, for the paths that hold a checked `Ty` rather than a
     /// written path.
     pub(crate) fn collection_name_is_handle(&self, name: &str) -> bool {
         let bare = name.rsplit('.').next().unwrap_or(name);
-        // **Worker-shared class (JUX-ASYNC-ADDENDUM §18.2).** Its instances
-        // cross a thread boundary, so the class carries the ATOMIC handle and
-        // everything reachable from it must be `Send`. `Rc<RefCell<…>>` is
-        // not. Inside such a class a collection is therefore stored INLINE and
-        // protected by the class's own lock, which already gives it shared
-        // mutation across the threads that hold the object.
-        //
-        // The cost is that reading a collection OUT of a worker-shared object
-        // hands back a copy rather than an alias, so it is the one place
-        // §6.5.1 does not reach. Making it reach there needs a second,
-        // atomic handle shape and a type that says which one a value carries;
-        // that is a language-level decision, not a codegen one.
-        //
-        // Compared by FQN. By bare name, a program's own worker-shared
-        // `Registry` made `jux.meta.Registry` count as worker-shared too, so the
-        // generated registry returned plain `Vec`s to callers expecting handles.
-        if self
-            .enclosing_class_fqn()
-            .is_some_and(|c| self.sync_class_fqns.contains(&c))
-        {
-            return false;
-        }
+        // A collection held by a worker-shared class is a handle like any
+        // other: the shared tier (`shared_tier.rs`) makes it one that can cross
+        // threads, so a getter hands back the SAME collection there too
+        // (ERRATA E147).
         // A type the PROGRAM declares shadows a foreign one of the same name
         // (JLS 6.4.1). This check is one `emit_type_as_rust` already makes
         // before taking the external branch, and it belongs here for the same
@@ -363,7 +329,17 @@ impl RustEmitter {
     /// the class being emitted would disagree with itself at the boundary: the
     /// array `getSuppressed()` hands back would be one shape inside the
     /// exception and another at the call site.
+    ///
+    /// Arrays a worker can reach take the same handle, as the shared tier
+    /// (`shared_tier.rs`, ERRATA E147): all of them, since a `T[]`
+    /// slot meets every element type.
     pub(crate) fn array_handle_is_sync(&self, element: &str) -> bool {
+        self.sync_arrays || self.array_elem_is_throwable(element)
+    }
+
+    /// Whether `element` is `Throwable` or a class under it: an array of it is
+    /// atomic whatever else the program does (see [`Self::array_handle_is_sync`]).
+    pub(crate) fn array_elem_is_throwable(&self, element: &str) -> bool {
         let bare = element.rsplit('.').next().unwrap_or(element);
         if bare == "Throwable" {
             return true;
@@ -430,7 +406,7 @@ impl RustEmitter {
     }
 
     pub(crate) fn expr_is_collection_handle(&self, e: &Expr) -> bool {
-        if self.is_foreign_struct_field(e) || self.field_is_sync_inline(e) {
+        if self.is_foreign_struct_field(e) {
             return false;
         }
         match self.narrowed_receiver_ty_of(e) {
@@ -479,7 +455,7 @@ impl RustEmitter {
         recv: &Expr,
         method: &str,
     ) -> Option<&'static str> {
-        if self.is_foreign_struct_field(recv) || self.field_is_sync_inline(recv) {
+        if self.is_foreign_struct_field(recv) {
             return None;
         }
         let juxc_tycheck::Ty::User { name, .. } = self.narrowed_receiver_ty_of(recv)? else {
@@ -1384,11 +1360,6 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
-        // A collection crossing into or out of a worker-shared class converts
-        // between its two representations (ERRATA E145).
-        if !self.sync_class_fqns.is_empty() && self.emit_sync_boundary(expr) {
-            return;
-        }
         // **Erasure** (ERRATA E141): a value filling a slot declared as
         // an erased type parameter is boxed; one read out of such a slot is
         // unboxed to the type the checker gave it.
@@ -1876,8 +1847,10 @@ impl RustEmitter {
                         self.expr_types.get(&c.span),
                         Some(juxc_tycheck::Ty::Nullable(_))
                     );
+                let ctor = self.handle_ctor_for_ty(self.expr_types.get(&c.span));
                 if wrap && !wrap_inside_option {
-                    self.w.push_str("crate::jux_arr(");
+                    self.w.push_str(ctor);
+                    self.w.push('(');
                 }
                 if wrap_inside_option {
                     self.w.push('(');
@@ -1912,7 +1885,9 @@ impl RustEmitter {
                     self.w.push_str(".to_vec()");
                 }
                 if wrap_inside_option {
-                    self.w.push_str(").map(crate::jux_arr)");
+                    self.w.push_str(").map(");
+                    self.w.push_str(ctor);
+                    self.w.push(')');
                 } else if wrap {
                     self.w.push(')');
                 }
@@ -1970,7 +1945,8 @@ impl RustEmitter {
                 // produces the shared handle, not a bare container.
                 let handle = self.collection_is_handle(&n.class_name);
                 if handle {
-                    self.w.push_str("crate::jux_arr(");
+                    self.w.push_str(self.coll_ctor_for_qn(&n.class_name));
+                    self.w.push('(');
                 }
                 self.emit_new_object(n);
                 if handle {
@@ -2768,12 +2744,12 @@ impl RustEmitter {
         let attach = std::mem::take(&mut self.worker_attach);
         let prelude: String = attach
             .iter()
-            .map(|(name, nullable)| {
+            .map(|(name, nullable, ctor)| {
                 let id = to_rust_ident(name);
                 if *nullable {
-                    format!("let {id} = {id}.map(crate::jux_arr); ")
+                    format!("let {id} = {id}.map({ctor}); ")
                 } else {
-                    format!("let {id} = crate::jux_arr({id}); ")
+                    format!("let {id} = {ctor}({id}); ")
                 }
             })
             .collect();

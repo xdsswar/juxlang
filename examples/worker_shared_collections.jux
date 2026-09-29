@@ -1,12 +1,13 @@
-// Collections of an object shared with workers (ERRATA E145).
+// Collections of an object shared with workers (ERRATA E145, E147).
 //
-// A class whose objects cross a worker boundary keeps its collections under
-// the object's own lock (JUX-LANG-V1 §6.5.1). Everything that goes through the
-// object is the one collection: a method that adds to it, a mutating call on
-// the field itself (`reg.items.push(x)`), a store into the field. What is READ
-// OUT of the object -- a getter's result, a field bound to a local, a list
-// handed in -- is a copy, and a copy is only ever read: writing one is `E0702`.
-// Every one of these crossings used to fail to compile.
+// A class whose objects cross a worker boundary is shared between threads,
+// and so are the collections it holds (JUX-LANG-V1 §6.5.1): each is one
+// collection behind a thread-safe handle, whatever name reaches it. A method
+// that adds to it, a mutating call on the field itself (`reg.items.push(x)`),
+// a getter's result, a field bound to a local and a list handed in are all the
+// SAME list, and a write through any of them is seen through every other, as
+// in Java. Before E147 what was read out was a copy, and writing it was
+// `E0702`.
 //
 // DIFFERENTIAL: tools/java-differential/cases/157_worker_shared_collections
 
@@ -45,12 +46,19 @@ public async void main() {
     var total = 0;
     for (var s : log) { total += s.length(); }
     print(total);
+    log.push("z");
+    print(r.count());
 
     r.items.push("main");
     var items = r.items;
     print(items.len() + " " + r.items.len());
+    items.push("alias");
+    print(r.items.len());
 
     r.items = more;
+    print(r.items.len() + " " + more.len());
+    more.push("e");
+    r.items.push("f");
     print(r.items.len() + " " + more.len());
 
     var f = r.fresh();

@@ -627,11 +627,16 @@ impl RustEmitter {
             .clone;
         if !declared.contains("cases") && enum_decl.generic_params.is_empty() && cloneable {
             let case = "crate::jux::std::meta::EnumCase";
+            let (handle, ctor) = if self.std_vec_ctor() == "crate::jux_arr" {
+                ("crate::JuxArr", "crate::jux_arr")
+            } else {
+                ("crate::JuxSync", "crate::JuxSync::new")
+            };
             self.w.line(&format!(
-                "pub fn cases() -> crate::JuxArr<std::vec::Vec<{case}<{self_ty}>>> {{"
+                "pub fn cases() -> {handle}<std::vec::Vec<{case}<{self_ty}>>> {{"
             ));
             self.w.indent_inc();
-            self.w.line("crate::jux_arr(std::vec![");
+            self.w.line(&format!("{ctor}(std::vec!["));
             self.w.indent_inc();
             for (i, v) in enum_decl.variants.iter().enumerate() {
                 let (payload, value) = if v.payload.is_empty() {

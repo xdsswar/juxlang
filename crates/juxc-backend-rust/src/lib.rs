@@ -55,13 +55,11 @@ pub use lowering_level::{function_regions, region_at, with_lowering_plan, BreakK
 mod patterns;
 mod rep_select;
 pub use rep_select::RepViolation;
+mod shared_tier;
 mod sizeof_emit;
 mod stmts;
-mod sync_boundary;
 mod types;
 mod worker;
-mod worker_copies;
-pub use worker_copies::worker_copy_diagnostics;
 mod writer;
 
 #[cfg(test)]
@@ -387,6 +385,7 @@ fn lower_workspace_pass(
         .into_iter()
         .filter(|fqn| e.wrapper_classes.contains(fqn))
         .collect();
+    e.compute_shared_tiers(units);
     // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
     // dispatch (populated Kind trait, accessors, etc.) to be sound — the
     // delegations and accessors assume the interior-mutable `self.0` shape.
@@ -603,6 +602,7 @@ fn lower_workspace_test_pass(
         .into_iter()
         .filter(|fqn| e.wrapper_classes.contains(fqn))
         .collect();
+    e.compute_shared_tiers(units);
     // A polymorphic base must also be a WRAPPER class for `Rc<dyn …Kind>`
     // dispatch (populated Kind trait, accessors, etc.) to be sound — the
     // delegations and accessors assume the interior-mutable `self.0` shape.
@@ -1115,6 +1115,16 @@ pub struct JuxLinkPair {
     typed: std::rc::Rc<dyn std::any::Any>,
     to_e: Box<dyn Fn(&dyn std::any::Any, &dyn std::any::Any)>,
     to_t: Box<dyn Fn(&dyn std::any::Any, &dyn std::any::Any)>,
+    /// Whether anything but the pair still holds either side.
+    held: Box<dyn Fn(&dyn std::any::Any, &dyn std::any::Any) -> bool>,
+    /// A shared-tier pair (ERRATA E147): the typed side may be
+    /// written by any thread, so it is kept current at all times. A write
+    /// through the erased side is written back as soon as it ends, and the
+    /// erased side is refreshed whenever the typed side's write count has
+    /// moved past `seen`.
+    eager: bool,
+    seen: std::cell::Cell<u64>,
+    version_t: Box<dyn Fn(&dyn std::any::Any) -> u64>,
 }
 thread_local! {
     static JUX_LINKS: std::cell::RefCell<std::collections::HashMap<usize, (std::rc::Rc<JuxLinkPair>, bool)>> =
@@ -1124,6 +1134,72 @@ thread_local! {
 fn jux_link_key<T: ?Sized>(c: &JuxCell<T>) -> usize {
     c as *const JuxCell<T> as *const () as usize
 }
+/// A collection handle the link runtime pairs: the single-threaded
+/// `Rc<JuxCell<T>>`, and the shared tier's `JuxSync<T>` (ERRATA
+/// E147). Both sides of one link are always the same kind, since the
+/// tier is chosen per collection type.
+pub trait JuxLinkCell: Clone + 'static {
+    type Inner: 'static;
+    /// The cell's address: the key its borrows touch the link with.
+    fn jux_link_id(&self) -> usize;
+    fn jux_link_make(value: Self::Inner) -> Self;
+    /// The contents, read without touching the link; `None` while this
+    /// thread is writing them.
+    fn jux_link_read<R>(&self, f: &dyn Fn(&Self::Inner) -> R) -> Option<R>;
+    /// Replace the contents without touching the link.
+    fn jux_link_write(&self, value: Self::Inner);
+    /// Whether anything but the link holds this handle.
+    fn jux_link_held(&self) -> bool;
+    /// How many writes the cell has seen, for a handle other threads may
+    /// write; `None` for the single-threaded one.
+    fn jux_link_version(&self) -> Option<u64> {
+        Option::None
+    }
+}
+impl<T: 'static> JuxLinkCell for std::rc::Rc<JuxCell<T>> {
+    type Inner = T;
+    fn jux_link_id(&self) -> usize {
+        jux_link_key(&**self)
+    }
+    fn jux_link_make(value: T) -> Self {
+        std::rc::Rc::new(JuxCell(std::cell::RefCell::new(value)))
+    }
+    fn jux_link_read<R>(&self, f: &dyn Fn(&T) -> R) -> Option<R> {
+        match self.0.try_borrow() {
+            Ok(v) => Some(f(&v)),
+            Err(_) => Option::None,
+        }
+    }
+    fn jux_link_write(&self, value: T) {
+        if let Ok(mut slot) = self.0.try_borrow_mut() {
+            *slot = value;
+        }
+    }
+    fn jux_link_held(&self) -> bool {
+        std::rc::Rc::strong_count(self) > 1
+    }
+}
+impl<T: 'static> JuxLinkCell for JuxSync<T> {
+    type Inner = T;
+    fn jux_link_id(&self) -> usize {
+        self.as_ptr() as *const () as usize
+    }
+    fn jux_link_make(value: T) -> Self {
+        JuxSync::new(value)
+    }
+    fn jux_link_read<R>(&self, f: &dyn Fn(&T) -> R) -> Option<R> {
+        self.0.raw_read(f)
+    }
+    fn jux_link_write(&self, value: T) {
+        self.0.raw_write(value)
+    }
+    fn jux_link_held(&self) -> bool {
+        std::sync::Arc::strong_count(&self.0) > 1
+    }
+    fn jux_link_version(&self) -> Option<u64> {
+        Some(self.0.version())
+    }
+}
 /// Bring the cell `key` up to date when it is one side of a link, before it
 /// is borrowed; a mutable borrow (`write`) leaves only its side current.
 pub fn jux_link_touch(key: usize, write: bool) {
@@ -1132,6 +1208,14 @@ pub fn jux_link_touch(key: usize, write: bool) {
         _ => Option::None,
     });
     if let Some((pair, is_erased)) = hit {
+        if pair.eager {
+            // The typed side is always current; the erased side catches up
+            // with any write made to it since it last did, by any thread.
+            if is_erased && (pair.version_t)(&*pair.typed) != pair.seen.get() {
+                (pair.to_e)(&*pair.erased, &*pair.typed);
+                pair.seen.set((pair.version_t)(&*pair.typed));
+            }
+        } else {
         let mine = if is_erased { 1u8 } else { 2u8 };
         if pair.state.get() & mine == 0 {
             if is_erased {
@@ -1144,44 +1228,62 @@ pub fn jux_link_touch(key: usize, write: bool) {
         if write {
             pair.state.set(mine);
         }
+        }
     }
 }
-fn jux_link_register<EC: 'static, TC: 'static>(
-    e: &std::rc::Rc<JuxCell<EC>>,
-    t: &std::rc::Rc<JuxCell<TC>>,
-    to_t: impl Fn(&EC) -> TC + 'static,
-    to_e: impl Fn(&TC) -> EC + 'static,
+/// A write through the cell `key` has ended. The erased side of a
+/// shared-tier pair writes it back at once, so another thread reading the
+/// typed side sees it.
+pub fn jux_link_written(key: usize) {
+    let hit = JUX_LINKS.with(|m| match m.try_borrow() {
+        Ok(m) if !m.is_empty() => m.get(&key).cloned(),
+        _ => Option::None,
+    });
+    if let Some((pair, true)) = hit {
+        if pair.eager {
+            (pair.to_t)(&*pair.erased, &*pair.typed);
+            pair.seen.set((pair.version_t)(&*pair.typed));
+        }
+    }
+}
+fn jux_link_register<HE: JuxLinkCell, HT: JuxLinkCell>(
+    e: &HE,
+    t: &HT,
+    to_t: impl Fn(&HE::Inner) -> HT::Inner + 'static,
+    to_e: impl Fn(&HT::Inner) -> HE::Inner + 'static,
 ) {
     let copy_e = move |e: &dyn std::any::Any, t: &dyn std::any::Any| {
-        if let (Some(e), Some(t)) = (e.downcast_ref::<JuxCell<EC>>(), t.downcast_ref::<JuxCell<TC>>()) {
-            let fresh = match t.0.try_borrow() {
-                Ok(t) => Some(to_e(&t)),
-                Err(_) => Option::None,
-            };
-            if let (Some(fresh), Ok(mut slot)) = (fresh, e.0.try_borrow_mut()) {
-                *slot = fresh;
+        if let (Some(e), Some(t)) = (e.downcast_ref::<HE>(), t.downcast_ref::<HT>()) {
+            if let Some(fresh) = t.jux_link_read(&to_e) {
+                e.jux_link_write(fresh);
             }
         }
     };
     let copy_t = move |e: &dyn std::any::Any, t: &dyn std::any::Any| {
-        if let (Some(e), Some(t)) = (e.downcast_ref::<JuxCell<EC>>(), t.downcast_ref::<JuxCell<TC>>()) {
-            let fresh = match e.0.try_borrow() {
-                Ok(e) => Some(to_t(&e)),
-                Err(_) => Option::None,
-            };
-            if let (Some(fresh), Ok(mut slot)) = (fresh, t.0.try_borrow_mut()) {
-                *slot = fresh;
+        if let (Some(e), Some(t)) = (e.downcast_ref::<HE>(), t.downcast_ref::<HT>()) {
+            if let Some(fresh) = e.jux_link_read(&to_t) {
+                t.jux_link_write(fresh);
             }
         }
     };
-    let erased: std::rc::Rc<dyn std::any::Any> = e.clone();
-    let typed: std::rc::Rc<dyn std::any::Any> = t.clone();
+    let held = |e: &dyn std::any::Any, t: &dyn std::any::Any| {
+        matches!(e.downcast_ref::<HE>(), Some(e) if e.jux_link_held()) || matches!(t.downcast_ref::<HT>(), Some(t) if t.jux_link_held())
+    };
+    let version_t = |t: &dyn std::any::Any| t.downcast_ref::<HT>().and_then(|t| t.jux_link_version()).unwrap_or(0);
+    let eager = matches!(t.jux_link_version(), Some(_));
+    let seen = std::cell::Cell::new(t.jux_link_version().unwrap_or(0));
+    let erased: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(e.clone());
+    let typed: std::rc::Rc<dyn std::any::Any> = std::rc::Rc::new(t.clone());
     let pair = std::rc::Rc::new(JuxLinkPair {
         state: std::cell::Cell::new(3),
         erased,
         typed,
         to_e: Box::new(copy_e),
         to_t: Box::new(copy_t),
+        held: Box::new(held),
+        eager,
+        seen,
+        version_t: Box::new(version_t),
     });
     JUX_LINKS.with(|m| {
         let mut m = m.borrow_mut();
@@ -1189,38 +1291,42 @@ fn jux_link_register<EC: 'static, TC: 'static>(
         // whenever the table has doubled since it was last swept.
         let pruned = JUX_LINKS_PRUNED.with(|p| p.get());
         if m.len() > 2 * pruned {
-            m.retain(|_, (p, _)| std::rc::Rc::strong_count(&p.erased) > 1 || std::rc::Rc::strong_count(&p.typed) > 1);
+            m.retain(|_, (p, _)| (p.held)(&*p.erased, &*p.typed));
             JUX_LINKS_PRUNED.with(|p| p.set(m.len().max(64)));
         }
-        m.insert(jux_link_key(&**e), (pair.clone(), true));
-        m.insert(jux_link_key(&**t), (pair, false));
+        m.insert(e.jux_link_id(), (pair.clone(), true));
+        m.insert(t.jux_link_id(), (pair, false));
     });
 }
 /// The other side of the link `key` is one side of, when it is one.
-fn jux_link_other(key: usize, from_erased: bool) -> Option<std::rc::Rc<dyn std::any::Any>> {
-    JUX_LINKS.with(|m| {
+fn jux_link_other<H: JuxLinkCell>(key: usize, from_erased: bool) -> Option<H> {
+    let other = JUX_LINKS.with(|m| {
         m.borrow().get(&key).filter(|(_, e)| *e == from_erased).map(|(p, e)| if *e { p.typed.clone() } else { p.erased.clone() })
-    })
+    })?;
+    match other.downcast_ref::<H>() {
+        Some(h) => Some(h.clone()),
+        _ => jux_erased_mismatch(std::any::type_name::<H::Inner>()),
+    }
 }
 /// The typed collection an erased one is (`Vec<JuxErased>` read as a
 /// `Vec<X>`): the same collection, never a copy of it.
-pub fn jux_link_unerase<EC: 'static, TC: 'static>(
-    e: &std::rc::Rc<JuxCell<EC>>,
-    to_t: impl Fn(&EC) -> TC + 'static,
-    to_e: impl Fn(&TC) -> EC + 'static,
-) -> std::rc::Rc<JuxCell<TC>> {
-    let any: std::rc::Rc<dyn std::any::Any> = e.clone();
-    match any.downcast::<JuxCell<TC>>() {
-        Ok(same) => same,
-        Err(_) => match jux_link_other(jux_link_key(&**e), true) {
-            Some(t) => match t.downcast::<JuxCell<TC>>() {
-                Ok(t) => t,
-                Err(_) => jux_erased_mismatch(std::any::type_name::<TC>()),
-            },
+pub fn jux_link_unerase<HE: JuxLinkCell, HT: JuxLinkCell, F, G>(e: &HE, to_t: F, to_e: G) -> HT
+where
+    F: Fn(&HE::Inner) -> HT::Inner + 'static,
+    G: Fn(&HT::Inner) -> HE::Inner + 'static,
+{
+    let any: &dyn std::any::Any = e;
+    match any.downcast_ref::<HT>() {
+        Some(same) => same.clone(),
+        _ => match jux_link_other::<HT>(e.jux_link_id(), true) {
+            Some(t) => t,
             _ => {
-                jux_link_touch(jux_link_key(&**e), false);
-                let first = to_t(&e.0.borrow());
-                let t = std::rc::Rc::new(JuxCell(std::cell::RefCell::new(first)));
+                jux_link_touch(e.jux_link_id(), false);
+                let first = match e.jux_link_read(&to_t) {
+                    Some(v) => v,
+                    _ => jux_cell_in_use(std::any::type_name::<HE::Inner>()),
+                };
+                let t = HT::jux_link_make(first);
                 jux_link_register(e, &t, to_t, to_e);
                 t
             }
@@ -1229,23 +1335,23 @@ pub fn jux_link_unerase<EC: 'static, TC: 'static>(
 }
 /// The erased collection a typed one is seen as: the same one each time the
 /// same collection crosses.
-pub fn jux_link_erase<EC: 'static, TC: 'static>(
-    t: &std::rc::Rc<JuxCell<TC>>,
-    to_t: impl Fn(&EC) -> TC + 'static,
-    to_e: impl Fn(&TC) -> EC + 'static,
-) -> std::rc::Rc<JuxCell<EC>> {
-    let any: std::rc::Rc<dyn std::any::Any> = t.clone();
-    match any.downcast::<JuxCell<EC>>() {
-        Ok(same) => same,
-        Err(_) => match jux_link_other(jux_link_key(&**t), false) {
-            Some(e) => match e.downcast::<JuxCell<EC>>() {
-                Ok(e) => e,
-                Err(_) => jux_erased_mismatch(std::any::type_name::<EC>()),
-            },
+pub fn jux_link_erase<HE: JuxLinkCell, HT: JuxLinkCell, F, G>(t: &HT, to_t: F, to_e: G) -> HE
+where
+    F: Fn(&HE::Inner) -> HT::Inner + 'static,
+    G: Fn(&HT::Inner) -> HE::Inner + 'static,
+{
+    let any: &dyn std::any::Any = t;
+    match any.downcast_ref::<HE>() {
+        Some(same) => same.clone(),
+        _ => match jux_link_other::<HE>(t.jux_link_id(), false) {
+            Some(e) => e,
             _ => {
-                jux_link_touch(jux_link_key(&**t), false);
-                let first = to_e(&t.0.borrow());
-                let e = std::rc::Rc::new(JuxCell(std::cell::RefCell::new(first)));
+                jux_link_touch(t.jux_link_id(), false);
+                let first = match t.jux_link_read(&to_e) {
+                    Some(v) => v,
+                    _ => jux_cell_in_use(std::any::type_name::<HT::Inner>()),
+                };
+                let e = HE::jux_link_make(first);
                 jux_link_register(&e, t, to_t, to_e);
                 e
             }
@@ -1959,13 +2065,6 @@ struct RustEmitter {
     /// Collection values to link into the erased slot they fill (ERRATA
     /// E144), keyed like `erase_on_emit`.
     pub(crate) link_on_emit: std::collections::HashMap<crate::erasure::EraseKey, crate::erasure::LinkMark>,
-    /// Collection values crossing into (`true`: to the plain inline form)
-    /// or out of (`false`: to a handle) a worker-shared class (ERRATA
-    /// E145, `sync_boundary.rs`), keyed like `erase_on_emit`.
-    pub(crate) sync_args: std::collections::HashMap<crate::erasure::EraseKey, bool>,
-    /// The crossings being emitted now, so the conversion's own emission of
-    /// the value does not convert it again.
-    pub(crate) sync_now: std::collections::HashSet<crate::erasure::EraseKey>,
     /// The expressions being boxed or unboxed right now, so the recursive
     /// emission of the value itself does not wrap it again.
     pub(crate) erasing_now: std::collections::HashSet<(crate::erasure::EraseKey, bool)>,
@@ -2017,6 +2116,12 @@ struct RustEmitter {
     /// [`Self::sync_classes`] by fully-qualified name, for the checks that
     /// must not confuse two same-named classes in different packages.
     pub(crate) sync_class_fqns: std::collections::HashSet<String>,
+    /// The collection types (by Rust path) that take the SHARED tier, the
+    /// atomic `JuxSync` handle, because one can reach a worker
+    /// (`shared_tier.rs`, ERRATA E147).
+    pub(crate) sync_coll_paths: std::collections::HashSet<String>,
+    /// Whether arrays take the shared tier (`shared_tier.rs`).
+    pub(crate) sync_arrays: bool,
     /// Type-parameter names of the declaration currently being emitted that are
     /// used as a **hash-keyed** container's key (`HashMap<K, V>`, `HashSet<K>`)
     /// and therefore need `Eq + Hash`, and as a **B-tree** key
@@ -2326,7 +2431,7 @@ struct RustEmitter {
     /// crossed the boundary as a plain copy of a collection's contents (the
     /// handle itself cannot), and the body reads it as a handle again. The
     /// flag is `true` for a nullable capture. Taken by `emit_bare_move_lambda`.
-    pub(crate) worker_attach: Vec<(String, bool)>,
+    pub(crate) worker_attach: Vec<(String, bool, &'static str)>,
 }
 
 /// True when a class declaration should lower to the shared-mutation
@@ -4104,10 +4209,6 @@ fn compute_polymorphic_forced_classes(units: &[juxc_ast::CompilationUnit]) -> Ha
     forced
 }
 
-/// The argument an entry shim passes to `main(String[] args)`: the
-/// command line without the program name (§E.1.3).
-pub(crate) const ENTRY_ARGS_EXPR: &str = "crate::jux_arr(std::env::args().skip(1).collect::<Vec<String>>())";
-
 /// Whether an entry point hands back an exit code (§E.1.2): `int main()`, or
 /// `async int main()`, whose inner type is not the `void` sentinel.
 pub(crate) fn entry_returns_code(rt: &juxc_ast::ReturnType) -> bool {
@@ -5563,118 +5664,274 @@ fn jux_float_layout(sign: &str, digits: String, exp: i32) -> String {
         w.push_str("pub fn jux_arr<T>(v: T) -> JuxArr<T> {\n");
         w.push_str("    std::rc::Rc::new(JuxCell(std::cell::RefCell::new(v)))\n");
         w.push_str("}\n");
-        w.push_str(
-            "
-",
-        );
-        w.push_str(
-            "pub struct JuxSync<T: ?Sized>(pub std::sync::Arc<std::sync::Mutex<T>>);
-",
-        );
-        w.push_str(
-            "impl<T> JuxSync<T> {
-",
-        );
-        w.push_str(
-            "    pub fn new(value: T) -> Self {
-",
-        );
-        w.push_str(
-            "        JuxSync(std::sync::Arc::new(std::sync::Mutex::new(value)))
-",
-        );
-        w.push_str(
-            "    }
-",
-        );
-        w.push_str(
-            "}
-",
-        );
-        w.push_str(
-            "impl<T: ?Sized> JuxSync<T> {
-",
-        );
-        // A poisoned lock means another thread panicked while holding it. The
-        // object is still there, and Jux has no notion of poisoning, so take the
-        // value back rather than turn every later access into a second panic.
-        w.push_str(
-            "    pub fn borrow(&self) -> std::sync::MutexGuard<'_, T> {
-",
-        );
-        w.push_str(
-            "        self.0.lock().unwrap_or_else(|e| e.into_inner())
-",
-        );
-        w.push_str(
-            "    }
-",
-        );
-        w.push_str(
-            "    pub fn borrow_mut(&self) -> std::sync::MutexGuard<'_, T> { self.borrow() }
-",
-        );
-        w.push_str(
-            "    pub fn as_ptr(&self) -> *const std::sync::Mutex<T> {
-",
-        );
-        w.push_str(
-            "        std::sync::Arc::as_ptr(&self.0)
-",
-        );
-        w.push_str(
-            "    }
-",
-        );
-        w.push_str(
-            "    pub fn ptr_eq(&self, other: &Self) -> bool {
-",
-        );
-        w.push_str(
-            "        std::sync::Arc::ptr_eq(&self.0, &other.0)
-",
-        );
-        w.push_str(
-            "    }
-",
-        );
-        w.push_str(
-            "}
-",
-        );
-        w.push_str(
-            "impl<T: ?Sized> Clone for JuxSync<T> {
-",
-        );
-        w.push_str(
-            "    fn clone(&self) -> Self { JuxSync(self.0.clone()) }
-",
-        );
-        w.push_str(
-            "}
-",
-        );
-        w.push_str(
-            "impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for JuxSync<T> {
-",
-        );
-        w.push_str(
-            "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-",
-        );
-        w.push_str(
-            "        std::fmt::Debug::fmt(&*self.borrow(), f)
-",
-        );
-        w.push_str(
-            "    }
-",
-        );
-        w.push_str(
-            "}
+        // The atomic handle: an object of a worker-shared class, and a
+        // collection or array such an object can reach (ERRATA E147).
+        // Its lock is REENTRANT, which is what lets it stand where the
+        // single-threaded `Rc<JuxCell<..>>` stands: one statement may read the
+        // same object or collection twice (`xs[0] + xs[1]`), and a guard may
+        // be held across a call that reads it again, exactly as two
+        // `RefCell` borrows may. The value sits in a `RefCell` inside the lock,
+        // so a conflicting borrow on the thread that holds the lock is the
+        // same Jux-worded error `JuxCell` gives (ERRATA E23), never undefined
+        // behaviour; other threads wait for the lock.
+        w.push_str(r##"
+/// A reentrant lock around a `RefCell`: the thread that holds it may take it
+/// again, and every other thread waits until the holder has let go of every
+/// guard it took.
+pub struct JuxRLock<T: ?Sized> {
+    state: std::sync::Mutex<JuxRLockState>,
+    free: std::sync::Condvar,
+    cell: std::cell::RefCell<T>,
+}
+struct JuxRLockState {
+    owner: Option<std::thread::ThreadId>,
+    depth: usize,
+    /// Writes so far, for the erasure link runtime (`jux_link_written`).
+    version: u64,
+}
+// Sound because the cell is only ever touched by the thread that owns the
+// lock (`enter` makes it the owner, the guard's drop lets go), and the
+// hand-over between owners goes through the `Mutex`, which orders it.
+unsafe impl<T: ?Sized + Send> Send for JuxRLock<T> {}
+unsafe impl<T: ?Sized + Send> Sync for JuxRLock<T> {}
+impl<T> JuxRLock<T> {
+    pub const fn new(value: T) -> Self {
+        JuxRLock {
+            state: std::sync::Mutex::new(JuxRLockState { owner: Option::None, depth: 0, version: 0 }),
+            free: std::sync::Condvar::new(),
+            cell: std::cell::RefCell::new(value),
+        }
+    }
+}
+impl<T: ?Sized> JuxRLock<T> {
+    /// Take the lock, waiting while another thread holds it. A poisoned
+    /// state lock means a thread panicked between two lines that cannot
+    /// panic; the state is still whole, so it is taken back.
+    #[track_caller]
+    fn enter(&self) {
+        let me = std::thread::current().id();
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        while matches!(st.owner, Some(o) if o != me) {
+            st = self.free.wait(st).unwrap_or_else(|e| e.into_inner());
+        }
+        st.owner = Some(me);
+        st.depth = st.depth + 1;
+    }
+    fn leave(&self) {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.depth = st.depth - 1;
+        if st.depth == 0 {
+            st.owner = Option::None;
+            drop(st);
+            self.free.notify_one();
+        }
+    }
+    #[inline]
+    #[track_caller]
+    pub fn borrow(&self) -> JuxRRef<'_, T> {
+        self.link_touch(false);
+        self.enter();
+        match self.cell.try_borrow() {
+            Ok(r) => JuxRRef { lock: self, value: std::mem::ManuallyDrop::new(r) },
+            Err(_) => {
+                self.leave();
+                jux_cell_in_use(std::any::type_name::<T>())
+            }
+        }
+    }
+    #[inline]
+    #[track_caller]
+    pub fn borrow_mut(&self) -> JuxRMut<'_, T> {
+        self.link_touch(true);
+        self.enter();
+        match self.cell.try_borrow_mut() {
+            Ok(r) => JuxRMut { lock: self, value: std::mem::ManuallyDrop::new(r) },
+            Err(_) => {
+                self.leave();
+                jux_cell_in_use(std::any::type_name::<T>())
+            }
+        }
+    }
+    /// The value for a print: `None` when this thread is writing it.
+    fn try_show(&self) -> Option<JuxRRef<'_, T>> {
+        self.link_touch(false);
+        self.enter();
+        match self.cell.try_borrow() {
+            Ok(r) => Some(JuxRRef { lock: self, value: std::mem::ManuallyDrop::new(r) }),
+            Err(_) => {
+                self.leave();
+                Option::None
+            }
+        }
+    }
+}
+impl<T: ?Sized> JuxRLock<T> {
+    /// The contents for the erasure link runtime, which keeps the link in
+    /// step itself (ERRATA E144): no touch.
+    fn raw_read<R>(&self, f: &dyn Fn(&T) -> R) -> Option<R> {
+        self.enter();
+        let out = match self.cell.try_borrow() {
+            Ok(v) => Some(f(&v)),
+            Err(_) => Option::None,
+        };
+        self.leave();
+        out
+    }
+    /// How many writes the cell has seen.
+    fn version(&self) -> u64 {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).version
+    }
+}
+impl<T> JuxRLock<T> {
+    fn raw_write(&self, value: T) {
+        self.enter();
+        if let Ok(mut slot) = self.cell.try_borrow_mut() {
+            *slot = value;
+        }
+        self.leave();
+    }
+}
+/// A read of a [`JuxRLock`]: the lock is held until it drops.
+pub struct JuxRRef<'a, T: ?Sized> {
+    lock: &'a JuxRLock<T>,
+    value: std::mem::ManuallyDrop<std::cell::Ref<'a, T>>,
+}
+impl<T: ?Sized> std::ops::Deref for JuxRRef<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+impl<T: ?Sized> Drop for JuxRRef<'_, T> {
+    fn drop(&mut self) {
+        // The borrow ends before the lock is let go.
+        unsafe { std::mem::ManuallyDrop::drop(&mut self.value) };
+        self.lock.leave();
+    }
+}
+/// A write of a [`JuxRLock`]: the lock is held until it drops.
+pub struct JuxRMut<'a, T: ?Sized> {
+    lock: &'a JuxRLock<T>,
+    value: std::mem::ManuallyDrop<std::cell::RefMut<'a, T>>,
+}
+impl<T: ?Sized> std::ops::Deref for JuxRMut<'_, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+impl<T: ?Sized> std::ops::DerefMut for JuxRMut<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+}
+impl<T: ?Sized> Drop for JuxRMut<'_, T> {
+    fn drop(&mut self) {
+        unsafe { std::mem::ManuallyDrop::drop(&mut self.value) };
+        self.lock.leave();
+        self.lock.link_written();
+    }
+}
+/// The atomic shared handle: `Arc` of a [`JuxRLock`]. It answers the surface
+/// the single-threaded `Rc<JuxCell<..>>` answers (`borrow`, `borrow_mut`,
+/// `clone`, printing, `==` on the contents), so every rule written for that
+/// handle applies to this one unchanged.
+pub struct JuxSync<T: ?Sized>(pub std::sync::Arc<JuxRLock<T>>);
+impl<T> JuxSync<T> {
+    pub fn new(value: T) -> Self {
+        JuxSync(std::sync::Arc::new(JuxRLock::new(value)))
+    }
+}
+impl<T: ?Sized> JuxSync<T> {
+    #[inline]
+    #[track_caller]
+    pub fn borrow(&self) -> JuxRRef<'_, T> {
+        self.0.borrow()
+    }
+    #[inline]
+    #[track_caller]
+    pub fn borrow_mut(&self) -> JuxRMut<'_, T> {
+        self.0.borrow_mut()
+    }
+    pub fn as_ptr(&self) -> *const JuxRLock<T> {
+        std::sync::Arc::as_ptr(&self.0)
+    }
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl<T: ?Sized> Clone for JuxSync<T> {
+    fn clone(&self) -> Self { JuxSync(self.0.clone()) }
+}
+impl<T: Default> Default for JuxSync<T> {
+    fn default() -> Self { JuxSync::new(T::default()) }
+}
+impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for JuxSync<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.try_show() {
+            Some(v) => std::fmt::Debug::fmt(&*v, f),
+            _ => f.write_str("<in use>"),
+        }
+    }
+}
+impl<T: ?Sized + std::fmt::Display> std::fmt::Display for JuxSync<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0.try_show() {
+            Some(v) => std::fmt::Display::fmt(&*v, f),
+            _ => f.write_str("<in use>"),
+        }
+    }
+}
+impl<T: ?Sized + PartialEq> PartialEq for JuxSync<T> {
+    /// The contents, as for `JuxCell`. The two locks are taken in address
+    /// order, so two threads comparing the same pair cannot each hold one.
+    fn eq(&self, other: &Self) -> bool {
+        if (self.as_ptr().cast::<u8>() as usize) <= (other.as_ptr().cast::<u8>() as usize) {
+            let a = self.borrow();
+            let b = other.borrow();
+            *a == *b
+        } else {
+            let b = other.borrow();
+            let a = self.borrow();
+            *a == *b
+        }
+    }
+}
+impl<T: ?Sized> JuxIdentity for JuxSync<T> {
+    fn __jux_identity(&self) -> *const () { self.as_ptr().cast::<()>() }
+}
 
-",
-        );
+"##);
+        // A shared-tier collection may be one side of an erasure link, like
+        // a `JuxCell` (ERRATA E144): its borrows bring it up to date first.
+        // Every other program pays nothing for the possibility.
+        w.push_str(if links {
+            concat!(
+                "impl<T: ?Sized> JuxRLock<T> {\n",
+                "    #[inline]\n",
+                "    fn link_touch(&self, write: bool) {\n",
+                "        if write {\n",
+                "            let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());\n",
+                "            st.version = st.version.wrapping_add(1);\n",
+                "        }\n",
+                "        jux_link_touch(self as *const Self as *const () as usize, write);\n",
+                "    }\n",
+                "    #[inline]\n",
+                "    fn link_written(&self) {\n",
+                "        jux_link_written(self as *const Self as *const () as usize);\n",
+                "    }\n",
+                "}\n",
+            )
+        } else {
+            concat!(
+                "impl<T: ?Sized> JuxRLock<T> {\n",
+                "    #[inline(always)]\n",
+                "    fn link_touch(&self, _write: bool) {}\n",
+                "    #[inline(always)]\n",
+                "    fn link_written(&self) {}\n",
+                "}\n",
+            )
+        });
         // The atomic handle of a worker-shared class that nothing writes
         // (ERRATA E121): an `Arc` with no lock, answering the same
         // `new` / `as_ptr` / `ptr_eq` surface as `JuxSync`, and reaching its
@@ -7567,8 +7824,6 @@ pub fn jux_enter_thread() {
             into_receivers: std::collections::HashMap::new(),
             erase_on_emit: std::collections::HashMap::new(),
             link_on_emit: std::collections::HashMap::new(),
-            sync_args: std::collections::HashMap::new(),
-            sync_now: std::collections::HashSet::new(),
             erasing_now: std::collections::HashSet::new(),
             into_via: Vec::new(),
             non_final_uses: std::collections::HashSet::new(),
@@ -7579,6 +7834,8 @@ pub fn jux_enter_thread() {
             captures_read_again: std::collections::HashMap::new(),
             sync_classes: std::collections::HashSet::new(),
             sync_class_fqns: std::collections::HashSet::new(),
+            sync_coll_paths: std::collections::HashSet::new(),
+            sync_arrays: false,
             hash_key_params: std::collections::HashSet::new(),
             ord_key_params: std::collections::HashSet::new(),
             eq_bound_params: std::collections::HashSet::new(),
@@ -7845,7 +8102,7 @@ pub fn jux_enter_thread() {
             // `int main()` hands back an exit code (§E.1.3) and was renamed
             // like the args form, since Rust's `main` cannot return an integer.
             let returns_code = main_decl.is_some_and(|f| entry_returns_code(&f.return_type));
-            let args_expr = if takes_args { ENTRY_ARGS_EXPR } else { "" };
+            let args_expr = if takes_args { self.entry_args_expr() } else { String::new() };
             self.w.newline();
             self.w.line("fn main() {");
             self.w.indent_inc();
@@ -8153,7 +8410,7 @@ pub fn jux_enter_thread() {
             // `int main()`: the exit code goes to `std::process::exit`, and a
             // sync one was renamed to `__jux_args_main` like the args form.
             let returns_code = entry_returns_code(&main_fn.return_type);
-            let args_expr = if takes_args { ENTRY_ARGS_EXPR } else { "" };
+            let args_expr = if takes_args { self.entry_args_expr() } else { String::new() };
             let pkg: Vec<&str> = unit
                 .package
                 .as_ref()
@@ -8261,7 +8518,7 @@ pub fn jux_enter_thread() {
         }
         path.push_str(&juxc_lex::to_rust_ident(&entry.name.text));
 
-        let args_expr = if entry.params.is_empty() { "" } else { ENTRY_ARGS_EXPR };
+        let args_expr = if entry.params.is_empty() { String::new() } else { self.entry_args_expr() };
         let call = format!("{path}({args_expr})");
         let call = if matches!(entry.return_type, juxc_ast::ReturnType::AsyncType(_)) {
             format!("crate::__jux_block_on({call})")
@@ -8309,7 +8566,7 @@ pub fn jux_enter_thread() {
         // sentinel); the latter would otherwise drop its exit code.
         let returns_int = entry_returns_code(&method.return_type);
         let takes_args = !method.params.is_empty();
-        let args_expr = if takes_args { ENTRY_ARGS_EXPR } else { "" };
+        let args_expr = if takes_args { self.entry_args_expr() } else { String::new() };
 
         // `ClassName::main` at the crate root, else `pkg::path::ClassName::main`.
         let pkg: Vec<&str> = unit
