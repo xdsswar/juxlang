@@ -674,11 +674,13 @@ impl RustEmitter {
                 // takes when it is written in its own right (`PathBuf` is a
                 // collection): a `Path` is a value, and every use of one reads
                 // it as a value.
+                // The marker may name the owned type qualified, when its crate
+                // family shares the simple name (ERRATA E1XX-SWEEPB).
                 let owned_name = juxc_ast::QualifiedName {
-                    segments: vec![juxc_ast::Ident {
-                        text: owned.clone(),
-                        span: ty.name.span,
-                    }],
+                    segments: owned
+                        .split('.')
+                        .map(|seg| juxc_ast::Ident { text: seg.to_string(), span: ty.name.span })
+                        .collect(),
                     span: ty.name.span,
                 };
                 let real = self.external_class_real_path(&owned_name).unwrap_or(owned);

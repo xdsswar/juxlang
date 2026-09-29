@@ -250,6 +250,30 @@ pub struct StubType {
     /// The crate marks the type `#[deprecated]`: the note it gives (empty when
     /// it gives none). Rendered as `@Deprecated(message = "...")`.
     pub deprecated: Option<String>,
+    /// What an error of this type is to a Jux program when a call throws it
+    /// (Bindgen G.5.4): the Jux exception its shape says it is, read off what
+    /// it implements and how it is built. `None` for a type that is not an
+    /// error, or whose shape says nothing (a `LibraryException`).
+    pub error: Option<ErrorShape>,
+}
+
+/// The Jux exception a crate's error type surfaces as, from its shape
+/// (Bindgen G.5.4, ERRATA E1XX-SWEEPB). Rendered as `@RustError("<class>")`,
+/// `@RustTypeName("<definition path>")` and, for an enum,
+/// `@RustErrorVariants("Variant:Class;...")`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ErrorShape {
+    /// The Jux exception class (a simple name in `jux.std.exceptions`), or
+    /// empty when only some variants have one.
+    pub class: String,
+    /// Per variant, the class a value of that variant is, where it differs
+    /// from `class`: `NotFound` is a `NoSuchElementException`, a variant
+    /// holding an `io::Error` an `IOException`.
+    pub variants: Vec<(String, String)>,
+    /// The type's DEFINITION path (`naga::back::spv::Error`, private modules
+    /// included), which is what `std::any::type_name` reports at run time, so
+    /// the program can find this entry for a value it only holds as an error.
+    pub type_name: String,
 }
 
 impl StubType {
@@ -283,6 +307,7 @@ impl StubType {
             is_hash: false,
             is_tuple_struct: false,
             deprecated: None,
+            error: None,
         }
     }
 }

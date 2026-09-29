@@ -62,7 +62,7 @@ fn converts_into(found: &Ty, target: &str, symbols: &SymbolTable, depth: u8) -> 
         return true;
     }
     let pkg = package_of(&fqn);
-    if marker_list(annotations, "rustfrom").iter().any(|src| source_matches(found, src)) {
+    if marker_list(annotations, "rustfrom").iter().any(|src| source_matches(found, src, symbols)) {
         return true;
     }
     // A borrowed VIEW (`Path`, `OsStr`: the types with `@RustOwnedAs`) is what
@@ -87,14 +87,18 @@ fn satisfies(
 ) -> bool {
     let pkg = package_of(fqn);
     let bare = fqn.rsplit('.').next().unwrap_or(fqn);
-    // A class that names the trait in its `implements` clause.
+    // A class that names the trait in its `implements` clause. When the
+    // clause names the trait qualified, its crate family has another trait of
+    // that simple name, and only the one named counts (ERRATA E1XX-SWEEPB).
     if let Ty::User { name, .. } = found {
-        if crate::ty::class_implements_interface(name, bare, symbols) {
+        if crate::ty::class_implements_interface(name, bare, symbols)
+            && implements_exactly(name, fqn, symbols) != Some(false)
+        {
             return true;
         }
     }
     // A Rust type the trait's impls name: `impl TextBuffer for String`.
-    if iface.implemented_by.iter().any(|shape| shape_matches(found, shape)) {
+    if iface.implemented_by.iter().any(|shape| shape_matches(found, shape, symbols)) {
         return true;
     }
     // A blanket impl's bound: `impl<T: Into<Atom>> IntoAtoms for T`,
@@ -112,7 +116,7 @@ fn satisfies(
                 }
                 return converts_or_satisfies(found, &qualify(pkg, target), symbols, depth + 1);
             }
-            std_trait_holds(found, b, symbols)
+            std_trait_holds(found, b.strip_prefix("rust.std.").unwrap_or(b), symbols)
                 .unwrap_or_else(|| converts_or_satisfies(found, &qualify(pkg, b), symbols, depth + 1))
         })
     })
@@ -151,24 +155,66 @@ fn std_trait_holds(found: &Ty, name: &str, symbols: &SymbolTable) -> Option<bool
 }
 
 /// Whether `found` is the Rust type a `@RustFrom` entry names.
-fn source_matches(found: &Ty, src: &str) -> bool {
+fn source_matches(found: &Ty, src: &str, symbols: &SymbolTable) -> bool {
     match (src, found) {
         ("String" | "str", Ty::String) => true,
         (_, Ty::Primitive(p)) => p.rust_name() == src,
-        (_, Ty::User { name, .. }) => name.rsplit('.').next() == Some(src),
+        (_, Ty::User { name, .. }) => names_match(name, src, symbols),
         _ => false,
     }
 }
 
 /// Whether `found` is the Rust shape a `@RustImplementedBy` entry names.
-fn shape_matches(found: &Ty, shape: &str) -> bool {
+fn shape_matches(found: &Ty, shape: &str, symbols: &SymbolTable) -> bool {
     match (shape, found) {
         ("String" | "str", Ty::String) => true,
         ("[]", Ty::Array { .. }) => true,
         (_, Ty::Primitive(p)) => p.rust_name() == shape,
-        (_, Ty::User { name, .. }) => name.rsplit('.').next() == Some(shape),
+        (_, Ty::User { name, .. }) => names_match(name, shape, symbols),
         _ => false,
     }
+}
+
+/// Whether the type `found` is the one a marker entry names. An entry is a
+/// simple name, matched by simple name, or a QUALIFIED one, which bindgen
+/// writes when the crate family has several types of that simple name
+/// (`rust.naga.front.wgsl.Error`, ERRATA E1XX-SWEEPB) and which means that
+/// one type, under any of its spellings (an alias in a nested package is the
+/// type it names).
+fn names_match(found: &str, entry: &str, symbols: &SymbolTable) -> bool {
+    match (entry.contains('.'), found.contains('.')) {
+        (true, true) => symbols.canonical_type_fqn(found) == symbols.canonical_type_fqn(entry),
+        (true, false) => entry.rsplit('.').next() == Some(found),
+        (false, _) => found.rsplit('.').next() == Some(entry),
+    }
+}
+
+/// Whether the foreign type `found` implements exactly the trait `fqn`, when
+/// its `implements` clause names a trait QUALIFIED: bindgen writes that for a
+/// trait whose simple name the crate family shares (ERRATA E1XX-SWEEPB), and
+/// then the simple name alone would take the wrong one. `None` when the
+/// clause names every trait by its simple name, or `found` is not a type
+/// whose clause this can read.
+fn implements_exactly(found: &str, fqn: &str, symbols: &SymbolTable) -> Option<bool> {
+    let refs: &[juxc_ast::TypeRef] = if let Some(c) = symbols.classes.get(found) {
+        &c.implements
+    } else if let Some(e) = symbols.enums.get(found) {
+        &e.implements
+    } else if let Some(r) = symbols.records.get(found) {
+        &r.implements
+    } else {
+        return None;
+    };
+    let written: Vec<String> = refs
+        .iter()
+        .map(|r| r.name.segments.iter().map(|s| s.text.as_str()).collect::<Vec<_>>().join("."))
+        .collect();
+    if !written.iter().any(|w| w.contains('.')) {
+        return None;
+    }
+    let pkg = package_of(found);
+    let want = symbols.canonical_type_fqn(fqn);
+    Some(written.iter().any(|w| symbols.canonical_type_fqn(&qualify(pkg, w)) == want))
 }
 
 /// `found` is the foreign type `fqn` itself.
