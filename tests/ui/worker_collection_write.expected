@@ -1,2 +1,0 @@
-worker_collection_write.jux:11:39: [E0702] error: `xs` is written inside a `Worker.spawn` closure, but a worker runs on another thread with its OWN copy of a captured collection (§18.2), so the write would never reach the `xs` outside it
-worker_collection_write.jux:12:39: [E0702] error: `arr` is written inside a `Worker.spawn` closure, but a worker runs on another thread with its OWN copy of a captured array (§18.2), so the write would never reach the `arr` outside it

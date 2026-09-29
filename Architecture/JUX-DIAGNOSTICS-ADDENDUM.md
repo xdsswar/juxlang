@@ -620,7 +620,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 |----------|------------------------------------------------------------|--------------------------------|
 | `E0700`  | `await` requires async context; so does `task.await()`, the keyword's method spelling (§18.1.4) | Async §18.1.2, §18.1.4 / `ERRATA.md` E146 |
 | `E0701`  | `async` not available in current profile                     | Async §18.1.11                |
-| `E0702`  | A `Worker.spawn` closure captures a value that is not transferable: a function value, an interface handle, a stream, a class or record holding one, a record holding a collection, or a collection of collections; or it WRITES to a captured collection or array, whose worker-side copy would drop the write. (A collection of an object shared with workers is shared, not copied, and writing it is not an error: `ERRATA.md` E147 retired E145's copy cases.) | Async §18.2 / ERRATA E27, E144, E147 |
+| `E0702`  | A `Worker.spawn` closure captures a value that is not transferable: a function value, an interface handle, a stream, a `ref` binding, or a class or record holding one. (A collection is never a copy any more, captured or held by a shared object, and writing it is not an error: `ERRATA.md` E147 and E1XX-SWEEPA2 retired every copy case.) | Async §18.2 / ERRATA E27, E147, E1XX-SWEEPA2 |
 | `E0710`  | `throw` requires `Exception` or subtype                      | Exceptions §X.2.1              |
 | `E0711`  | Uncaught checked exception must be caught or declared in `throws` | Exceptions §X.1.3        |
 | `E0720`  | Unreachable `catch` clause                                   | Exceptions §X.3.4              |

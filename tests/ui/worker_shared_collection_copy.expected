@@ -1,1 +1,0 @@
-worker_shared_collection_copy.jux:39:42: [E0702] error: `local` is written inside a `Worker.spawn` closure, but a worker runs on another thread with its OWN copy of a captured collection (§18.2), so the write would never reach the `local` outside it

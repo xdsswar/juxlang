@@ -1963,13 +1963,10 @@ impl RustEmitter {
                     // worker only wants the VALUE, so read it out of the cell
                     // before the closure and hand over the plain value.
                     let mut cell_rebinds: Vec<String> = Vec::new();
-                    // A captured collection or array is a `Rc<JuxCell<…>>`
-                    // handle, which cannot go to another thread. The worker
-                    // takes its captures by value (§18.2), so it gets a copy
-                    // of the contents, read out here and re-wrapped inside
-                    // the closure. The checker has already refused elements
-                    // that could not come along (E0702).
-                    let mut detached: Vec<(String, bool, &'static str)> = Vec::new();
+                    // A captured collection or array is in the shared tier
+                    // (`shared_tier.rs`): its handle crosses as itself, an
+                    // `Arc` bump, so the worker and the caller hold ONE
+                    // collection, as in Java (ERRATA E1XX-SWEEPA2).
                     // A method's closure reaching `this` takes a clone of the
                     // handle, which the worker pass has made atomic.
                     let capture_this = matches!(call.args.first(), Some(Expr::Lambda(l)) if self.lambda_captures_this(l));
@@ -2035,20 +2032,14 @@ impl RustEmitter {
                                 .find_map(|s| s.get(&name).cloned())
                                 .or_else(|| use_types.get(&name).cloned());
                             if let Some(ty) = known {
-                                if let Some(nullable) = self.worker_collection_capture(&ty) {
-                                    let ctor = self.handle_ctor_for_ty(Some(&ty));
-                                    detached.push((name, nullable, ctor));
-                                } else if !matches!(ty, juxc_tycheck::Ty::Primitive(_)) {
+                                if !matches!(ty, juxc_tycheck::Ty::Primitive(_)) {
                                     rebinds.push(name);
                                 }
                             }
                         }
                     }
                     self.w.push_str("crate::Worker::spawn(");
-                    let braced = !rebinds.is_empty()
-                        || !cell_rebinds.is_empty()
-                        || !detached.is_empty()
-                        || capture_this;
+                    let braced = !rebinds.is_empty() || !cell_rebinds.is_empty() || capture_this;
                     if braced {
                         self.w.push_str("{ ");
                         for name in &rebinds {
@@ -2065,20 +2056,11 @@ impl RustEmitter {
                             self.w.push_str(&to_rust_ident(name));
                             self.w.push_str(".borrow().clone(); ");
                         }
-                        for (name, nullable, _) in &detached {
-                            let id = to_rust_ident(name);
-                            if *nullable {
-                                self.w.push_str(&format!("let {id} = {id}.as_ref().map(|v| v.borrow().clone()); "));
-                            } else {
-                                self.w.push_str(&format!("let {id} = {id}.borrow().clone(); "));
-                            }
-                        }
                         if capture_this {
                             let outer = self.this_alias.as_deref().unwrap_or("self").to_string();
                             self.w.push_str(&format!("let __jux_this = {outer}.clone(); "));
                         }
                     }
-                    self.worker_attach = detached;
                     let prev_this = if capture_this {
                         self.this_alias.replace("__jux_this".to_string())
                     } else {
@@ -2105,7 +2087,6 @@ impl RustEmitter {
                     for name in &cell_rebinds {
                         self.ref_locals.insert(name.clone());
                     }
-                    self.worker_attach.clear();
                     self.this_alias = prev_this;
                     if braced {
                         self.w.push_str(" }");
@@ -7609,29 +7590,6 @@ impl RustEmitter {
 
     /// The type of a receiver expression, from the two places the emitter
     /// records it: a declared local, else the span-keyed inference map.
-    /// `Some(nullable)` when a `Worker.spawn` capture of type `ty` is a
-    /// collection or array HANDLE, which crosses as a copy of its contents
-    /// (§18.2), in whichever tier it has; `None` for everything else. An
-    /// array of exceptions is shared as it stands, as it always was.
-    pub(crate) fn worker_collection_capture(&self, ty: &juxc_tycheck::Ty) -> Option<bool> {
-        let (inner, nullable) = match ty {
-            juxc_tycheck::Ty::Nullable(t) => (&**t, true),
-            t => (t, false),
-        };
-        let handle = match inner {
-            juxc_tycheck::Ty::Array { element, .. } => {
-                let element_name = match &**element {
-                    juxc_tycheck::Ty::User { name, .. } => name.as_str(),
-                    _ => "",
-                };
-                self.arrays_are_handles_here() && !self.array_elem_is_throwable(element_name)
-            }
-            juxc_tycheck::Ty::User { name, .. } => self.collection_name_is_handle(name),
-            _ => false,
-        };
-        handle.then_some(nullable)
-    }
-
     /// Whether the foreign method `recv_type.method` returns a borrowed VIEW:
     /// its declared result (nullable or not) is `String` (a `&str`) or a type
     /// with a discovered owned form (`OsStr`, `Path`). Only meaningful for a

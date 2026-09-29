@@ -601,6 +601,18 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `other.items.push(x)` in a worker-shared class, `other` not shared | E0900 (rustc E0599) | works |
 | a shared-tier collection linked across erasure, written by a worker | (could not arise) | erased code sees the write |
 
+**42b. CLOSED 2026-09-29 (ERRATA E1XX-SWEEPA2).** ~~A worker got a copy of a captured collection, and an app hid a borrow conflict.~~ The type of every value a `Worker.spawn` closure captures joins E147's shared tier, so a captured collection or array crosses as its own thread-safe handle: the worker and the spawning code hold one collection, as in Java. `E0702` keeps no copy case (it stays for function values, interface handles, streams, `ref` bindings and what holds them); a collection of collections and a record holding a collection are transferable. A for-each head whose method-call chain reads a field through the object's cell (`for (var raw : text.lines())` in a method) binds that read before the loop instead of holding the cell for the whole loop, and a loop label stays on the loop. `tests/apps.rs` runs every app under `JUX_SELFCHECK=1`. Tests: `examples/worker_captures_shared.jux` (Java differential case 161), `examples/foreach_head_guard.jux` (case 160), `examples/worker_captures.jux`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `Worker.spawn(() -> { xs.push(2); ... })` on a captured `Vec` | `E0702` | the caller's `xs` has the push |
+| `Worker.spawn(() -> { arr[1] = 5; ... })` on a captured `int[]` | `E0702` | the caller's `arr[1]` is 5 |
+| four workers pushing into one captured list | (`E0702`) | every push kept |
+| capturing a `Vec<Vec<int>>`, or a record holding an `int[]` | `E0702` | shared, rows too |
+| `for (var raw : text.lines())` in a method whose body changes the object | self-check E0900; "already in use" at run time | works |
+| the same written `this.text.lines()` | E0900 (rustc E0597) | works |
+| `examples/apps/*` under `JUX_SELFCHECK=1` | `csv_report` failed | all pass |
+
 ---
 
 ## 4. Three streams stopped mid-flight

@@ -1,12 +1,12 @@
 // What a `Worker.spawn` closure can take to another thread, and what it gets
-// (JUX-ASYNC-ADDENDUM §18.2, ERRATA E27).
+// (JUX-ASYNC-ADDENDUM §18.2, ERRATA E27, E1XX-SWEEPA2).
 //
-// A worker takes its captures by value. For a collection or an array that
-// means its own copy of the contents, which it reads; a write to it would stay
-// in the worker unseen, so it is refused (E0702), and results come back
-// through the task. A class object is shared instead, upgraded to an
-// atomic handle, so a change made in the worker is seen by the caller. A
-// method's closure that reads a field of its own class captures `this`.
+// A worker shares what it captures, as a Java thread does. A collection or an
+// array is the caller's own, behind a thread-safe handle, so a change the
+// worker makes is seen by the caller once the task is awaited; a copy is made
+// only when the program asks for one (`clone()`). A class object is shared
+// the same way, upgraded to an atomic handle. A method's closure that reads a
+// field of its own class captures `this`.
 
 int sumRange(int[] data, int from, int to) {
     int total = 0;
@@ -45,13 +45,14 @@ public async void main() {
     }
     print(await parallelSum(data));
 
-    // A captured collection is the worker's own copy, so the worker may only
-    // read it: a write would be lost (E0702). To change a copy, say so.
+    // A captured collection is the caller's own: what the worker pushes, the
+    // caller sees. A copy is one the program asks for.
     var names = new Vec<String>();
     names.push("ann");
     var grown = Worker.spawn(() -> {
+        names.push("bob");
         var mine = names.clone();
-        mine.push("bob");
+        mine.push("cy");
         return mine.len();
     });
     print(await grown);
@@ -62,7 +63,7 @@ public async void main() {
     var count = Worker.spawn(() -> ages.len());
     print(await count);
 
-    // Class objects are shared, even inside a copied collection.
+    // Class objects are shared, and so is the collection holding them.
     var jobs = new Vec<Job>();
     jobs.push(new Job());
     jobs.push(new Job());
