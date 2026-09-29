@@ -6992,3 +6992,91 @@ fn foreign_debug_text_is_laid_out_the_jux_way() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
 }
+
+/// What a library's error is to a Jux program (Bindgen G.5.4, ERRATA
+/// E148): the prelude's classifier, compiled on its own and run over
+/// hand-written cases. Every I/O kind Jux has a class for, by the value and
+/// by its `Debug` form; Rust's own errors by what they are; a crate's error by
+/// the shape its stub recorded, an enum by its variant, an I/O class refined
+/// by the `io::Error` the value wraps; the wrapped errors when nothing else
+/// says; a `LibraryException` otherwise.
+#[test]
+fn foreign_errors_are_classified_by_their_shape() {
+    let rust = emit("public void main() {}\n");
+    let start = rust.find("pub type JuxErrClass").expect("the class type");
+    let at = rust[start..].find("fn jux_error_class(").expect("the classifier") + start;
+    let end = rust[at..].find("\n}\n").expect("its end") + at + 3;
+    let classify = &rust[start..end];
+    let cases: &[(&str, &str, &str, &str, &str)] = &[
+        // (type name, io kind, Debug text, wrapped class, expected)
+        ("std::io::error::Error", "NotFound", "", "None", "FILE_NOT_FOUND"),
+        ("std::io::error::Error", "PermissionDenied", "", "None", "ACCESS_DENIED"),
+        ("std::io::error::Error", "AlreadyExists", "", "None", "FILE_ALREADY_EXISTS"),
+        ("std::io::error::Error", "TimedOut", "", "None", "SOCKET_TIMEOUT"),
+        ("std::io::error::Error", "Interrupted", "", "None", "INTERRUPTED_IO"),
+        ("std::io::error::Error", "UnexpectedEof", "", "None", "EOF"),
+        ("std::io::error::Error", "InvalidInput", "", "None", "ILLEGAL_ARGUMENT"),
+        ("std::io::error::Error", "InvalidData", "", "None", "FORMAT"),
+        ("std::io::error::Error", "Unsupported", "", "None", "UNSUPPORTED_OPERATION"),
+        ("std::io::error::Error", "BrokenPipe", "", "None", "IO"),
+        ("&std::io::error::Error", "", "Os { code: 5, kind: PermissionDenied, message: \"x\" }", "None", "ACCESS_DENIED"),
+        ("std::io::error::Error", "", "Kind(UnexpectedEof)", "None", "EOF"),
+        ("core::num::error::ParseIntError", "", "ParseIntError { kind: InvalidDigit }", "None", "NUMBER_FORMAT"),
+        ("alloc::string::FromUtf8Error", "", "", "None", "ENCODING"),
+        ("core::num::error::TryFromIntError", "", "", "None", "ARITHMETIC"),
+        ("core::time::TryFromFloatSecsError", "", "", "None", "ILLEGAL_ARGUMENT"),
+        ("std::env::VarError", "", "NotPresent", "None", "NO_SUCH_ELEMENT"),
+        ("std::env::VarError", "", "NotUnicode(\"x\")", "None", "ENCODING"),
+        ("std::sync::mpsc::RecvError", "", "RecvError", "None", "LIBRARY"),
+        ("app::Wrap", "", "Wrap { .. }", "None", "IO"),
+        ("app::Wrap", "", "Wrap { .. }", "Some(jux_err::FILE_NOT_FOUND)", "FILE_NOT_FOUND"),
+        ("app::Wrap", "", "Wrap { .. }", "Some(jux_err::NUMBER_FORMAT)", "IO"),
+        ("app::Lookup", "", "KeyNotFound(\"k\")", "None", "NO_SUCH_ELEMENT"),
+        ("app::Lookup", "", "Io(Custom { kind: TimedOut })", "Some(jux_err::SOCKET_TIMEOUT)", "SOCKET_TIMEOUT"),
+        ("app::Lookup", "", "Poisoned", "None", "LIBRARY"),
+        ("app::Plain<i64>", "", "Plain", "None", "TIMEOUT"),
+        ("app::Opaque", "", "Opaque", "Some(jux_err::NUMBER_FORMAT)", "NUMBER_FORMAT"),
+        ("app::Opaque", "", "Opaque", "None", "LIBRARY"),
+    ];
+    let mut program = String::from("#![allow(dead_code)]\n");
+    program.push_str(classify);
+    program.push_str(concat!(
+        "\nstatic JUX_ERROR_HINTS: &[(&str, &str, &str)] = &[\n",
+        "    (\"app::Wrap\", \"IOException\", \"\"),\n",
+        "    (\"app::Lookup\", \"\", \"KeyNotFound:NoSuchElementException;Io:IOException\"),\n",
+        "    (\"app::Plain\", \"TimeoutException\", \"\"),\n",
+        "    (\"app::Opaque\", \"\", \"\"),\n",
+        "];\n",
+        "fn main() {\n    let mut bad = 0;\n",
+    ));
+    for (name, kind, debug, chain, want) in cases {
+        let kind = if kind.is_empty() { "None".to_string() } else { format!("Some({kind:?})") };
+        program.push_str(&format!(
+            "    let got = jux_error_class({name:?}, {kind}, {debug:?}, {chain});\n    if got != jux_err::{want} {{ bad += 1; eprintln!(\"{{}} {{:?}} -> {{}}, want {want}\", {name:?}, {debug:?}, jux_err_simple(got)); }}\n"
+        ));
+    }
+    program.push_str(concat!(
+        "    let timed_out = std::io::Error::from(std::io::ErrorKind::TimedOut);\n",
+        "    if jux_chain_class(Some(&timed_out)) != Some(jux_err::SOCKET_TIMEOUT) { bad += 1; eprintln!(\"chain\"); }\n",
+        "    if jux_err_named(\"AccessDeniedException\") != Some(jux_err::ACCESS_DENIED) { bad += 1; eprintln!(\"named\"); }\n",
+        "    if jux_err_named(\"\") != None { bad += 1; eprintln!(\"named empty\"); }\n",
+        "    if jux_err_simple(jux_err::INTERRUPTED_IO) != \"InterruptedIOException\" { bad += 1; eprintln!(\"simple\"); }\n",
+        "    if jux_err_fqn(jux_err::LIBRARY) != \"jux.std.exceptions.LibraryException\" { bad += 1; eprintln!(\"fqn\"); }\n",
+        "    std::process::exit(bad);\n}\n",
+    ));
+    let dir = std::env::temp_dir().join(format!("juxc_foreign_classes_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("classify.rs");
+    std::fs::write(&src, &program).unwrap();
+    let exe = dir.join(if cfg!(windows) { "classify.exe" } else { "classify" });
+    let built = std::process::Command::new("rustc")
+        .args(["--edition", "2021", "-o"])
+        .arg(&exe)
+        .arg(&src)
+        .output()
+        .expect("rustc");
+    assert!(built.status.success(), "{}\n{program}", String::from_utf8_lossy(&built.stderr));
+    let ran = std::process::Command::new(&exe).output().expect("the classifier");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stderr));
+}

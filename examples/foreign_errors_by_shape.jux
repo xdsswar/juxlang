@@ -1,0 +1,115 @@
+// A Rust library's error is the closest Jux exception there is (Bindgen
+// G.5.4, ERRATA E148), and it is shown as that exception wherever a
+// program shows it.
+//
+// An I/O error is the class its kind says: a file that is already there is a
+// `FileAlreadyExistsException`, a name the system cannot take an
+// `IllegalArgumentException`, bytes that are not the text they should be a
+// `FormatException`, each still an `IOException` where Java's is. A missing
+// environment variable is a `NoSuchElementException`, a duration that cannot
+// be one an `IllegalArgumentException`.
+//
+// A library's error value the program holds prints as `Class: message`: on
+// its own, interpolated, joined to a string, and inside a `Result`.
+import rust.std.create_dir;
+import rust.std.remove_dir;
+import rust.std.remove_file;
+import rust.std.write;
+import rust.std.read_to_string;
+import rust.std.File;
+import rust.std.Duration;
+import rust.std.Error;
+import rust.std.ParseIntError;
+import rust.std.var as env_var;
+
+Result<int, ParseIntError> parse(String text) {
+    try {
+        return Result.Ok(text.parse<int>());
+    } catch (ParseIntError e) {
+        return Result.Err(e);
+    }
+}
+
+void main() {
+    String dir = "target/it-foreign-errors-by-shape";
+    try {
+        remove_file(dir + "/data.txt");
+    } catch (IOException e) {
+    }
+    try {
+        remove_dir(dir);
+    } catch (IOException e) {
+    }
+
+    // A directory that is already there.
+    create_dir(dir);
+    try {
+        create_dir(dir);
+    } catch (FileAlreadyExistsException e) {
+        print("already exists");
+    }
+    try {
+        create_dir(dir);
+    } catch (IOException e) {
+        print("an IOException too");
+    }
+
+    // A file name the system cannot take.
+    try {
+        print(File.open("bad\0name"));
+    } catch (IllegalArgumentException e) {
+        print("a name with a NUL is an illegal argument");
+    }
+
+    // Bytes that are not UTF-8, read as text.
+    Vec<ubyte> bytes = new Vec<ubyte>();
+    bytes.push(104 as ubyte);
+    bytes.push(255 as ubyte);
+    write(dir + "/data.txt", bytes);
+    try {
+        print(read_to_string(dir + "/data.txt"));
+    } catch (FormatException e) {
+        print($"format: ${e.getMessage()}");
+    }
+    try {
+        print(read_to_string(dir + "/data.txt"));
+    } catch (IOException e) {
+        print("a FormatException is an IOException");
+    }
+
+    // An environment variable that is not set.
+    try {
+        print(env_var("JUX_SWEEP_B_SURELY_NOT_SET"));
+    } catch (NoSuchElementException e) {
+        print($"no such element: ${e.getMessage()}");
+    }
+
+    // A duration that cannot be one.
+    try {
+        print(Duration.try_from_secs_f64(-1.0));
+    } catch (IllegalArgumentException e) {
+        print($"illegal argument: ${e.getMessage()}");
+    }
+
+    // The library's own error value, shown.
+    print(parse("12"));
+    print(parse("x1"));
+    try {
+        print("x1".parse<int>());
+    } catch (ParseIntError e) {
+        print(e);
+        print($"interpolated: ${e}");
+        print("joined: " + e);
+    }
+    try {
+        print(read_to_string(dir + "/missing.txt"));
+    } catch (Error e) {
+        String shown = $"${e}";
+        print($"shown as a FileNotFoundException: ${shown.startsWith("FileNotFoundException: ")}");
+        print($"with no error number: ${!shown.contains("os error")}");
+    }
+
+    remove_file(dir + "/data.txt");
+    remove_dir(dir);
+    print("done");
+}

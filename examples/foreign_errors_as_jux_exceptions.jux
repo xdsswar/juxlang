@@ -2,10 +2,11 @@
 //
 // A number that does not parse is a `NumberFormatException`, a missing file a
 // `FileNotFoundException` (an `IOException`), text that is not UTF-8 an
-// `EncodingException`, and an error with no standard Jux exception of its own
-// a `LibraryException` naming the library. Each is caught by its own class or
-// by any class above it; a clause naming the library's own error type still
-// receives the library's value.
+// `EncodingException`, and a value that does not convert an
+// `IllegalArgumentException` (an error of a crate with no closer class is a
+// `LibraryException` naming the crate: `bin/juxc/tests/crate_errors.rs`).
+// Each is caught by its own class or by any class above it; a clause naming
+// the library's own error type still receives the library's value.
 import rust.std.Duration;
 import rust.std.Error;
 import rust.std.read_to_string;
@@ -63,11 +64,11 @@ void main() {
         print($"encoding: ${e.getMessage()}");
     }
 
-    // An error with no standard Jux exception.
+    // A value that is not a duration.
     try {
         print(Duration.try_from_secs_f64(-1.0));
-    } catch (LibraryException e) {
-        print($"library ${e.getLibrary()}: ${e.getMessage()}");
+    } catch (IllegalArgumentException e) {
+        print($"illegal argument: ${e.getMessage()}");
     }
 
     // Printed, an exception is its message.

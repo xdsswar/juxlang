@@ -4,7 +4,7 @@ report.txt
 txt
 notes.txt
 1.5s
-invalid utf-8 sequence of 1 bytes from index 1
-shown: FromUtf8Error(bytes: [104, 255], error: Utf8Error(valid_up_to: 1, error_len: 1))
+EncodingException: invalid utf-8 sequence of 1 bytes from index 1
+shown: EncodingException: invalid utf-8 sequence of 1 bytes from index 1
 shown: 2s
 shown: null

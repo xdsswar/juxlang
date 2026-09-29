@@ -124,7 +124,11 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// `@RustArc`, associated constants (G.3.6). 21: `@RustClosureShared`.
 /// 22: a family's nested packages (`rust.eframe.egui`), a shared simple name
 /// written as the exact type everywhere (LEAKS L29), `@Deprecated` (L39).
-const CRATE_STUB_CACHE_VERSION: u32 = 22;
+/// 23: two items of one simple name in ONE crate each in the nested package
+/// of its module (`rust.naga.front.wgsl.Error`), marker names qualified the
+/// way signatures are, `@RustError`/`@RustTypeName`/`@RustErrorVariants`
+/// (ERRATA E148).
+const CRATE_STUB_CACHE_VERSION: u32 = 23;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///

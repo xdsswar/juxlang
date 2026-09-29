@@ -147,6 +147,9 @@ fn generate_merged_impl(
         Some((fam, excluded)) => plan_family_clashes(jsons, package, fam, excluded)?,
         None => FamilyClashes::default(),
     };
+    let _family = FamilyScope::install(
+        family.map(|_| jsons.iter().map(|(n, _)| n.replace('-', "_")).collect()),
+    );
     for (crate_name, json) in jsons.iter().chain(pool_only.iter()) {
         let krate: Crate = serde_json::from_str(json)?;
         let _qualifier = QualifierScope::install(clashes.qualifier_for(&krate, crate_name));
@@ -196,6 +199,7 @@ fn generate_merged_impl(
                 (Some((fam, _)), Some(path)) => nested_package_of(fam, package, path),
                 _ => None,
             };
+            let loser = if is_type { clashes.losers.get(&(member.clone(), id)) } else { None };
             // A member another package of the program declares contributes
             // only its types, as aliases of that declaration (§G.6.2.4).
             let item = match &excluded_pkg {
@@ -203,22 +207,38 @@ fn generate_merged_impl(
                     if !is_type {
                         continue;
                     }
-                    let target = format!("{pkg}.{name}");
+                    let target = loser.map_or_else(|| format!("{pkg}.{name}"), |l| l.jux.clone());
                     StubItem::Alias(StubAlias { name: name.clone(), target })
                 }
                 None => item,
             };
-            // A type that lost a simple name another member of the family
-            // declares is declared in the nested package its path names, so
-            // both stay nameable (`rust.eframe.Frame` and
-            // `rust.eframe.egui.Frame`), or left out when the host publishes
-            // no path to it. Only the one the plan chose: any other item of
-            // that name in the same crate is dropped, as it always was.
+            // A type that lost a simple name another type of the family
+            // declares, in another member or in another module of the same
+            // crate, is declared in the nested package its path names, so
+            // every one stays nameable (`rust.eframe.Frame` and
+            // `rust.eframe.egui.Frame`; `rust.naga.front.wgsl.Error` and
+            // `rust.naga.back.spv.Error`), or left out when the host
+            // publishes no path to it. A type of a shared name the plan did
+            // not place is dropped.
             if is_type {
-                if let Some(loser) = clashes.losers.get(&(member.clone(), rust_name.clone())) {
-                    if let (Some(pkg), true) = (&loser.package, own_path.as_deref() == Some(loser.path.as_str())) {
+                if let Some(loser) = loser {
+                    if let Some(pkg) = &loser.package {
                         nested_decls.push((pkg.clone(), name, item));
                     }
+                    continue;
+                }
+                if clashes.shared.contains(&rust_name) && !clashes.winners.contains(&(member.clone(), id)) {
+                    continue;
+                }
+            }
+            // A function or constant sharing its name with another of the
+            // crate is declared in its module's nested package as well, and
+            // only the one the plan chose keeps the plain name here.
+            if let Some(home) = clashes.value_homes.get(&(member.clone(), id)) {
+                if let Some(pkg) = home {
+                    nested_decls.push((pkg.clone(), name.clone(), item.clone()));
+                }
+                if !clashes.value_winners.contains(&(member.clone(), id)) {
                     continue;
                 }
             }
@@ -304,19 +324,44 @@ fn generate_merged_impl(
 use crate::ty::UNNAMEABLE_PREFIX;
 
 /// What a family's shared simple names mean, decided before any type of it is
-/// mapped (`eframe::Frame` and `egui::Frame` are both `Frame`).
+/// mapped (`eframe::Frame` and `egui::Frame` are both `Frame`, and so are two
+/// types of ONE crate in different modules: naga's `front::wgsl::Error` and
+/// `back::spv::Error`).
 #[derive(Debug, Default)]
 struct FamilyClashes {
-    /// `(defining crate, Rust name)` of every type that shares its simple
-    /// name with another member's -> the Jux name a reference to it writes:
-    /// `rust.eframe.Frame` for the winner, `rust.eframe.egui.Frame` for the
-    /// other.
+    /// `(defining crate, definition path)` of every type that shares its
+    /// simple name with another -> the Jux name a reference to it writes:
+    /// `rust.eframe.Frame` for the winner, `rust.eframe.egui.Frame` for another
+    /// member's, `rust.naga.back.spv.Error` for one in another module of the
+    /// same crate. The definition path is what rustdoc's `paths` table records
+    /// for the type in every crate that mentions it, so a reference is matched
+    /// to exactly one declaration.
+    by_path: HashMap<(String, String), String>,
+    /// `(defining crate, Rust name)` -> qualified name, for a crate that
+    /// declares ONE type of the shared name: the fallback when a reference's
+    /// recorded path is not the one the plan saw.
     names: HashMap<(String, String), String>,
     /// The shared simple names.
     shared: HashSet<String>,
-    /// `(member, Rust name)` of each type that lost its simple name -> where
+    /// Every simple name a type of the family has. A type of Rust's own
+    /// library of one of these names (`std::io::Error` in naga, which declares
+    /// `Error`s of its own) is written `rust.std.Error`, since the bare name
+    /// means the family's type in the stub.
+    declared: HashSet<String>,
+    /// `(member, rustdoc id)` of each type that lost its simple name -> where
     /// it goes.
-    losers: HashMap<(String, String), Loser>,
+    losers: HashMap<(String, u32), Loser>,
+    /// `(member, rustdoc id)` of the type that keeps each shared name. Any
+    /// other type of that name the plan did not place is left out.
+    winners: HashSet<(String, u32)>,
+    /// `(member, rustdoc id)` of each free function or constant that shares
+    /// its simple name with another in the crate -> the nested package its
+    /// module path names (`rust.naga.front.wgsl` for
+    /// `naga::front::wgsl::parse_str`), where it is declared too.
+    value_homes: HashMap<(String, u32), Option<String>>,
+    /// `(member, rustdoc id)` of the function or constant that keeps its
+    /// simple name in the host's package.
+    value_winners: HashSet<(String, u32)>,
 }
 
 /// A type that lost a simple name its family shares.
@@ -325,10 +370,19 @@ struct Loser {
     /// The nested package it is declared in, or `None` when the host
     /// publishes no path to it.
     package: Option<String>,
-    /// Its shortest path in its own crate: which of the crate's items of that
-    /// name the plan is about (a crate may declare several, in different
-    /// modules, and only one of them ever reaches the stub).
-    path: String,
+    /// The Jux name every reference to it is written with, which is also
+    /// the target of the alias a member bound in its own right gets.
+    jux: String,
+}
+
+/// A crate's definition path of an item, as the key [`FamilyClashes`] files
+/// it under: `naga::back::spv::Error` (a crate name with `-` spelled `_`).
+fn definition_key(path: &[String]) -> String {
+    let mut segs = path.to_vec();
+    if let Some(first) = segs.first_mut() {
+        *first = first.replace('-', "_");
+    }
+    segs.join("::")
 }
 
 impl FamilyClashes {
@@ -336,7 +390,7 @@ impl FamilyClashes {
     /// can mention that shares a simple name in the family.
     fn qualifier_for(&self, krate: &Crate, _crate_name: &str) -> HashMap<u32, String> {
         let mut out = HashMap::new();
-        if self.shared.is_empty() {
+        if self.declared.is_empty() {
             return out;
         }
         for (id, summary) in &krate.paths {
@@ -353,11 +407,19 @@ impl FamilyClashes {
             let (Some(first), Some(last)) = (summary.path.first(), summary.path.last()) else {
                 continue;
             };
+            if summary.crate_id != 0
+                && matches!(first.as_str(), "std" | "core" | "alloc")
+                && self.declared.contains(last)
+            {
+                out.insert(id.0, format!("rust.std.{last}"));
+                continue;
+            }
             if !self.shared.contains(last) {
                 continue;
             }
-            let key = (first.replace('-', "_"), last.clone());
-            if let Some(q) = self.names.get(&key) {
+            let krate_name = first.replace('-', "_");
+            let exact = self.by_path.get(&(krate_name.clone(), definition_key(&summary.path)));
+            if let Some(q) = exact.or_else(|| self.names.get(&(krate_name, last.clone()))) {
                 out.insert(id.0, q.clone());
             }
         }
@@ -395,6 +457,58 @@ fn qualified_type_name(id: &Id) -> Option<String> {
     TYPE_QUALIFIER.with(|q| q.borrow().get(&id.0).cloned())
 }
 
+thread_local! {
+    /// The crates of the family being ingested, or `None` outside a family
+    /// ingest (`rust.std`'s merge), read by [`trait_outside_family`].
+    static FAMILY_CRATES: std::cell::RefCell<Option<HashSet<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Installs a family's member crates for as long as it lives.
+struct FamilyScope;
+
+impl FamilyScope {
+    fn install(crates: Option<HashSet<String>>) -> FamilyScope {
+        FAMILY_CRATES.with(|f| *f.borrow_mut() = crates);
+        FamilyScope
+    }
+}
+
+impl Drop for FamilyScope {
+    fn drop(&mut self) {
+        FAMILY_CRATES.with(|f| *f.borrow_mut() = None);
+    }
+}
+
+/// Whether the trait `id` is defined by a crate outside the family being
+/// ingested (`std::error::Error` in a crate's stub). Its simple name then
+/// means nothing in the stub: an interface of the same name the family
+/// declares (`naga`'s own `Error`, a `de::Error` trait) is a different trait.
+fn trait_outside_family(krate: &Crate, id: &Id) -> bool {
+    FAMILY_CRATES.with(|f| {
+        let family = f.borrow();
+        let Some(members) = family.as_ref() else { return false };
+        let Some(summary) = krate.paths.get(id) else { return false };
+        summary.crate_id != 0
+            && summary.path.first().is_some_and(|c| !members.contains(&c.replace('-', "_")))
+    })
+}
+
+/// The name a marker (`@RustFrom`, `@RustImplementedBy`, `@RustBlanket`,
+/// `@RustOwnedAs`, `@RustDerefs`, `@RustIndexOutput`, `@RustBounds`) or an
+/// `implements` clause writes for the type or trait `id`, which rustdoc spells
+/// `path`: its qualified Jux name when the family shares its simple name, the
+/// way every signature writes it, so the name binds to that one type
+/// (`rust.naga.front.wgsl.Error`); otherwise its simple name. `None` for a
+/// type that lost its name and has no Jux name at all.
+fn marker_name(id: &Id, path: &str) -> Option<String> {
+    match qualified_type_name(id) {
+        Some(q) if q.starts_with(UNNAMEABLE_PREFIX) => None,
+        Some(q) => Some(q),
+        None => Some(last_segment(path).to_string()),
+    }
+}
+
 /// Decide every simple name two members of a family declare.
 ///
 /// The winner keeps the plain name in the host's package, as before
@@ -409,14 +523,26 @@ fn plan_family_clashes(
     fam: &crate::family::FamilyPaths,
     excluded: &HashMap<String, String>,
 ) -> Result<FamilyClashes, serde_json::Error> {
-    // Simple name -> (member, the type's shortest public path), one per
-    // member, in family order.
-    let mut declared: HashMap<String, Vec<(String, String)>> = HashMap::new();
+    /// One item of a simple name: its member, rustdoc id, shortest public
+    /// path and definition path.
+    struct Candidate {
+        member: String,
+        id: u32,
+        path: String,
+        def: String,
+    }
+    // Simple name -> every public type of that name, member by member in
+    // family order, and within a member most general path first (the order
+    // `collect_items_with` sorts them in). Free functions and constants the
+    // same way, in a namespace of their own.
+    let mut types: HashMap<String, Vec<Candidate>> = HashMap::new();
+    let mut values: HashMap<String, Vec<Candidate>> = HashMap::new();
     for (crate_name, json) in jsons {
         let krate: Crate = serde_json::from_str(json)?;
         let member = crate_name.replace('-', "_");
         let public = PublicPaths::of(&krate);
-        let mut mine: HashMap<String, String> = HashMap::new();
+        let member_ids = collect_member_ids(&krate);
+        let mut mine: Vec<(bool, String, Candidate)> = Vec::new();
         for item in krate.index.values() {
             if item.crate_id != 0 || !is_public(&item.visibility) {
                 continue;
@@ -427,61 +553,126 @@ fn plan_family_clashes(
                 ItemEnum::TypeAlias(a) => a.generics.params.is_empty(),
                 _ => false,
             };
-            if !is_type {
+            let is_value = match &item.inner {
+                ItemEnum::Function(_) => !member_ids.contains(&item.id.0),
+                ItemEnum::Constant { .. } | ItemEnum::Static(_) => true,
+                _ => false,
+            };
+            if !is_type && !is_value {
                 continue;
             }
-            let Some(path) = shortest_public_path(&krate, item, &public) else { continue };
-            // One per member: the most general path, as `collect_items_with`
-            // sorts them.
-            let better = |old: &String| {
-                (path.matches("::").count(), path.as_str()) < (old.matches("::").count(), old.as_str())
+            let path = if is_type {
+                shortest_public_path(&krate, item, &public)
+            } else {
+                real_rust_path(&krate, item, &public)
             };
-            match mine.get(name) {
-                Some(old) if !better(old) => {}
-                _ => {
-                    mine.insert(name.clone(), path);
-                }
-            }
+            let Some(path) = path else { continue };
+            let def = krate
+                .paths
+                .get(&item.id)
+                .filter(|s| !s.path.is_empty())
+                .map(|s| definition_key(&s.path))
+                .unwrap_or_else(|| path.clone());
+            mine.push((is_type, name.clone(), Candidate { member: member.clone(), id: item.id.0, path, def }));
         }
-        let mut names: Vec<(String, String)> = mine.into_iter().collect();
-        names.sort();
-        for (name, path) in names {
-            declared.entry(name).or_default().push((member.clone(), path));
+        mine.sort_by(|a, b| {
+            (a.1.as_str(), a.2.path.matches("::").count(), a.2.path.as_str(), a.2.id).cmp(&(
+                b.1.as_str(),
+                b.2.path.matches("::").count(),
+                b.2.path.as_str(),
+                b.2.id,
+            ))
+        });
+        for (is_type, name, cand) in mine {
+            let table = if is_type { &mut types } else { &mut values };
+            table.entry(name).or_default().push(cand);
         }
     }
 
-    let mut out = FamilyClashes::default();
-    for (name, members) in declared {
-        if members.len() < 2 {
+    let mut out = FamilyClashes { declared: types.keys().cloned().collect(), ..FamilyClashes::default() };
+    for (name, cands) in types {
+        if cands.len() < 2 {
             continue;
         }
         // The same rule the ingest applies: first in family order, unless a
-        // later member ranks strictly better.
+        // later member ranks strictly better; within one member, the most
+        // general path (the first of its candidates).
         let mut winner = 0;
-        for i in 1..members.len() {
-            if fam.rank(&members[i].0, &name) < fam.rank(&members[winner].0, &name) {
+        for i in 1..cands.len() {
+            if fam.rank(&cands[i].member, &name) < fam.rank(&cands[winner].member, &name) {
                 winner = i;
             }
         }
+        // A member's own first candidate is the one its own stub keeps the
+        // simple name for, when the program binds it in its own right.
+        let member_first = |i: usize| cands.iter().position(|c| c.member == cands[i].member) == Some(i);
         out.shared.insert(name.clone());
-        for (i, (member, path)) in members.iter().enumerate() {
-            let key = (member.clone(), name.clone());
-            if i == winner {
-                out.names.insert(key, format!("{package}.{name}"));
-                continue;
-            }
-            let nested = nested_package_of(fam, package, path);
-            let jux = match (excluded.get(member), &nested) {
-                (Some(owner_pkg), _) => format!("{owner_pkg}.{name}"),
-                (None, Some(pkg)) => format!("{pkg}.{name}"),
-                (None, None) => format!("{UNNAMEABLE_PREFIX}{name}"),
+        let mut per_member: HashMap<&str, usize> = HashMap::new();
+        for c in &cands {
+            *per_member.entry(c.member.as_str()).or_default() += 1;
+        }
+        for (i, c) in cands.iter().enumerate() {
+            let jux = if i == winner {
+                out.winners.insert((c.member.clone(), c.id));
+                format!("{package}.{name}")
+            } else {
+                let nested = nested_package_of(fam, package, &c.path);
+                let jux = match (excluded.get(&c.member), &nested) {
+                    (Some(owner_pkg), _) if member_first(i) => format!("{owner_pkg}.{name}"),
+                    // Another item of that name in a crate bound in its own
+                    // right is in the nested package its own stub declares it
+                    // in: its module path within that crate.
+                    (Some(owner_pkg), _) => match module_within_crate(&c.path) {
+                        Some(module) => format!("{owner_pkg}.{module}.{name}"),
+                        None => format!("{UNNAMEABLE_PREFIX}{name}"),
+                    },
+                    (None, Some(pkg)) => format!("{pkg}.{name}"),
+                    (None, None) => format!("{UNNAMEABLE_PREFIX}{name}"),
+                };
+                out.losers.insert((c.member.clone(), c.id), Loser { package: nested, jux: jux.clone() });
+                jux
             };
-            out.names.insert(key.clone(), jux);
-            out.losers.insert(key, Loser { package: nested, path: path.clone() });
+            out.by_path.insert((crate_of(&c.def), c.def.clone()), jux.clone());
+            if per_member.get(c.member.as_str()) == Some(&1) {
+                out.names.insert((c.member.clone(), name.clone()), jux);
+            }
+        }
+    }
+    // A function or constant that shares its name with another in the crate
+    // (naga's several `parse_str`) is declared in the nested package of its
+    // module as well; the most general keeps the plain name in the host's
+    // package, as it always did.
+    for (_name, cands) in values {
+        if cands.len() < 2 {
+            continue;
+        }
+        let only_one_member = cands.iter().all(|c| c.member == cands[0].member);
+        if !only_one_member {
+            // Across members a value's name is decided as before (the first
+            // member's), and only the host's own values are nested.
+            continue;
+        }
+        out.value_winners.insert((cands[0].member.clone(), cands[0].id));
+        for c in &cands {
+            out.value_homes.insert((c.member.clone(), c.id), nested_package_of(fam, package, &c.path));
         }
     }
     Ok(out)
 }
+
+/// The crate a definition key names (`naga` of `naga::back::spv::Error`).
+fn crate_of(def: &str) -> String {
+    def.split("::").next().unwrap_or(def).to_string()
+}
+
+/// The module part of a path within its own crate, dotted: `back.spv` of
+/// `naga::back::spv::Error`, `None` for an item at the crate's root.
+fn module_within_crate(path: &str) -> Option<String> {
+    let (_, rest) = path.split_once("::")?;
+    let (module, _) = rest.rsplit_once("::")?;
+    Some(module.replace("::", "."))
+}
+
 
 /// The shortest path a program can `use` the item by, within its own crate:
 /// its definition path when every module on it is public, or a re-export
@@ -557,7 +748,7 @@ fn nested_family_files(
         .collect();
     for (_, item) in &mut decl_items {
         if let StubItem::Type(t) = item {
-            t.implements.retain(|n| host_interfaces.contains(n) || n == "RustIterator");
+            t.implements.retain(|n| host_interfaces.contains(n) || n == "RustIterator" || n.contains('.'));
         }
     }
     settle_projection_overloads(&host_declared, &mut decl_items);
@@ -825,8 +1016,10 @@ fn retain_declared_implements(collected: &mut [(String, StubItem)]) {
     for (_, item) in collected.iter_mut() {
         if let StubItem::Type(t) = item {
             // `RustIterator` lives in `rust.std` and is reachable from every
-            // stub, so a crate's iterators keep it too.
-            t.implements.retain(|n| interfaces.contains(n) || n == "RustIterator");
+            // stub, so a crate's iterators keep it too. A qualified name is a
+            // trait whose simple name its family shares, written as the exact
+            // one the plan declared (`rust.naga.front.wgsl.Error`).
+            t.implements.retain(|n| interfaces.contains(n) || n == "RustIterator" || n.contains('.'));
         }
     }
 }
@@ -1246,6 +1439,18 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
     for (id, _, item) in &mut collected {
         if let StubItem::Type(t) = item {
             t.deprecated = krate.index.get(&Id(*id)).and_then(deprecation_note);
+        }
+    }
+
+    // What each error type of a crate is to a Jux program (Bindgen G.5.4).
+    // Rust's own errors (`rust.std`, which is not a family) are known to the
+    // running program by what they are, so their stub says nothing.
+    if FAMILY_CRATES.with(|f| f.borrow().is_some()) {
+        let parse_errors = from_str_errors(krate);
+        for (id, name, item) in &mut collected {
+            if let StubItem::Type(t) = item {
+                t.error = error_shape(krate, Id(*id), name, &parse_errors);
+            }
         }
     }
 
@@ -1784,7 +1989,7 @@ fn shape_name(t: &Type) -> Option<String> {
     match t {
         Type::Slice(_) => Some("[]".to_string()),
         Type::Primitive(p) => Some(p.clone()),
-        Type::ResolvedPath(p) => Some(last_segment(&p.path).to_string()),
+        Type::ResolvedPath(p) => marker_name(&p.id, &p.path),
         _ => None,
     }
 }
@@ -1817,6 +2022,7 @@ fn trait_impl_reach(krate: &Crate, impls: &[rustdoc_types::Id]) -> (Vec<String>,
                             {
                                 continue;
                             }
+                            let Some(written) = marker_name(&trait_.id, &trait_.path) else { continue };
                             // A CONVERSION bound keeps its target:
                             // `impl<T: Into<Atom>> IntoAtoms for T` reaches
                             // whatever converts into `Atom`, which is a
@@ -1827,7 +2033,7 @@ fn trait_impl_reach(krate: &Crate, impls: &[rustdoc_types::Id]) -> (Vec<String>,
                             match target {
                                 Some(JuxType::User { name: t, .. }) => bounds.push(format!("{name}<{t}>")),
                                 Some(JuxType::String) => bounds.push(format!("{name}<String>")),
-                                _ => bounds.push(name.to_string()),
+                                _ => bounds.push(written),
                             }
                         }
                     }
@@ -1864,7 +2070,7 @@ fn trait_impl_reach(krate: &Crate, impls: &[rustdoc_types::Id]) -> (Vec<String>,
             // for String`, `impl TextBuffer for &str`. The type's own stub
             // cannot say so, so the trait records it (Bindgen G.6.4.3).
             Type::ResolvedPath(p) if path_is_foreign(krate, p) => {
-                shapes.push(last_segment(&p.path).to_string());
+                shapes.extend(marker_name(&p.id, &p.path));
             }
             Type::BorrowedRef { type_, .. } => match type_.as_ref() {
                 Type::Slice(_) | Type::Primitive(_) => {
@@ -1873,7 +2079,7 @@ fn trait_impl_reach(krate: &Crate, impls: &[rustdoc_types::Id]) -> (Vec<String>,
                     }
                 }
                 Type::ResolvedPath(p) if path_is_foreign(krate, p) => {
-                    shapes.push(last_segment(&p.path).to_string());
+                    shapes.extend(marker_name(&p.id, &p.path));
                 }
                 _ => {}
             },
@@ -1996,6 +2202,7 @@ fn type_param_bounds(g: &Generics) -> Vec<String> {
             {
                 continue;
             }
+            let Some(name) = marker_name(&trait_.id, &trait_.path) else { continue };
             let bound = format!("{param}: {name}");
             if !out.contains(&bound) {
                 out.push(bound);
@@ -2463,13 +2670,21 @@ fn implemented_trait_names(krate: &Crate, own: Id, impls: &[rustdoc_types::Id]) 
             // `rand_pcg` generator). Its declaration is not in this JSON, so
             // it is taken by name when the impl names it without type
             // arguments; the finished stub keeps it only if it declares an
-            // interface of that name (`retain_declared_implements`).
+            // interface of that name (`retain_declared_implements`). A trait
+            // from outside the family (`std::error::Error`) is never the
+            // family's interface of the same name, so it is not taken, except
+            // Rust's `Iterator`, which every stub reaches as `RustIterator`.
             let generic = matches!(
                 tr.args.as_deref(),
                 Some(GenericArgs::AngleBracketed { args, .. }) if !args.is_empty()
             );
-            if !generic {
-                out.push(stub_trait_name(last_segment(&tr.path)).to_string());
+            let simple = last_segment(&tr.path);
+            if !generic && (simple == "Iterator" || !trait_outside_family(krate, &tr.id)) {
+                match qualified_type_name(&tr.id) {
+                    Some(q) if q.starts_with(UNNAMEABLE_PREFIX) => {}
+                    Some(q) => out.push(q),
+                    None => out.push(stub_trait_name(simple).to_string()),
+                }
             }
             continue;
         };
@@ -2487,7 +2702,11 @@ fn implemented_trait_names(krate: &Crate, own: Id, impls: &[rustdoc_types::Id]) 
             continue;
         }
         let Some(name) = &decl.name else { continue };
-        out.push(stub_trait_name(name).to_string());
+        match qualified_type_name(&tr.id) {
+            Some(q) if q.starts_with(UNNAMEABLE_PREFIX) => {}
+            Some(q) => out.push(q),
+            None => out.push(stub_trait_name(name).to_string()),
+        }
     }
     out.sort();
     out.dedup();
@@ -2793,7 +3012,9 @@ fn conversion_source_name(src: &Type) -> Option<String> {
             // A Jux value is never passed as one of these, so an impl taking
             // one converts nothing a program has.
             "Box" | "Cow" | "Arc" | "Rc" | "Option" | "Result" | "Vec" => None,
-            other => Some(other.to_string()),
+            // Qualified when the family shares the name: `Diagnostic` takes
+            // `rust.naga.front.wgsl.Error` and `rust.naga.front.spv.Error`.
+            _ => marker_name(&p.id, &p.path),
         },
         _ => None,
     }
@@ -2822,7 +3043,7 @@ fn owned_counterpart(krate: &Crate, impls: &[rustdoc_types::Id], name: &str) -> 
                 continue;
             }
             if let ItemEnum::AssocType { type_: Some(Type::ResolvedPath(p)), .. } = &aitem.inner {
-                let owned = last_segment(&p.path).to_string();
+                let owned = marker_name(&p.id, &p.path)?;
                 if owned != name {
                     return Some(owned);
                 }
@@ -2861,7 +3082,7 @@ fn index_output_name(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<Strin
             }
             match &aitem.inner {
                 ItemEnum::AssocType { type_: Some(Type::ResolvedPath(p)), .. } => {
-                    return Some(last_segment(&p.path).to_string());
+                    return marker_name(&p.id, &p.path);
                 }
                 // `type Output = V;` -- one of the type's own parameters.
                 ItemEnum::AssocType { type_: Some(Type::Generic(g)), .. } => {
@@ -2889,6 +3110,241 @@ fn implements_trait(krate: &Crate, impls: &[rustdoc_types::Id], trait_name: &str
             .as_ref()
             .is_some_and(|tr| last_segment(&tr.path) == trait_name)
     })
+}
+
+// ============================================================================
+// What a crate's error is to a Jux program (Bindgen G.5.4, ERRATA E148)
+// ============================================================================
+
+/// The last segment of the item `id` names when it is Rust's own (`std`,
+/// `core`, `alloc`), with whether its path runs through an `io` module.
+fn std_item(krate: &Crate, id: &Id) -> Option<(String, bool)> {
+    let path = &krate.paths.get(id)?.path;
+    if !matches!(path.first()?.as_str(), "std" | "core" | "alloc") {
+        return None;
+    }
+    Some((path.last()?.clone(), path.iter().any(|s| s == "io")))
+}
+
+/// The Rust type `t` is, or holds behind a `Box`/`Arc`/`Rc`: the last
+/// segment of a std type, with its `io` flag.
+fn std_type_of(krate: &Crate, t: &Type) -> Option<(String, bool)> {
+    let Type::ResolvedPath(p) = t else { return None };
+    let found = std_item(krate, &p.id)?;
+    if matches!(found.0.as_str(), "Box" | "Arc" | "Rc") {
+        return path_type_args(&p.args).into_iter().next().and_then(|inner| std_type_of(krate, inner));
+    }
+    Some(found)
+}
+
+/// `std::io::Error`, directly or behind a pointer.
+fn is_io_error_type(krate: &Crate, t: &Type) -> bool {
+    std_type_of(krate, t).is_some_and(|(name, io)| io && name == "Error")
+}
+
+/// The words of a CamelCase name, lowercased: `ParseIntError` is `parse`,
+/// `int`, `error`.
+fn camel_words(name: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    for c in name.chars() {
+        if c.is_uppercase() || words.is_empty() {
+            words.push(String::new());
+        }
+        if let Some(w) = words.last_mut() {
+            w.extend(c.to_lowercase());
+        }
+    }
+    words
+}
+
+/// Whether a name is a number's: a word of it is one a number type is
+/// called by (`ParseIntError`, `Decimal`, `BigInt`, `FloatParseError`).
+fn names_a_number(name: &str) -> bool {
+    camel_words(name).iter().any(|w| {
+        matches!(
+            w.as_str(),
+            "int" | "integer" | "float" | "decimal" | "number" | "num" | "digit" | "digits" | "rational"
+                | "fixed" | "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64"
+        )
+    })
+}
+
+/// Every type some `impl FromStr for X` names as its `Err`, with `X`'s name:
+/// a failed `parse` of `X` is an error of that type.
+fn from_str_errors(krate: &Crate) -> HashMap<Id, String> {
+    let mut out: HashMap<Id, String> = HashMap::new();
+    for item in krate.index.values() {
+        let ItemEnum::Impl(im) = &item.inner else { continue };
+        let Some(tr) = &im.trait_ else { continue };
+        if im.is_synthetic || im.is_negative || last_segment(&tr.path) != "FromStr" {
+            continue;
+        }
+        let Type::ResolvedPath(target) = &im.for_ else { continue };
+        for aid in &im.items {
+            let Some(aitem) = krate.index.get(aid) else { continue };
+            if aitem.name.as_deref() != Some("Err") {
+                continue;
+            }
+            if let ItemEnum::AssocType { type_: Some(Type::ResolvedPath(err)), .. } = &aitem.inner {
+                out.insert(err.id, last_segment(&target.path).to_string());
+            }
+        }
+    }
+    out
+}
+
+/// What an error type of the crate is to a Jux program, from its shape
+/// (Bindgen G.5.4): what it implements and how it is built, never a list of
+/// crate or type names.
+///
+/// The type as a whole:
+///
+/// - a timeout (its name says `Timeout`, `TimedOut`, or is tokio's `Elapsed`)
+///   is a `TimeoutException`;
+/// - a data-format error (it implements a serde-shaped `de::Error` or
+///   `ser::Error` trait, or its name says `Decode`, `Deserialize`,
+///   `Serialize`, `Syntax` or `Format`) is a `FormatException`;
+/// - a parse error (some `FromStr` impl's `Err`, or a name ending in
+///   `ParseError`) is a `NumberFormatException` when what failed to parse is a
+///   number (`Decimal`, `ParseIntError`) and an `IllegalArgumentException`
+///   otherwise;
+/// - a name saying `NotFound` is a `NoSuchElementException`;
+/// - an error built from an `io::Error` (`impl From<io::Error>`) is an
+///   `IOException`, refined at run time by the I/O error it holds.
+///
+/// An enum's variants may say more: a `...NotFound`, `NoSuch...` or
+/// `Missing...` variant is a `NoSuchElementException`, a timeout variant a
+/// `TimeoutException`, an `Unsupported...` one an
+/// `UnsupportedOperationException`, one holding an `io::Error` an
+/// `IOException`, a `ParseIntError`/`ParseFloatError` a
+/// `NumberFormatException`, a `Utf8Error`/`FromUtf8Error` an
+/// `EncodingException`.
+///
+/// `None` for a type that is not an error (implements no
+/// `std::error::Error` and is no `FromStr` error). An error whose shape says
+/// nothing has an empty class, and is a `LibraryException`; it is still
+/// recorded, since the running program recognises a library's error by its
+/// type's name to show it as a Jux exception.
+fn error_shape(
+    krate: &Crate,
+    id: Id,
+    name: &str,
+    parse_errors: &HashMap<Id, String>,
+) -> Option<crate::model::ErrorShape> {
+    let item = krate.index.get(&id)?;
+    let (impls, variants): (&[Id], &[Id]) = match &item.inner {
+        ItemEnum::Struct(s) => (&s.impls, &[]),
+        ItemEnum::Enum(e) => (&e.impls, &e.variants),
+        _ => return None,
+    };
+    let trait_impls: Vec<(&Path, &rustdoc_types::Impl)> = impls
+        .iter()
+        .filter_map(|i| match &krate.index.get(i)?.inner {
+            ItemEnum::Impl(im) if !im.is_synthetic && !im.is_negative => {
+                im.trait_.as_ref().map(|tr| (tr, im))
+            }
+            _ => None,
+        })
+        .collect();
+    let implements_error = trait_impls.iter().any(|(tr, _)| {
+        std_item(krate, &tr.id).is_some_and(|(n, _)| n == "Error") && last_segment(&tr.path) == "Error"
+    });
+    let parse_of = parse_errors.get(&id);
+    if !implements_error && parse_of.is_none() {
+        return None;
+    }
+    let from_io = trait_impls.iter().any(|(tr, im)| {
+        last_segment(&tr.path) == "From"
+            && impl_target_is_the_plain_type(id, &im.for_)
+            && path_type_args(&tr.args).into_iter().next().is_some_and(|src| is_io_error_type(krate, src))
+    });
+    // serde's `de::Error` / `ser::Error`, or a crate's own trait of that shape.
+    let serde_like = trait_impls.iter().any(|(tr, _)| {
+        let path: Vec<String> = match krate.paths.get(&tr.id) {
+            Some(s) => s.path.clone(),
+            None => tr.path.split("::").map(str::to_string).collect(),
+        };
+        let n = path.len();
+        n >= 2 && path[n - 1] == "Error" && matches!(path[n - 2].as_str(), "de" | "ser")
+    });
+    let words = camel_words(name);
+    let lower = name.to_ascii_lowercase();
+    let timeout = lower.contains("timeout") || lower.contains("timedout") || name == "Elapsed";
+    let format = serde_like
+        || words.iter().any(|w| {
+            w.starts_with("decode") || w.starts_with("deserializ") || w.starts_with("serializ") || w == "syntax"
+                || w == "format"
+        });
+    let parse = parse_of.is_some() || lower.ends_with("parseerror");
+    let class = if timeout {
+        "TimeoutException"
+    } else if format {
+        "FormatException"
+    } else if parse {
+        if parse_of.is_some_and(|x| names_a_number(x)) || names_a_number(name) {
+            "NumberFormatException"
+        } else {
+            "IllegalArgumentException"
+        }
+    } else if lower.contains("notfound") {
+        "NoSuchElementException"
+    } else if from_io {
+        "IOException"
+    } else {
+        ""
+    };
+    let mut by_variant: Vec<(String, String)> = Vec::new();
+    for vid in variants {
+        let Some(vitem) = krate.index.get(vid) else { continue };
+        let (Some(vname), ItemEnum::Variant(v)) = (&vitem.name, &vitem.inner) else { continue };
+        let payload: Vec<&Type> = match &v.kind {
+            VariantKind::Plain => Vec::new(),
+            VariantKind::Tuple(fids) => fids
+                .iter()
+                .filter_map(|f| match &krate.index.get(f.as_ref()?)?.inner {
+                    ItemEnum::StructField(t) => Some(t),
+                    _ => None,
+                })
+                .collect(),
+            VariantKind::Struct { fields, .. } => fields
+                .iter()
+                .filter_map(|f| match &krate.index.get(f)?.inner {
+                    ItemEnum::StructField(t) => Some(t),
+                    _ => None,
+                })
+                .collect(),
+        };
+        let held = |names: &[&str]| {
+            payload
+                .iter()
+                .any(|t| std_type_of(krate, t).is_some_and(|(n, io)| !io && names.contains(&n.as_str())))
+        };
+        let vlower = vname.to_ascii_lowercase();
+        let vclass = if vname.ends_with("NotFound") || vname.starts_with("NoSuch") || vname.starts_with("Missing") {
+            "NoSuchElementException"
+        } else if vlower.contains("timeout") || vlower.contains("timedout") {
+            "TimeoutException"
+        } else if vname.starts_with("Unsupported") || vname.starts_with("NotSupported") {
+            "UnsupportedOperationException"
+        } else if payload.iter().any(|t| is_io_error_type(krate, t)) {
+            "IOException"
+        } else if held(&["ParseIntError", "ParseFloatError"]) {
+            "NumberFormatException"
+        } else if held(&["Utf8Error", "FromUtf8Error"]) {
+            "EncodingException"
+        } else {
+            continue;
+        };
+        if vclass != class {
+            by_variant.push((vname.clone(), vclass.to_string()));
+        }
+    }
+    let type_name = krate
+        .paths
+        .get(&id)
+        .filter(|s| !s.path.is_empty())
+        .map(|s| definition_key(&s.path))?;
+    Some(crate::model::ErrorShape { class: class.to_string(), variants: by_variant, type_name })
 }
 
 /// True when the function's receiver is `&mut self` — the method mutates

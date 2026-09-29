@@ -3795,3 +3795,20 @@ fn unclosed_annotation_block_is_one_error() {
     let (_, errors) = parse_with_errors("@export {\n    public int a() { return 1; }\n");
     assert_eq!(errors, 1);
 }
+
+/// A method whose return type is a QUALIFIED generic type
+/// (`rust.std.Range<u32>`, which bindgen writes where a crate declares a
+/// type of the same simple name, ERRATA E148) is a method, in a class
+/// and in an interface, and not a field.
+#[test]
+fn a_qualified_generic_return_type_is_a_method() {
+    let unit = parse_clean(
+        "public class A { public rust.std.Range<u32> index_range(); public rust.std.Range<uint>? to_range(); }\n\
+         public interface B { rust.std.Range<u32> span(); }\n",
+    );
+    let TopLevelDecl::Class(a) = &unit.items[0] else { panic!("a class: {:?}", unit.items[0]) };
+    assert_eq!(a.methods.len(), 2, "{a:?}");
+    assert!(a.fields.is_empty(), "{a:?}");
+    let TopLevelDecl::Interface(b) = &unit.items[1] else { panic!("an interface: {:?}", unit.items[1]) };
+    assert_eq!(b.methods.len(), 1, "{b:?}");
+}

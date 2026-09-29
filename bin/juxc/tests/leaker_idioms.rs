@@ -301,7 +301,9 @@ fn emit(dir: &Path) -> (PathBuf, String) {
 /// The emitted Rust with whitespace collapsed, so a check does not depend on
 /// where rustfmt breaks a line.
 fn flat(rust: &str) -> String {
-    rust.split_whitespace().collect::<Vec<_>>().join(" ")
+    // Also the layout rustfmt picks for a call it breaks over lines (a
+    // callback's body is one block deeper since it records its thread).
+    rust.split_whitespace().collect::<Vec<_>>().join(" ").replace("( ", "(").replace(", )", ")")
 }
 
 #[test]

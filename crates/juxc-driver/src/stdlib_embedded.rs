@@ -718,6 +718,116 @@ public class FileNotFoundException extends IOException {
     }
 }
 "###),
+    ("exceptions/AccessDeniedException.jux", r###"/**
+ * jux.std.exceptions.AccessDeniedException
+ *
+ * The file or resource exists, and the program may not use it that way
+ * (Rust's `PermissionDenied`, Bindgen G.5.4). Mirrors
+ * `java.nio.file.AccessDeniedException`.
+ */
+package jux.std.exceptions;
+
+public class AccessDeniedException extends IOException {
+    /**
+     * Construct an AccessDeniedException describing what was refused.
+     */
+    public AccessDeniedException(String message) {
+        super(message);
+    }
+}
+"###),
+    ("exceptions/FileAlreadyExistsException.jux", r###"/**
+ * jux.std.exceptions.FileAlreadyExistsException
+ *
+ * A file or directory the operation was to create is already there
+ * (Rust's `AlreadyExists`, Bindgen G.5.4). Mirrors
+ * `java.nio.file.FileAlreadyExistsException`.
+ */
+package jux.std.exceptions;
+
+public class FileAlreadyExistsException extends IOException {
+    /**
+     * Construct a FileAlreadyExistsException naming what exists.
+     */
+    public FileAlreadyExistsException(String message) {
+        super(message);
+    }
+}
+"###),
+    ("exceptions/InterruptedIOException.jux", r###"/**
+ * jux.std.exceptions.InterruptedIOException
+ *
+ * An input or output operation was interrupted before it finished (Rust's
+ * `Interrupted`, Bindgen G.5.4). Mirrors `java.io.InterruptedIOException`.
+ */
+package jux.std.exceptions;
+
+public class InterruptedIOException extends IOException {
+    /**
+     * Construct an InterruptedIOException describing the interrupted
+     * operation.
+     */
+    public InterruptedIOException(String message) {
+        super(message);
+    }
+}
+"###),
+    ("exceptions/SocketTimeoutException.jux", r###"/**
+ * jux.std.exceptions.SocketTimeoutException
+ *
+ * An input or output operation's time limit passed (Rust's `TimedOut`,
+ * Bindgen G.5.4). Mirrors `java.net.SocketTimeoutException`, which is how
+ * Java reports a read or connect that timed out.
+ */
+package jux.std.exceptions;
+
+public class SocketTimeoutException extends InterruptedIOException {
+    /**
+     * Construct a SocketTimeoutException describing what timed out.
+     */
+    public SocketTimeoutException(String message) {
+        super(message);
+    }
+}
+"###),
+    ("exceptions/EOFException.jux", r###"/**
+ * jux.std.exceptions.EOFException
+ *
+ * The input ended before what was being read was complete (Rust's
+ * `UnexpectedEof`, Bindgen G.5.4). Mirrors `java.io.EOFException`.
+ */
+package jux.std.exceptions;
+
+public class EOFException extends IOException {
+    /**
+     * Construct an EOFException describing what was cut short.
+     */
+    public EOFException(String message) {
+        super(message);
+    }
+}
+"###),
+    ("exceptions/FormatException.jux", r###"/**
+ * jux.std.exceptions.FormatException
+ *
+ * Data that is not in the format its reader expects: malformed JSON, TOML
+ * or a binary encoding a library decodes, or a stream whose contents are not
+ * valid for what reads them (Rust's `InvalidData`). A library's
+ * serialization error surfaces as one (Bindgen G.5.4). An I/O failure, as a
+ * JSON library's is in Java (`JsonProcessingException`), so a `catch` of
+ * `IOException` around reading and decoding takes it too.
+ */
+package jux.std.exceptions;
+
+public class FormatException extends IOException {
+    /**
+     * Construct a FormatException describing what is malformed, and where.
+     */
+    public FormatException(String message) {
+        super(message);
+    }
+}
+"###),
     ("exceptions/EncodingException.jux", r###"/**
  * jux.std.exceptions.EncodingException
  *
