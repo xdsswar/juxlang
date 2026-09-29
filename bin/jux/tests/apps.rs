@@ -20,6 +20,9 @@
 //!
 //! Everything runs from one test that reports every failure together. Set
 //! `APP=name` (or `name,other`) to run only those apps.
+//!
+//! Every build runs under the compiler's borrow self-check (`JUX_SELFCHECK=1`),
+//! like the example corpus.
 
 mod common;
 
@@ -107,6 +110,10 @@ fn jux(dir: &Path, args: &[String], input: &[u8]) -> Result<String, String> {
         .args(["--manifest-path"])
         .arg(dir)
         .args(args)
+        // The borrow self-check, as the example corpus runs it: a hit is a
+        // latent "already in use" failure the user would have met at run
+        // time (ERRATA E23, E1XX-SWEEPA2).
+        .env("JUX_SELFCHECK", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
