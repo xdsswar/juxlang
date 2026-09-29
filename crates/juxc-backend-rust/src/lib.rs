@@ -978,6 +978,21 @@ impl PartialOrd for JuxErased {
         }
     }
 }
+/// A total order, for an erased key in a `BTreeMap` / `BTreeSet` (ERRATA
+/// E1XX-GAP40b): the value's own `<=>` when it has one, else its type and
+/// then its identity, which is what its `==` falls back to as well.
+impl Ord for JuxErased {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let own = match self.vt.cmp {
+            Some(c) if self.same_kind(other) => c(&*self.value, &*other.value),
+            _ => Option::None,
+        };
+        match own {
+            Some(o) => o,
+            _ => (self.vt.type_id, self.__jux_identity()).cmp(&(other.vt.type_id, other.__jux_identity())),
+        }
+    }
+}
 impl std::hash::Hash for JuxErased {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         match self.vt.hash {

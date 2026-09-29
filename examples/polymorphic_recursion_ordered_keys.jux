@@ -1,0 +1,45 @@
+// An erased value as the KEY of an ordered collection (ERRATA E1XX-GAP40b).
+//
+// `index` is on a polymorphic-recursion cycle (it calls itself at a larger
+// `U`), so it is compiled by erasure and its `T` is one boxed type too. A
+// `BTreeMap<T, int>` and a `BTreeSet<T>` order their keys, so the boxed value
+// orders itself by the value's own `<=>`. The map a caller passes in is the
+// same map the erased code fills (linked, E144): what `index` inserts, `main`
+// sees, in order.
+//
+// DIFFERENTIAL: tools/java-differential/cases/155_polymorphic_recursion_ordered_keys
+
+import rust.std.*;
+
+<T, U> int index(BTreeMap<T, int> into, BTreeSet<T> seen, T a, T b, T c, U tag, int depth) {
+    if (depth > 0) {
+        var wrapped = new Vec<U>();
+        wrapped.push(tag);
+        return index<T, Vec<U>>(into, seen, a, b, c, wrapped, depth - 1);
+    }
+    into.insert(c, 3);
+    into.insert(a, 1);
+    into.insert(b, 2);
+    seen.insert(b);
+    seen.insert(c);
+    seen.insert(a);
+    seen.insert(b);
+    var order = 0;
+    for (var e : into) {
+        order = order * 10 + e.1;
+    }
+    return order * 10 + (int) seen.len();
+}
+
+public void main() {
+    var byName = new BTreeMap<String, int>();
+    var names = new BTreeSet<String>();
+    print(index<String, int>(byName, names, "cid", "ann", "bob", 0, 2));
+    for (var e : byName) {
+        print(e.0 + "=" + e.1);
+    }
+    print(names.len());
+    var byNum = new BTreeMap<int, int>();
+    print(index<int, int>(byNum, new BTreeSet<int>(), 30, 10, 20, 0, 3));
+    print(byNum.len());
+}
