@@ -431,7 +431,7 @@ const REGRESSIONS: &[Regression] = &[
     Regression { kind: "keybound", key: "put", rustc: "E0277", history: "gap 40b (E145): a generic key with no `Ord`" },
     Regression { kind: "arms", key: "label", rustc: "E0308", history: "gap 35 (E131): `\"ab \" + e` against `\"c\"`" },
     Regression { kind: "numeric", key: "total", rustc: "E0277", history: "gap 39 (E135): `isize + f64` through an intersection bound" },
-    Regression { kind: "path", key: "Basket.corner", rustc: "E0433", history: "gap 31 L3, gap 35 (E131): a type named without `crate::`" },
+    Regression { kind: "path", key: "Basket.origin", rustc: "E0433", history: "gap 31 L3, gap 35 (E131): a type named without `crate::`, in a signature too" },
     Regression { kind: "infer", key: "emptyCount", rustc: "E0283", history: "gap 36 L30, gap 40b: a type argument nothing infers" },
     Regression { kind: "overload", key: "sumTwo", rustc: "E0061", history: "gap 39f (E140): a stale overload pick" },
     Regression { kind: "mutability", key: "outLen", rustc: "E0596", history: "gap 30 L8/L9 (E127): a `&mut` lend of a non-`mut` binding" },
@@ -537,8 +537,14 @@ import geo.Point;
 
 public class Basket {
     public static int corner() {
-        var p = new Point(3, 4);
+        Point p = origin(3, 4);
         return p.x + p.y;
+    }
+
+    // A signature naming another package's type: the header emitters'
+    // spelling of it is the type-path switch's too (sweep C2).
+    static Point origin(int x, int y) {
+        return new Point(x, y);
     }
 }
 ";

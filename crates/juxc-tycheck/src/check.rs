@@ -10055,6 +10055,40 @@ impl<'a> Checker<'a> {
         if let Some(en) = self.symbols.enums.get(type_name) {
             names.extend(en.methods.keys().map(|k| k.as_str()));
         }
+        nearest_name_hint(names, wanted)
+    }
+
+    /// The static members (methods, or fields and constants) of class `fqn`
+    /// and its ancestors, for a did-you-mean on a static reached through the
+    /// type (sweep C2).
+    fn static_member_names(&self, fqn: &str, methods: bool) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = self.symbols.classes.get(fqn);
+        for _ in 0..64 {
+            let Some(c) = cur else { break };
+            if methods {
+                out.extend(
+                    c.method_overloads
+                        .iter()
+                        .filter(|(_, ms)| ms.iter().any(|m| m.is_static))
+                        .map(|(k, _)| k.clone()),
+                );
+                out.extend(c.methods.iter().filter(|(_, m)| m.is_static).map(|(k, _)| k.clone()));
+            } else {
+                out.extend(c.fields.iter().filter(|(_, f)| f.is_static).map(|(k, _)| k.clone()));
+            }
+            cur = c.extends_fqn.as_ref().and_then(|p| self.symbols.classes.get(p));
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+}
+
+/// `" -- did you mean `x`?"` for the candidates close to `wanted`, up to
+/// three, else an empty string.
+fn nearest_name_hint(mut names: Vec<&str>, wanted: &str) -> String {
+    {
         // Up to three, best first, rather than one. Several candidates often
         // score identically -- `sort` prefix-matches `sort_floats`,
         // `sort_unstable` and `sort_unstable_by` alike -- and picking one
@@ -10064,7 +10098,7 @@ impl<'a> Checker<'a> {
         names.sort_unstable();
         let mut scored: Vec<(&str, f32)> = names
             .into_iter()
-            .map(|c| (c, name_affinity(wanted, c)))
+            .map(|c| (c, name_affinity(wanted, c).max(spelling_affinity(wanted, c))))
             .filter(|(_, s)| *s >= 0.45)
             .collect();
         scored.sort_by(|a, b| {
@@ -10080,7 +10114,79 @@ impl<'a> Checker<'a> {
             _ => format!(" -- did you mean {}?", picks.join(", ")),
         }
     }
+}
 
+/// How close `wanted` is to `candidate` once spelling is set aside: case and
+/// `_` are folded, and a leading Java factory word (`of`, `from`, `get`,
+/// `to`, `as`, `new`, `with`) is dropped from both, so `ofMillis` meets
+/// `from_millis` and `fromSecs` meets `from_secs` (sweep C2). A foreign
+/// type's names are Rust's, and a Java programmer spells them the Java way.
+fn spelling_affinity(wanted: &str, candidate: &str) -> f32 {
+    fn fold(s: &str) -> String {
+        s.chars().filter(|c| *c != '_').map(|c| c.to_ascii_lowercase()).collect()
+    }
+    fn stem(s: &str) -> String {
+        let f = fold(s);
+        for p in ["from", "with", "get", "new", "of", "to", "as"] {
+            if let Some(rest) = f.strip_prefix(p) {
+                if rest.len() >= 3 {
+                    return rest.to_string();
+                }
+            }
+        }
+        f
+    }
+    let (w, c) = (fold(wanted), fold(candidate));
+    if w.is_empty() || c.is_empty() {
+        return 0.0;
+    }
+    if w == c {
+        return 0.95;
+    }
+    let (ws, cs) = (stem(wanted), stem(candidate));
+    if ws == cs {
+        return 0.85;
+    }
+    // A typo, one or two edits apart: `form_secs` for `from_secs`, `Nann`
+    // for `Nan`. The closer ranks first.
+    match edit_distance_at_most_two(&w, &c) {
+        Some(1) => 0.85,
+        // Two edits only between longer names, where two is still a typo.
+        Some(_) if w.len().min(c.len()) >= 8 => 0.75,
+        _ => 0.0,
+    }
+}
+
+/// How many single-character edits (insert, delete, substitute, or a swap of
+/// neighbours) apart `a` and `b` are, when that is at most two.
+fn edit_distance_at_most_two(a: &str, b: &str) -> Option<usize> {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    if a.len().abs_diff(b.len()) > 2 || a.len().min(b.len()) < 3 {
+        return None;
+    }
+    // Optimal string alignment distance.
+    let mut d = vec![vec![0usize; b.len() + 1]; a.len() + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in d[0].iter_mut().enumerate() {
+        *cell = j;
+    }
+    for i in 1..=a.len() {
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            let mut v = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                v = v.min(d[i - 2][j - 2] + 1);
+            }
+            d[i][j] = v;
+        }
+    }
+    Some(d[a.len()][b.len()]).filter(|n| *n <= 2)
+}
+
+impl Checker<'_> {
     fn check_protected_qualifier(
         &mut self,
         vis: juxc_ast::Visibility,
@@ -10500,11 +10606,14 @@ impl<'a> Checker<'a> {
                         return;
                     }
                 }
-                // No such field — surface E0412 against the class.
+                // No such field — surface E0412 against the class, with the
+                // static fields (and constants) it has that are close.
+                let names = self.static_member_names(&class_fqn, false);
+                let hint = nearest_name_hint(names.iter().map(String::as_str).collect(), field_name);
                 self.diagnostics.push(
                     Diagnostic::error(
                         code::Code::E0412_UnresolvedField,
-                        format!("no static field `{field_name}` on class `{class_fqn}`"),
+                        format!("no static field `{field_name}` on class `{class_fqn}`{hint}"),
                     )
                     .with_span(f.span),
                 );
@@ -10535,6 +10644,31 @@ impl<'a> Checker<'a> {
                     .with_span(f.span),
                 );
                 return;
+            }
+            // `EnumName.X`: a variant, a `const`, or a static property. An
+            // enum's set is closed, a foreign one's included, so any other
+            // name is `E0412` here; it used to pass and reach rustc as a
+            // variant that does not exist (sweep C2).
+            if let Some(("enum", enum_fqn)) = self.value_type_named_by(qn) {
+                let field_name = f.field.text.as_str();
+                if let Some(e) = self.symbols.enums.get(&enum_fqn) {
+                    let known = e.variants.contains_key(field_name)
+                        || e.constants.contains_key(field_name)
+                        || e.methods.get(field_name).is_some_and(|m| m.is_property);
+                    if !known {
+                        let mut names: Vec<&str> = e.variants.keys().map(String::as_str).collect();
+                        names.extend(e.constants.keys().map(String::as_str));
+                        let hint = nearest_name_hint(names, field_name);
+                        self.diagnostics.push(
+                            Diagnostic::error(
+                                code::Code::E0412_UnresolvedField,
+                                format!("no variant or constant `{field_name}` on enum `{enum_fqn}`{hint}"),
+                            )
+                            .with_span(f.span),
+                        );
+                    }
+                    return;
+                }
             }
         }
         let receiver_ty = infer_expr(&f.object, &self.env, self.symbols);
@@ -13386,11 +13520,15 @@ impl<'a> Checker<'a> {
                                 return;
                             }
                         }
-                        // No such method on the class.
+                        // No such method on the class: the static methods it
+                        // has that are close (`Duration.ofMillis` is
+                        // `from_millis`, sweep C2).
+                        let names = self.static_member_names(&class_fqn, true);
+                        let hint = nearest_name_hint(names.iter().map(String::as_str).collect(), method_name);
                         self.diagnostics.push(
                             Diagnostic::error(
                                 code::Code::E0413_UnresolvedMethod,
-                                format!("no static method `{method_name}` on class `{class_fqn}`",),
+                                format!("no static method `{method_name}` on class `{class_fqn}`{hint}",),
                             )
                             .with_span(c.span),
                         );
@@ -13495,7 +13633,24 @@ impl<'a> Checker<'a> {
                                     "`{method_name}` is an instance method of {kind} `{fqn}`, so it is called on a value, not on the type"
                                 )
                             } else {
-                                format!("no static method `{method_name}` on {kind} `{fqn}`")
+                                // The statics it does have (and an enum's
+                                // variants) that are close (sweep C2).
+                                let mut names: Vec<String> = match kind {
+                                    "enum" => self.symbols.enums.get(&fqn).map(|e| {
+                                        e.variants
+                                            .keys()
+                                            .cloned()
+                                            .chain(e.methods.iter().filter(|(_, m)| m.is_static).map(|(k, _)| k.clone()))
+                                            .collect()
+                                    }),
+                                    _ => self.symbols.records.get(&fqn).map(|r| {
+                                        r.methods.iter().filter(|(_, m)| m.is_static).map(|(k, _)| k.clone()).collect()
+                                    }),
+                                }
+                                .unwrap_or_default();
+                                names.sort();
+                                let hint = nearest_name_hint(names.iter().map(String::as_str).collect(), method_name);
+                                format!("no static method `{method_name}` on {kind} `{fqn}`{hint}")
                             };
                             let mut diag =
                                 Diagnostic::error(code::Code::E0413_UnresolvedMethod, message).with_span(c.span);

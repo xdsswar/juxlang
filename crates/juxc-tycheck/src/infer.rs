@@ -2525,6 +2525,18 @@ pub(crate) fn path_resolves_to_class(
         if symbols.classes.contains_key(bare) {
             return Some(bare.clone());
         }
+        // A `rust.std` type written bare without an import (`Duration`): the
+        // same name the type positions resolve (`find_visible_fqn_by_bare_in`,
+        // Bindgen G.6.5). Without this `Duration.ofMillis(5)` named no class,
+        // its member went unchecked, and rustc reported the missing function
+        // (sweep C2).
+        if let Some(fqn) = symbols
+            .find_visible_fqn_by_bare_in(bare, &env.current_package.join("."))
+            .and_then(|fqn| if symbols.classes.contains_key(&fqn) { Some(fqn) } else { symbols.alias_class(&fqn) })
+            .filter(|fqn| symbols.classes.get(fqn).is_some_and(|c| c.is_external))
+        {
+            return Some(fqn);
+        }
         return None;
     }
     let joined: String = qn
@@ -2536,7 +2548,10 @@ pub(crate) fn path_resolves_to_class(
     if symbols.classes.contains_key(&joined) {
         return Some(joined);
     }
-    None
+    // A qualified ALIAS of a class, a crate family's nested package's
+    // (`rust.eframe.egui.Ui` for `rust.eframe.Ui`, ERRATA E132): the class,
+    // statics included, as the imported alias already is (sweep C2).
+    symbols.alias_class(&joined)
 }
 
 /// `I.super` (Type system §T.8.3): the receiver of `I.super.m()`. Returns the

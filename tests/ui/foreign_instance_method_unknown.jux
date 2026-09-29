@@ -1,0 +1,11 @@
+// A method a foreign value's stub does not declare is E0413, with the near
+// names it does declare (sweep C2).
+import rust.std.Duration;
+
+void main() {
+    var d = Duration.from_secs(2);
+    print(d.as_milis());
+    print(d.asSecs());
+    var v = new Vec<int>();
+    v.pushh(1);
+}

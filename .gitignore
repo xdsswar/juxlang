@@ -76,3 +76,6 @@ ide/reference/
 
 # JVM crash heap dumps (Gradle/Kotlin daemon out-of-memory). Several GB each.
 *.hprof
+
+# A UI case carries hand-written stubs of its own (tests/ui/<case>/.jux-stubs).
+!tests/ui/*/.jux-stubs/

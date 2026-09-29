@@ -302,6 +302,14 @@ impl RustEmitter {
     /// crate-private. Inheritance and trait dispatch don't exist in this
     /// milestone, so there's nothing for visibility to mediate.
     pub(crate) fn emit_fn_decl(&mut self, fn_decl: &FnDecl) {
+        // The declaration is the code being emitted while its signature is:
+        // the safe level's type-path switch (sweep C2) asks for it there.
+        let prev = self.body_span.replace(fn_decl.span);
+        self.emit_fn_decl_inner(fn_decl);
+        self.body_span = prev;
+    }
+
+    fn emit_fn_decl_inner(&mut self, fn_decl: &FnDecl) {
         // **Test-mode suppression.** When `jux test` is driving the
         // build, the synthetic test runner IS `fn main()`. The
         // user's own `void main()` (e.g. the default scaffold's

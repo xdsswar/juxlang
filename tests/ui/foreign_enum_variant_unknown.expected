@@ -1,0 +1,3 @@
+foreign_enum_variant_unknown.jux:9:13: [E0412] error: no variant or constant `Nann` on enum `rust.std.FpCategory` -- did you mean `Nan`?
+foreign_enum_variant_unknown.jux:10:13: [E0413] error: no static method `Normall` on enum `rust.std.FpCategory` -- did you mean `Normal`?
+foreign_enum_variant_unknown.jux:11:13: [E0412] error: no variant or constant `Gren` on enum `Color` -- did you mean `Green`?
