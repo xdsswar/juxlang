@@ -946,7 +946,7 @@ impl RustEmitter {
         let foreign = |name: &str| {
             self.lookup_class_by_bare_or_fqn(name).is_some_and(|c| c.is_external) && !self.bare_name_is_user_type(name)
         };
-        if t.generic_args.len() >= 1 && foreign(bare) {
+        if !t.generic_args.is_empty() && foreign(bare) {
             match bare {
                 "Box" => return Some(Wrap::Boxed),
                 "Rc" => return Some(Wrap::Shared("rc")),
