@@ -149,6 +149,7 @@ const NOT_PINNED: &[&str] = &[
     "jni_java_vm",
     "ffi_unwind_barrier",
     "runtime_stack_overflow",
+    "runtime_stack_overflow_crate_thread",
 ];
 
 fn worker_count() -> usize {

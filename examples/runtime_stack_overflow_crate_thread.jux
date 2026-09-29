@@ -1,0 +1,21 @@
+// Recursion that never stops, on a thread a library started: the lambda is
+// handed to Rust's `std::thread::Builder`, which runs it on a thread of its
+// own.
+// The report is in Jux terms there too (a closure a library calls records its
+// thread's stack the first time it runs). `bin/jux/tests/runtime_failures.rs`
+// runs it; the output corpus does not, since the report goes to stderr with no
+// `.jux` line.
+import rust.std.Builder;
+
+int depth(int n) {
+    if (n < 0) {
+        return 0;
+    }
+    return depth(n + 1) + 1;
+}
+
+public void main() {
+    print("recursing on a library's thread");
+    var handle = new Builder().name("library").spawn(() -> depth(0));
+    print(handle.join());
+}
