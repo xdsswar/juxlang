@@ -1,4 +1,4 @@
-// Ten thousand elements through an erased path (ERRATA E1XX-GAP40b).
+// Ten thousand elements through an erased path (ERRATA E145).
 //
 // `fill` and `total` sit on a polymorphic-recursion cycle, so they are
 // compiled by erasure: their `Vec<T>` is a list of boxed values linked to the

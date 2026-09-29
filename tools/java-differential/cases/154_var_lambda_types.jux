@@ -1,5 +1,5 @@
 // A `var` lambda has the function type its parameters and body give it
-// (JUX-LANG-V1 §7.9, ERRATA E1XX-GAP40b), so what calling it returns is known
+// (JUX-LANG-V1 §7.9, ERRATA E145), so what calling it returns is known
 // and usable like any other value: `gv().push(1)` pushes into the collection
 // the lambda hands back, which is the captured one, shared (§6.5.1).
 //

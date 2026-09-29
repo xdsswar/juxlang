@@ -1,7 +1,7 @@
 // An object shared with workers keeps its collections under its own lock, so
 // one read out of it is a copy (JUX-LANG-V1 §6.5.1). Reading the copy is
 // fine; WRITING it would drop the write, so it is E0702 (ERRATA
-// E1XX-GAP40b). Writing through the object, a fresh list a method builds,
+// E145). Writing through the object, a fresh list a method builds,
 // and an explicit `clone()` are all fine.
 import rust.std.*;
 

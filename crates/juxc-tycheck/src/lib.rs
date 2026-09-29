@@ -405,7 +405,7 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     // Polymorphic recursion is lowered by erasure (ERRATA E141): the
     // erased classes have one instantiation, and only a parameter held in a
     // foreign type with no known shape is left, as `E0620` (`E0438` is
-    // retired, ERRATA E1XX-GAP40b).
+    // retired, ERRATA E145).
     symbols.erasure = erasure::plan(&symbols);
     erasure::normalize_instantiations(&mut symbols);
     if !symbols.erasure.refused.is_empty() {

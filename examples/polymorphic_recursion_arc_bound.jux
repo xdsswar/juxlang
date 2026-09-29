@@ -1,5 +1,5 @@
 // The same program as polymorphic_recursion_foreign_bounds.jux with `Arc<T>`
-// in place of `Rc<T>` (ERRATA E1XX-GAP40b): an atomic shared pointer crosses
+// in place of `Rc<T>` (ERRATA E145): an atomic shared pointer crosses
 // the erasure boundary as the same pointer too, so `Arc.ptr_eq` holds.
 
 import rust.std.*;

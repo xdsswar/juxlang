@@ -296,4 +296,4 @@ pub fn overridden_into_positions(symbols: &SymbolTable, class_fqn: &str, method:
 // A dispatch through a supertype over a subtype the program builds at
 // ever-larger arguments was `E0438` here (ERRATA E137). Such a subtype is
 // always on an erased cycle, where it has one instantiation, so the case
-// cannot arise; the diagnostic is retired with the code (E1XX-GAP40b).
+// cannot arise; the diagnostic is retired with the code (E145).

@@ -499,7 +499,7 @@ pub(crate) struct Checker<'a> {
     pub(crate) lambda_slot_params: Option<Vec<Ty>>,
     /// The types a lambda's block body returns, collected while it is
     /// checked, for the function type of a lambda with no slot to take one
-    /// from (`var gv = () -> { return v; }`, ERRATA E1XX-GAP40b).
+    /// from (`var gv = () -> { return v; }`, ERRATA E145).
     pub(crate) lambda_returns: Option<Vec<Ty>>,
     /// Each lambda's function type as far as its parameters and body say,
     /// by span: what a `var` declaration of it takes.
@@ -6432,7 +6432,7 @@ impl<'a> Checker<'a> {
                     infer_expr(e, &self.env, self.symbols)
                 });
                 // `var gv = () -> v;` takes the lambda's own function type, so a
-                // call of it has a type (`gv().push(1)`, ERRATA E1XX-GAP40b).
+                // call of it has a type (`gv().push(1)`, ERRATA E145).
                 // A parameter with no written type is left for a use to pin.
                 let inferred = match (&v.ty, &v.init, inferred) {
                     (None, Some(Expr::Lambda(l)), Some(Ty::Unknown)) => {
@@ -8281,7 +8281,7 @@ impl<'a> Checker<'a> {
                     juxc_ast::LambdaBody::Block(b) => self.check_block(b),
                 }
                 // The lambda's own function type, from its parameters and what
-                // its body produces (ERRATA E1XX-GAP40b): an expression body is
+                // its body produces (ERRATA E145): an expression body is
                 // its value, a block body the first value it returns, or
                 // nothing. What a `var` declaration of the lambda takes.
                 let returned = std::mem::replace(&mut self.lambda_returns, saved_returns).unwrap_or_default();

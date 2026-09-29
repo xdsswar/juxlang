@@ -2890,7 +2890,7 @@ impl crate::RustEmitter {
             // A receiver typed by a type parameter reaches the method through
             // one of its bounds, whose own parameters the bound fixes:
             // `x.size(v)` over `T extends Maybe<T?>` fills `size(M m)` at
-            // `M = T?`, a nullable slot (ERRATA E1XX-GAP40b).
+            // `M = T?`, a nullable slot (ERRATA E145).
             if let Some(juxc_tycheck::Ty::Param(p)) = self.receiver_ty_of(&f.object) {
                 let bounds = self.type_param_bounds.get(&p).cloned().unwrap_or_default();
                 for b in bounds {

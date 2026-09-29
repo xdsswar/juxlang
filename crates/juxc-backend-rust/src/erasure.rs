@@ -898,7 +898,7 @@ impl RustEmitter {
     }
 
     /// Whether `t` holds one of `params` inside a container the two sides of
-    /// an erasure boundary can convert between (ERRATA E144, E1XX-GAP40b):
+    /// an erasure boundary can convert between (ERRATA E144, E145):
     /// a collection or runtime-sized array (linked), a `Box` or a tuple
     /// (copied: a value has no identity to keep), an `Rc` or `Arc` (the same
     /// pointer each time it crosses), or a nullable one. The parameter itself,

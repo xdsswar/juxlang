@@ -5706,18 +5706,18 @@ program, a list the value keeps and writes to later, a map; case
 constructor arguments, fields, a list of lists and an array; case
 `152_polymorphic_recursion_collection_slots`),
 `tests/ui/worker_collection_write`, and `tests/ui/generic_method_dispatch_limits`
-now holds the `Rel<Box<T>>` case (since removed: that case compiles, E1XX-GAP40b).
+now holds the `Rel<Box<T>>` case (since removed: that case compiles, E145).
 
 **Spec status:** `JUX-LANG-V1.md` §6.5.1 states the erasure and worker rules;
 JUX-ASYNC-ADDENDUM §18.2 states the `E0702` write rule;
 `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10 and `JUX-DIAGNOSTICS-ADDENDUM.md`
 §D.4's `E0438` and `E0702` rows are amended. GAPS.md gap 40 is closed.
 Resolution 4's remaining case and the linked collection's cost are resolved
-by E1XX-GAP40b.
+by E145.
 
 ---
 
-## E1XX-GAP40b. The rest of gap 40: foreign containers, worker copies, lambda types
+## E145. The rest of gap 40: foreign containers, worker copies, lambda types
 
 **Conflict.** E144 left six things open:
 

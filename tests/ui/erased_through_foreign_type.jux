@@ -1,7 +1,7 @@
 // Polymorphic recursion is compiled by erasure, and a bound that holds the
 // parameter inside a container is converted between the erased code and the
 // value's own code: a collection is linked, a `Box`, a tuple or a nullable is
-// copied, an `Rc` or `Arc` keeps its identity (ERRATA E144, E1XX-GAP40b). A
+// copied, an `Rc` or `Arc` keeps its identity (ERRATA E144, E145). A
 // foreign type whose shape the compiler does not know, `OnceLock<T>` here, has no
 // conversion at all: E0620.
 import rust.std.OnceLock;

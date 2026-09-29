@@ -1,4 +1,4 @@
-// An erased value as the KEY of an ordered collection (ERRATA E1XX-GAP40b).
+// An erased value as the KEY of an ordered collection (ERRATA E145).
 //
 // `index` is on a polymorphic-recursion cycle (it calls itself at a larger
 // `U`), so it is compiled by erasure and its `T` is one boxed type too. A

@@ -1,5 +1,5 @@
 //! `E0702` for a WRITE to a collection copied out of a worker-shared object
-//! (ERRATA E1XX-GAP40b).
+//! (ERRATA E145).
 //!
 //! A class whose instances cross a worker boundary stores its collections
 //! inline, under the object's lock, so reading one out of the object hands

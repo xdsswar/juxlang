@@ -1,4 +1,4 @@
-// Collections of an object shared with workers (ERRATA E1XX-GAP40b).
+// Collections of an object shared with workers (ERRATA E145).
 //
 // A class whose objects cross a worker boundary keeps its collections under
 // the object's own lock (JUX-LANG-V1 §6.5.1). Everything that goes through the

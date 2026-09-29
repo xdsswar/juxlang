@@ -1,5 +1,5 @@
 // A `var` lambda takes its function type from its parameters and its body
-// (ERRATA E1XX-GAP40b). A parameter written without a type gets one from a
+// (ERRATA E145). A parameter written without a type gets one from a
 // use -- a call, or a function-typed slot the lambda is passed to -- and a
 // lambda nothing ever uses has none to give it: E0453, not a Rust error.
 public int apply((int) -> int f, int x) { return f(x); }

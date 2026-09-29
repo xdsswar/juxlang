@@ -2758,7 +2758,7 @@ impl RustEmitter {
             // guard AND the argument guards must drop before the call —
             // hoist both. Otherwise args-only suffices.
             // A collection stored inline in a worker-shared object is called
-            // in place, under the object's lock (ERRATA E1XX-GAP40b):
+            // in place, under the object's lock (ERRATA E145):
             // hoisting it out would call the method on a copy.
             if let Some(cf) = self
                 .callee_receiver_reads_through_borrow(&call.callee)

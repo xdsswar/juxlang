@@ -21,7 +21,7 @@
 //! collection holding the parameter is linked to one storage on both sides
 //! (E144). A bound holding the parameter inside a foreign type that
 //! is neither a Jux class nor a collection has no conversion, and such a
-//! cycle is `E0620` (`E0438` is retired, ERRATA E1XX-GAP40b).
+//! cycle is `E0620` (`E0438` is retired, ERRATA E145).
 
 use std::collections::BTreeSet;
 
@@ -310,7 +310,7 @@ fn erasable(p: &juxc_ast::TypeParam, params: &[juxc_ast::TypeParam], symbols: &S
 }
 
 /// Whether `t` holds a type parameter inside a container the erased code and
-/// the value's own code can convert between (ERRATA E144, E1XX-GAP40b): a
+/// the value's own code can convert between (ERRATA E144, E145): a
 /// collection or runtime-sized array (linked to one storage), a `Box` or a
 /// tuple (a value: a new one each crossing is exact), an `Rc` or `Arc` (the
 /// same pointer each crossing), or a nullable one. Every argument is a

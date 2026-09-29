@@ -1366,7 +1366,7 @@ impl RustEmitter {
 
     pub(crate) fn emit_expr(&mut self, expr: &Expr) {
         // A collection crossing into or out of a worker-shared class converts
-        // between its two representations (ERRATA E1XX-GAP40b).
+        // between its two representations (ERRATA E145).
         if !self.sync_class_fqns.is_empty() && self.emit_sync_boundary(expr) {
             return;
         }

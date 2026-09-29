@@ -982,7 +982,7 @@ impl PartialOrd for JuxErased {
     }
 }
 /// A total order, for an erased key in a `BTreeMap` / `BTreeSet` (ERRATA
-/// E1XX-GAP40b): the value's own `<=>` when it has one, else its type and
+/// E145): the value's own `<=>` when it has one, else its type and
 /// then its identity, which is what its `==` falls back to as well.
 impl Ord for JuxErased {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -1101,7 +1101,7 @@ pub fn jux_erased_type_id<X: 'static>(_: &X) -> std::any::TypeId {
     std::any::TypeId::of::<X>()
 }
 /// A collection seen from both sides of an erasure boundary (ERRATA E144,
-/// E1XX-GAP40b): the erased code holds a `Vec<JuxErased>`, the code that
+/// E145): the erased code holds a `Vec<JuxErased>`, the code that
 /// knows the element type a `Vec<X>`. The two cells are one collection. Each
 /// side holds a copy of it and the pair knows which copies are current: a
 /// borrow of a side whose copy is out of date first brings it up to date
@@ -1253,7 +1253,7 @@ pub fn jux_link_erase<EC: 'static, TC: 'static>(
     }
 }
 /// A shared pointer (`Rc<T>`, `Arc<T>`) seen from both sides of an erasure
-/// boundary (ERRATA E1XX-GAP40b). What it points at cannot change, so the two
+/// boundary (ERRATA E145). What it points at cannot change, so the two
 /// sides need no copy kept in step; what they need is identity: the same
 /// pointer crossing twice is the same pointer on the other side, and crossing
 /// back gives the original. The pair is remembered while either is in use.
@@ -1957,7 +1957,7 @@ struct RustEmitter {
     pub(crate) link_on_emit: std::collections::HashMap<crate::erasure::EraseKey, crate::erasure::LinkMark>,
     /// Collection values crossing into (`true`: to the plain inline form)
     /// or out of (`false`: to a handle) a worker-shared class (ERRATA
-    /// E1XX-GAP40b, `sync_boundary.rs`), keyed like `erase_on_emit`.
+    /// E145, `sync_boundary.rs`), keyed like `erase_on_emit`.
     pub(crate) sync_args: std::collections::HashMap<crate::erasure::EraseKey, bool>,
     /// The crossings being emitted now, so the conversion's own emission of
     /// the value does not convert it again.

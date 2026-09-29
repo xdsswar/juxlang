@@ -1,5 +1,5 @@
 //! A collection crossing into or out of a worker-shared class (ERRATA
-//! E1XX-GAP40b).
+//! E145).
 //!
 //! A class whose instances cross a worker boundary is `Send`: its handle is
 //! the atomic `JuxSync`, and the collections it holds are stored INLINE in the

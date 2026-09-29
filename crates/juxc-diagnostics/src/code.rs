@@ -390,7 +390,7 @@ pub enum Code {
     /// visible has a hidden stand-in on the dispatch trait, and anywhere else
     /// it is `E0414`. Nothing emits it; the number is not reused.
     E0437_FieldThroughPolymorphicBase,
-    /// E0438 — *retired* (ERRATA E1XX-GAP40b). It was polymorphic recursion
+    /// E0438 — *retired* (ERRATA E145). It was polymorphic recursion
     /// that could not be erased (E137, E141..E144). Every bound on such a
     /// cycle is now kept: a dispatch object, an adapter, a linked collection,
     /// a copied `Box` / tuple / nullable, a same-pointer `Rc` / `Arc`. The one
@@ -1005,7 +1005,7 @@ pub enum Code {
     /// is compiled by erasure, and the erased code and the value's own code
     /// see two Rust types there; a collection, a `Box`, a tuple, a nullable,
     /// an `Rc` or an `Arc` is converted between them, anything else cannot be
-    /// (ERRATA E1XX-GAP40b). Replaces `E0438` for this one case.
+    /// (ERRATA E145). Replaces `E0438` for this one case.
     E0620_ErasedThroughForeignType,
 
     // ---- Const evaluation (E0800–E0899) ----

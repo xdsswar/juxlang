@@ -472,7 +472,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0435`  | Interface not usable as a dyn-dispatched value type: a generic interface used without its type arguments (a generic METHOD no longer blocks it, `ERRATA.md` E136) | Interface dispatch, stage 1 |
 | `E0436`  | Exception-hierarchy class also `implements` an interface (deferred combination) | Interface dispatch, stage 1 |
 | `E0437`  | *(retired by `ERRATA.md` E139: a private member reached through a class's dispatch value, where it is visible, has a hidden stand-in; elsewhere it is `E0414`. The number is not reused.)* | Polymorphism, stage 2     |
-| `E0438`  | *(retired by `ERRATA.md` E1XX-GAP40b: every bound on a polymorphic-recursion cycle is now kept -- a dispatch object, an adapter, a linked collection, a copied `Box` / tuple / nullable, a same-pointer `Rc` / `Arc` -- and the one case left, a parameter held in a foreign type with no known shape, is `E0620`. The number is not reused.)* | Type system §T.4.6 |
+| `E0438`  | *(retired by `ERRATA.md` E145: every bound on a polymorphic-recursion cycle is now kept -- a dispatch object, an adapter, a linked collection, a copied `Box` / tuple / nullable, a same-pointer `Rc` / `Arc` -- and the one case left, a parameter held in a foreign type with no known shape, is `E0620`. The number is not reused.)* | Type system §T.4.6 |
 | `E0439`  | Pattern cannot match the scrutinee: wrong number of tuple elements or record components, or a record pattern for a different type | Grammar §A.3 |
 | `E0440`  | Switch is not exhaustive                             | Type system §T.5.5            |
 | `E0441`  | Type-test smart-cast binder (`x => T name`) used outside an `if` condition | Polymorphism |
@@ -489,7 +489,7 @@ The catalog contains two kinds of entries: codes **implemented** in the compiler
 | `E0450`  | Ambiguous overload (Phase 1: overlapping constructor arity ranges) | Type system §T.3 |
 | `E0451`  | No overload candidate produces required return type *(reserved)* | Type system §T.3.4 |
 | `E0452`  | No matching operator overload *(reserved)*          | Type system §T.3.5            |
-| `E0453`  | Type inference has no solution: an uninferable `new X<>()`, or a `var` lambda whose parameter has no written type and which nothing uses to give it one | Type system §T.4.2 / `ERRATA.md` E1XX-GAP40b |
+| `E0453`  | Type inference has no solution: an uninferable `new X<>()`, or a `var` lambda whose parameter has no written type and which nothing uses to give it one | Type system §T.4.2 / `ERRATA.md` E145 |
 | `E0454`  | A foreign object a crate lends to a lambda (a `@RustClosureRefs` slot's parameter of a foreign class with no `Clone`, such as egui's `Ui`) is kept past the call: returned, stored in a field or element, or passed to a constructor or array | Bindgen §G.3.4 / `ERRATA.md` E127 |
 | `E0488`  | A lambda writes through an argument a crate lends it read-only (a closure slot whose Rust signature passes it as `&T`, recorded as `@RustClosureShared`): assigns to its field or element, or calls a mutating method on it | Bindgen §G.3.4 / `ERRATA.md` E128 |
 | `E0457`  | A type argument lacks a capability the generic declaration asks of it: a member used on `Cell<File>` copies (or prints) its `T` and `File` cannot be copied (or has no debug form); likewise a parameter that keeps `Clone + Debug` given such an argument, an `extends`/`implements` clause whose inherited members need it, a field read that copies one | Type system §T.2.1 / `ERRATA.md` E118, E120 |
@@ -609,7 +609,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 |----------|------------------------------------------------------------|--------------------------------|
 | `E0600`  | Field not definitely assigned                               | Semantics §S.4.5               |
 | `E0601`  | Local read before it is definitely assigned                 | Semantics §S.4.6               |
-| `E0620`  | A type parameter on a polymorphic-recursion cycle is held, in a bound, inside a foreign generic type whose shape the compiler does not know (`T extends Rel<OnceLock<T>>`): the erased value cannot be converted into it | Type system §T.4.6 / `ERRATA.md` E1XX-GAP40b |
+| `E0620`  | A type parameter on a polymorphic-recursion cycle is held, in a bound, inside a foreign generic type whose shape the compiler does not know (`T extends Rel<OnceLock<T>>`): the erased value cannot be converted into it | Type system §T.4.6 / `ERRATA.md` E145 |
 | `E0610`  | `drop` block in `jux-core` may not throw *(reserved)*       | Semantics §S.5.3               |
 | `E0611`  | Use of moved-from binding *(reserved)*                      | Lowering §C.6.1                |
 | `E0612`  | Conditional move requires re-initialization on join *(reserved)*| Lowering §C.6.1                |
@@ -620,7 +620,7 @@ code, and all of `E0506`–`E0510` are emitted today.
 |----------|------------------------------------------------------------|--------------------------------|
 | `E0700`  | `await` requires async context                              | Async §18.1.2                 |
 | `E0701`  | `async` not available in current profile                     | Async §18.1.11                |
-| `E0702`  | A `Worker.spawn` closure captures a value that is not transferable: a function value, an interface handle, a stream, a class or record holding one, a record holding a collection, or a collection of collections; or it WRITES to a captured collection or array, whose worker-side copy would drop the write; or a collection COPIED out of an object shared with workers (a getter's result, a field bound to a local) is written | Async §18.2 / ERRATA E27, E144, E1XX-GAP40b |
+| `E0702`  | A `Worker.spawn` closure captures a value that is not transferable: a function value, an interface handle, a stream, a class or record holding one, a record holding a collection, or a collection of collections; or it WRITES to a captured collection or array, whose worker-side copy would drop the write; or a collection COPIED out of an object shared with workers (a getter's result, a field bound to a local) is written | Async §18.2 / ERRATA E27, E144, E145 |
 | `E0710`  | `throw` requires `Exception` or subtype                      | Exceptions §X.2.1              |
 | `E0711`  | Uncaught checked exception must be caught or declared in `throws` | Exceptions §X.1.3        |
 | `E0720`  | Unreachable `catch` clause                                   | Exceptions §X.3.4              |

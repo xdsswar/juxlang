@@ -1,5 +1,5 @@
 // A bound holding the type parameter inside a foreign container, on a
-// polymorphic-recursion cycle (ERRATA E1XX-GAP40b; each was `E0438`).
+// polymorphic-recursion cycle (ERRATA E145; each was `E0438`).
 //
 // The cycle is compiled by erasure, so where a bound's argument holds `T` the
 // erased code and the value's own code see two Rust types. Each container

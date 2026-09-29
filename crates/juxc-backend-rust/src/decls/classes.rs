@@ -2326,7 +2326,7 @@ impl RustEmitter {
     /// int> m, T k)`), ADDED to the key sets the enclosing declaration
     /// collected; the names added are returned, for [`Self::drop_key_bound_params`].
     /// A generic function over a keyed container reached rustc as "the trait
-    /// bound `T: Ord` is not satisfied" (ERRATA E1XX-GAP40b).
+    /// bound `T: Ord` is not satisfied" (ERRATA E145).
     pub(crate) fn add_fn_key_bound_params(&mut self, f: &juxc_ast::FnDecl) -> Vec<String> {
         if f.generic_params.is_empty() {
             return Vec::new();
