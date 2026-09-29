@@ -10113,7 +10113,17 @@ fn nearest_name_hint(mut names: Vec<&str>, wanted: &str) -> String {
         names.sort_unstable();
         let mut scored: Vec<(&str, f32)> = names
             .into_iter()
-            .map(|c| (c, name_affinity(wanted, c).max(spelling_affinity(wanted, c))))
+            .map(|c| {
+                // A candidate the typed name merely STARTS with (`from` for
+                // `from_strr`) is a weaker answer than one a typo away
+                // (`from_str`): the extra letters were typed for a reason.
+                // Its prefix score ranks below a one-edit match (sweep C4).
+                let mut prefix = name_affinity(wanted, c);
+                if wanted.len() > c.len() && prefix == 0.9 {
+                    prefix = 0.8;
+                }
+                (c, prefix.max(spelling_affinity(wanted, c)))
+            })
             .filter(|(_, s)| *s >= 0.45)
             .collect();
         scored.sort_by(|a, b| {

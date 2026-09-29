@@ -75,7 +75,9 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// 47: `@Deprecated` on what the library deprecates (LEAKS L39).
 /// 48: associated functions and constants a type has through a trait impl,
 /// marked `@RustTrait` (ERRATA E151).
-const STD_STUB_CACHE_VERSION: u32 = 48;
+/// 49: `FromIterator::from_iter` among the trait-impl statics (ERRATA
+/// E1XX-SWEEPC4).
+const STD_STUB_CACHE_VERSION: u32 = 49;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -132,7 +134,9 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// (ERRATA E148).
 /// 24: trait-impl associated functions and constants, `@RustTrait` (ERRATA
 /// E151).
-const CRATE_STUB_CACHE_VERSION: u32 = 24;
+/// 25: `FromIterator`, and a blanket impl's statics on the types it covers
+/// (ERRATA E1XX-SWEEPC4).
+const CRATE_STUB_CACHE_VERSION: u32 = 25;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///
@@ -957,11 +961,26 @@ pub fn resolve_crate_stubs(
         );
     }
 
+    // A description that could not be regenerated is still better than none:
+    // a stale cached stub stands in, and the warning says so (sweep C4).
+    for (i, (kind, crate_name, _)) in foreign.iter().enumerate() {
+        let cache = crate_stub_cache_path(project_root, kind, crate_name);
+        if let Some(Err(e)) = &results[i] {
+            if *kind == "rust" && cache.is_file() {
+                eprintln!(
+                    "jux: warning: {}; using the cached description",
+                    stub_message_in_jux_terms(crate_name, &e.to_string())
+                );
+                results[i] = Some(Ok(cache));
+            }
+        }
+    }
+
     foreign
         .into_iter()
         .zip(results)
         .map(|((_, _, dep), r)| {
-            (dep.name.clone(), r.unwrap_or_else(|| Err(anyhow::anyhow!("stub not resolved"))))
+            (dep.name.clone(), r.unwrap_or_else(|| Err(anyhow::anyhow!("the library's interface was not read"))))
         })
         .collect()
 }
@@ -997,7 +1016,8 @@ fn read_crate_family(
         match rustdoc_json_for_package(crate_name, &extra) {
             Ok(text) => jsons.push((extra, text)),
             Err(e) => eprintln!(
-                "juxc: note: `{crate_name}` re-exports from `{extra}`, whose API could not be read ({e}); the stub will not describe those types"
+                "jux: note: the library `{crate_name}` re-exports from `{extra}`: {}; the program will not see those types",
+                stub_message_in_jux_terms(&extra, &e.to_string())
             ),
         }
     };
@@ -1040,10 +1060,10 @@ fn write_family_stub(
     let package = format!("rust.{crate_name}");
     let refs: Vec<(&str, &str)> = jsons.iter().map(|(n, j)| (n.as_str(), j.as_str())).collect();
     let fam = juxc_bindgen::family::FamilyPaths::read(crate_name, &refs).map_err(|e| {
-        anyhow::anyhow!("bindgen failed to read the re-exports of `{crate_name}`: {e}")
+        anyhow::anyhow!("could not read the library `{crate_name}`'s interface (its re-exports did not read): {e}")
     })?;
     let mut stub_file = juxc_bindgen::ingest::generate_family(&refs, &package, &fam, excluded)
-        .map_err(|e| anyhow::anyhow!("could not read the API description of the dependency `{crate_name}`: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("could not read the library `{crate_name}`'s interface (its description did not read): {e}"))?;
     // Only the bound crate is linked, so anything merged in from a crate it
     // re-exports has to be named through it.
     if jsons.len() > 1 {
@@ -1272,21 +1292,16 @@ fn rustdoc_json_in(work: &Path, package: &str, crate_name: &str) -> anyhow::Resu
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         // The tool's own report is about a crate the program only names, in
-        // the toolchain's terms (gap 35), so the message says what to do in
-        // Jux terms instead. The first line that reads as Jux is kept.
-        let reason = stderr
-            .lines()
-            .map(str::trim)
-            .find_map(|l| l.strip_prefix("error:").map(str::trim))
-            .filter(|l| !l.is_empty() && juxc_diagnostics::leak::find_rust_leak(l).is_none())
-            .map(|l| format!(" (the toolchain said: {l})"))
-            .unwrap_or_default();
-        anyhow::bail!(
-            "could not read the API of the dependency `{package}`: the toolchain Jux builds \
-             with could not describe it{reason}. Install the toolchain's `nightly` channel, \
-             which can, as INSTALL.md describes, then build again. The description is read \
-             once per dependency version and kept in `.jux-stubs/`."
-        );
+        // the toolchain's terms (gap 35; the leaker saw `link.exe failed with
+        // code 1104`), so the message says what went wrong in Jux terms, and
+        // the raw report is shown only under `--verbose` (sweep C4).
+        if crate::render::verbose() {
+            eprintln!("jux: note: the toolchain's own report while reading the library `{package}`:");
+            for line in stderr.lines() {
+                eprintln!("    {line}");
+            }
+        }
+        anyhow::bail!("{}", interface_read_failure(package, &stderr));
     }
     // rustdoc writes `<crate>.json` (hyphens become underscores in the file).
     let json_name = format!("{sanitized}.json");
@@ -1298,6 +1313,69 @@ fn rustdoc_json_in(work: &Path, package: &str, crate_name: &str) -> anyhow::Resu
              channel is missing a component; INSTALL.md lists the ones Jux needs"
         )
     })
+}
+
+/// What went wrong reading the library `package`'s interface, in Jux terms,
+/// from the toolchain's own report `stderr` (which never reaches the message:
+/// it names the toolchain's programs, files and codes, sweep C4). The cause
+/// is classified by what the report says; anything else is the generic
+/// cause.
+pub(crate) fn interface_read_failure(package: &str, stderr: &str) -> String {
+    let lower = stderr.to_ascii_lowercase();
+    let has = |needles: &[&str]| needles.iter().any(|n| lower.contains(n));
+    let (cause, advice) = if has(&["lnk1104", "code 1104", "being used by another process", "os error 32", "access is denied", "os error 5", "text file busy", "resource busy"]) {
+        (
+            "a file it needs is in use",
+            "close the program that holds it (a running build of the program, an editor's indexer) and build again",
+        )
+    } else if has(&["failed to download", "could not resolve host", "network", "timed out", "failed to fetch", "spurious"]) {
+        ("it could not be downloaded", "check the network connection, then build again")
+    } else if has(&["no matching package", "failed to select a version", "could not find `", "package id specification", "not found in registry"]) {
+        ("no release of it matches the dependency in `jux.toml`", "check its name and version there")
+    } else if has(&["no space left", "disk full", "os error 28", "os error 112"]) {
+        ("the disk is full", "free some space, then build again")
+    } else if has(&["unstable-options", "only accepted on the nightly", "is not installed", "no such toolchain"]) {
+        (
+            "the toolchain Jux builds with cannot describe it",
+            "install the toolchain's `nightly` channel, as INSTALL.md describes, then build again",
+        )
+    } else {
+        (
+            "it did not build",
+            "build again with `--verbose` to see the report, or install the toolchain's `nightly` channel as INSTALL.md describes",
+        )
+    };
+    format!(
+        "could not read the library `{package}`'s interface ({cause}); {advice}. The description is \
+         read once per dependency version and kept in `.jux-stubs/`"
+    )
+}
+
+/// A message about reading a library's interface, held to the leak detector
+/// (ERRATA E129) before it is shown: one that shows Rust or its toolchain is
+/// replaced by what can be said without it, and the original is shown only
+/// under `--verbose` (sweep C4). Every stub-generation message passes here.
+pub fn stub_message_in_jux_terms(name: &str, message: &str) -> String {
+    let leaks = juxc_diagnostics::leak::find_rust_leak(message).is_some() || mentions_toolchain_text(message);
+    if !leaks {
+        return message.to_string();
+    }
+    if crate::render::verbose() {
+        eprintln!("jux: note: the full report for `{name}`: {message}");
+    }
+    format!(
+        "could not read the library `{name}`'s interface; build again with `--verbose` to see why"
+    )
+}
+
+/// Text only the toolchain would write: its programs, its file kinds and its
+/// error codes. The leak detector looks for Rust SYNTAX; a linker's report is
+/// plain words, and still not the program's.
+fn mentions_toolchain_text(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    ["link.exe", "lnk1", "rustc", "rustdoc", "cargo", "linker", ".rlib", ".rmeta", "exit code:", "error[e"]
+        .iter()
+        .any(|n| lower.contains(n))
 }
 
 /// The throwaway-Cargo-project directory used to rustdoc one foreign crate:
@@ -1565,6 +1643,101 @@ mod tests {
         );
         assert!(unit.items.iter().any(|i| matches!(i, juxc_ast::TopLevelDecl::Class(_))));
     }
+    /// Every message a failed interface read can print, held to the leak
+    /// detector and to the toolchain-text check (sweep C4). The leaker's run
+    /// printed `link.exe failed with code 1104`: the toolchain's program, its
+    /// error code, none of it the program's.
+    fn assert_jux_worded(message: &str) {
+        assert!(juxc_diagnostics::leak::find_rust_leak(message).is_none(), "leaks Rust: {message}");
+        assert!(!mentions_toolchain_text(message), "names the toolchain: {message}");
+    }
+
+    const LINKER_LOCKED: &str = "   Compiling printpdf v0.7.0\n\
+        error: linking with `link.exe` failed: exit code: 1104\n  |\n  = note: \"C:\\\\Program Files\\\\link.exe\" \"/NOLOGO\" ...\n  \
+        = note: LINK : fatal error LNK1104: cannot open file 'C:\\\\t\\\\debug\\\\deps\\\\printpdf-4f2a.dll'\n\n\
+        error: could not compile `printpdf` (lib) due to 1 previous error\n";
+
+    #[test]
+    fn a_locked_file_is_said_in_jux_terms() {
+        let m = interface_read_failure("printpdf", LINKER_LOCKED);
+        assert!(m.starts_with("could not read the library `printpdf`'s interface (a file it needs is in use)"), "{m}");
+        assert_jux_worded(&m);
+    }
+
+    #[test]
+    fn every_failure_cause_is_said_in_jux_terms() {
+        for (stderr, cause) in [
+            ("error: failed to download `x v1.0.0`\nCaused by: spurious network error", "it could not be downloaded"),
+            ("error: no matching package named `nosuch` found\nlocation searched: crates.io index", "no release of it matches"),
+            ("error: the option `Z` is only accepted on the nightly compiler", "cannot describe it"),
+            ("error[E0425]: cannot find value `x` in this scope\n --> src/lib.rs:1:1", "it did not build"),
+            ("error: failed to write `C:\\t\\x.rmeta`: There is not enough space on the disk. (os error 112)", "the disk is full"),
+            ("", "it did not build"),
+        ] {
+            let m = interface_read_failure("thing", stderr);
+            assert!(m.contains(cause), "`{cause}` for {stderr:?}: {m}");
+            assert_jux_worded(&m);
+        }
+    }
+
+    /// A message that does show the toolchain is replaced, not printed.
+    #[test]
+    fn a_leaking_stub_message_is_replaced() {
+        for leaky in [
+            "linking with `link.exe` failed: exit code: 1104",
+            "rustdoc could not document `Vec<&str>`",
+            "cargo metadata failed",
+        ] {
+            let m = stub_message_in_jux_terms("printpdf", leaky);
+            assert_eq!(m, "could not read the library `printpdf`'s interface; build again with `--verbose` to see why");
+            assert_jux_worded(&m);
+        }
+        let fine = "could not read the library `printpdf`'s interface (a file it needs is in use); close it";
+        assert_eq!(stub_message_in_jux_terms("printpdf", fine), fine);
+    }
+
+    /// The fixed messages of the generation path, each checked as it reads.
+    #[test]
+    fn the_fixed_stub_messages_are_jux_worded() {
+        for m in [
+            "no cache directory to read a dependency's API description into".to_string(),
+            "the library's interface was not read".to_string(),
+            "could not read the library `x`'s interface (its re-exports did not read): unexpected end of input".to_string(),
+            "could not read the library `x`'s interface (its description did not read): unexpected end of input".to_string(),
+            stub_message_in_jux_terms("x", "the toolchain Jux builds with is not installed or not on PATH (reading the API of the dependency `x` needs it); install it as INSTALL.md describes, from https://rustup.rs"),
+        ] {
+            assert_jux_worded(&m);
+        }
+    }
+
+    /// A REAL failed interface read: the dependency does not compile, so the
+    /// toolchain's run fails with its own report, and the message the program
+    /// gets is the Jux one (sweep C4).
+    #[test]
+    fn a_failed_interface_read_is_reported_in_jux_terms() {
+        let dir = std::env::temp_dir().join(format!("jux-c4-rustdoc-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("broken").join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"c4host\"\nversion = \"0.0.0\"\nedition = \"2021\"\n[workspace]\n[dependencies]\nbroken = { path = \"broken\" }\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src").join("lib.rs"), "").unwrap();
+        std::fs::write(
+            dir.join("broken").join("Cargo.toml"),
+            "[package]\nname = \"broken\"\nversion = \"0.0.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("broken").join("src").join("lib.rs"), "pub fn x( -> {\n").unwrap();
+        let err = rustdoc_json_in(&dir, "broken", "broken").expect_err("the dependency does not compile");
+        let m = err.to_string();
+        assert!(m.starts_with("could not read the library `broken`'s interface ("), "{m}");
+        assert_jux_worded(&m);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The vendored `rust.std` snapshot must stay in lockstep with
     /// [`STD_STUB_CACHE_VERSION`]. Bumping that constant means the bindgen
     /// surface changed, which makes the frozen copy wrong for everyone who

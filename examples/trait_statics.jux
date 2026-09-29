@@ -4,6 +4,8 @@
 // the type, as any static, and never names the trait. A primitive's Rust
 // statics are reached the same way, on its type name.
 import rust.std.Duration;
+import rust.std.HashMap;
+import rust.std.Vec;
 
 void main() {
     // Default: the zero duration.
@@ -35,4 +37,25 @@ void main() {
     }
     long fits = 7;
     print(u32.try_from(fits));
+
+    // FromIterator (sweep C4): any collection of the element, as a `Vec`.
+    // The new collection is its own; the one it was built from is unchanged.
+    var xs = new Vec<int>();
+    xs.push(3);
+    xs.push(4);
+    Vec<int> copy = Vec.from_iter(xs);
+    copy.push(5);
+    print($"${copy.len()} ${xs.len()}");
+    var cs = new Vec<char>();
+    cs.push('o');
+    cs.push('k');
+    print(String.from_iter(cs));
+    var pairs = new Vec<(String, int)>();
+    pairs.push(("a", 1));
+    pairs.push(("b", 2));
+    HashMap<String, int> m = HashMap.from_iter(pairs);
+    print(m.len());
+    // Default on a generic standard type.
+    Vec<int> empty = Vec.default();
+    print(empty.len());
 }

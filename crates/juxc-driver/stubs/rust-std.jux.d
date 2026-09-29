@@ -1,4 +1,4 @@
-// juxc rust.std stub cache-version 48
+// juxc rust.std stub cache-version 49
 // bindgen -- generated from 2 rustdoc JSON crate(s) (format_version 58)
 
 package rust.std;
@@ -245,6 +245,7 @@ public class BTreeMap<K, V, A> implements ToOwned {
     @MutSelf @RustBorrowsSelf @RustBounds("K: Borrow, K: Ord") public CursorMut<K, V, A> upper_bound_mut<Q>(Bound<Q> bound);
     @RustTrait("std::default::Default") public static BTreeMap<K, V> default();
     @RustTrait("std::convert::From<_>") public static BTreeMap from((K, V)[] arr);
+    @RustTrait("std::iter::FromIterator<_>") public static BTreeMap<K, V> from_iter(Vec<(K, V)> iter);
 }
 
 /** An ordered set based on a B-Tree. */
@@ -285,6 +286,7 @@ public class BTreeSet<T, A> implements ToOwned {
     public bool is_empty();
     @RustTrait("std::convert::From<_>") public static BTreeSet from(T[] arr);
     @RustTrait("std::default::Default") public static BTreeSet<T> default();
+    @RustTrait("std::iter::FromIterator<_>") public static BTreeSet<T> from_iter(Vec<T> iter);
 }
 
 /** A captured OS thread stack backtrace. */
@@ -353,6 +355,7 @@ public class BinaryHeap<T, A> implements ToOwned {
     @RustTrait("std::default::Default") public static BinaryHeap<T> default();
     @RustTrait("std::convert::From<_>") public static BinaryHeap<T, A> from(Vec<T> vec);
     @RustTrait("std::convert::From<_>") public static BinaryHeap from(T[] arr);
+    @RustTrait("std::iter::FromIterator<_>") public static BinaryHeap<T> from_iter(Vec<T> iter);
 }
 
 /** A borrowed file descriptor. */
@@ -1437,6 +1440,7 @@ public class HashMap<K, V, S, A> implements ToOwned {
     @MutSelf @RustBounds("K: Borrow") public V? remove<Q>(&Q k);
     @MutSelf @RustBounds("K: Borrow") public (K, V)? remove_entry<Q>(&Q k);
     @RustTrait("std::default::Default") public static HashMap<K, V> default();
+    @RustTrait("std::iter::FromIterator<_>") public static HashMap<K, V> from_iter(Vec<(K, V)> iter);
 }
 
 /** A [hash set] implemented as a `HashMap` where the value is `()`. */
@@ -1478,6 +1482,7 @@ public class HashSet<T, S, A> implements ToOwned {
     @MutSelf @RustBounds("T: Borrow") public bool remove<Q>(&Q value);
     @MutSelf @RustBounds("T: Borrow") public T? take<Q>(&Q value);
     @RustTrait("std::default::Default") public static HashSet<T> default();
+    @RustTrait("std::iter::FromIterator<_>") public static HashSet<T> from_iter(Vec<T> iter);
 }
 
 /** An iterator that infinitely [`accept`]s connections on a [`TcpListener`]. */
@@ -2160,6 +2165,7 @@ public class LinkedList<T, A> implements ToOwned {
     @MutSelf @RustBorrowsSelf @RustClosureRefs("0") public ExtractIf<T, F, A> extract_if<F>((T) -> bool filter);
     @RustTrait("std::default::Default") public static LinkedList default();
     @RustTrait("std::convert::From<_>") public static LinkedList from(T[] arr);
+    @RustTrait("std::iter::FromIterator<_>") public static LinkedList from_iter(Vec<T> iter);
 }
 
 /** A thread local storage (TLS) key which owns its contents. */
@@ -2921,6 +2927,8 @@ public class OsString implements OsStringExt, ToOwned, Write {
     @RustTrait("std::convert::From<_>") public static OsString from(Cow<OsStr> s);
     @RustTrait("std::str::FromStr") public static OsString from_str(&String s);
     @RustTrait("std::convert::From<_>") public static OsString from(PathBuf path_buf);
+    @RustTrait("std::iter::FromIterator<_>") public static OsString from_iter(Vec<OsString> iter);
+    @RustTrait("std::iter::FromIterator<_>") public static OsString from_iter(Vec<Cow<OsStr>> iter);
 }
 
 /** Platform-specific extensions to [`OsString`]. */
@@ -4119,6 +4127,10 @@ public class String implements ToOwned, ToString, Write {
     @RustTrait("std::convert::From<_>") public static String from(Cow<String> s);
     @RustTrait("std::convert::TryFrom<_>") public static String try_from(Vec<ubyte> bytes) throws FromUtf8Error;
     @RustTrait("std::convert::From<_>") public static String from(char c);
+    @RustTrait("std::iter::FromIterator<_>") public static String from_iter(Vec<char> iter);
+    @RustTrait("std::iter::FromIterator<_>") public static String from_iter(Vec<String> iter);
+    @RustTrait("std::iter::FromIterator<_>") public static String from_iter(Vec<Cow<String>> iter);
+    @RustTrait("std::iter::FromIterator<_>") public static String from_iter(Vec<AsciiChar> iter);
 }
 
 /** An error returned from [`Path::strip_prefix`] if the prefix was not found. */
@@ -4804,6 +4816,7 @@ public class Vec<T, A> implements ToOwned {
     @RustTrait("std::default::Default") public static Vec<T> default();
     @RustTrait("std::convert::From<_>") public static Vec<T> from(T[] s);
     @RustTrait("std::convert::From<_>") public static Vec<T> from(Cow<T[]> s);
+    @RustTrait("std::iter::FromIterator<_>") public static Vec<T> from_iter(Vec<T> iter);
 }
 
 /** A double-ended queue implemented with a growable ring buffer. */
@@ -4873,6 +4886,7 @@ public class VecDeque<T, A> implements ToOwned {
     @RustTrait("std::default::Default") public static VecDeque<T> default();
     @RustTrait("std::convert::From<_>") public static VecDeque from(Vec<T> other);
     @RustTrait("std::convert::From<_>") public static VecDeque from(T[] arr);
+    @RustTrait("std::iter::FromIterator<_>") public static VecDeque<T> from_iter(Vec<T> iter);
 }
 
 /** A type indicating whether a timed wait on a condition variable returned */

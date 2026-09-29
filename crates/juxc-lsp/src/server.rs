@@ -156,11 +156,11 @@ impl Backend {
                 .show_message(
                     MessageType::WARNING,
                     format!(
-                        "jux: {} crate stub(s) couldn't be generated -- those crates \
-                         won't autocomplete. See the output log for details \
-                         (a nightly toolchain with the `rust-docs-json` component \
-                         and network access is required).",
-                        report.warnings.len()
+                        "jux: the interface of {} library dependenc{} could not be read -- \
+                         {} types won't autocomplete. See the output log for why.",
+                        report.warnings.len(),
+                        if report.warnings.len() == 1 { "y" } else { "ies" },
+                        if report.warnings.len() == 1 { "its" } else { "their" },
                     ),
                 )
                 .await;
