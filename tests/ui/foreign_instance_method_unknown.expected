@@ -1,3 +1,3 @@
-foreign_instance_method_unknown.jux:7:11: [E0413] error: no method `as_milis` on type `rust.std.Duration` -- did you mean `as_millis`, `as_micros`?
-foreign_instance_method_unknown.jux:8:11: [E0413] error: no method `asSecs` on type `rust.std.Duration` -- did you mean `as_secs`, `from_secs`?
-foreign_instance_method_unknown.jux:10:5: [E0413] error: no method `pushh` on type `rust.std.Vec` -- did you mean `push`, `push_mut`?
+foreign_instance_method_unknown.jux:8:11: [E0413] error: no method `as_milis` on type `rust.std.Duration` -- did you mean `as_millis`, `as_micros`?
+foreign_instance_method_unknown.jux:9:11: [E0413] error: no method `asSecs` on type `rust.std.Duration` -- did you mean `as_secs`?
+foreign_instance_method_unknown.jux:11:5: [E0413] error: no method `pushh` on type `rust.std.Vec` -- did you mean `push`, `push_mut`?

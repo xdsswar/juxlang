@@ -704,7 +704,12 @@ impl RustEmitter {
                     // type's real Rust path. It has no Jux storage to guard.
                     if field.is_static {
                         if let Some(real) = cls.filter(|c| c.is_external).and_then(|c| c.rust_path.clone()) {
-                            self.w.push_str(&real);
+                            // One a trait impl gives the type is read
+                            // through the trait (sweep C3).
+                            match self.static_field_trait_impl(&class_fqn, &f.field.text) {
+                                Some(tr) => self.w.push_str(&format!("<{real} as {tr}>")),
+                                None => self.w.push_str(&real),
+                            }
                             self.w.push_str("::");
                             self.w.push_str(&to_rust_ident(&f.field.text));
                             if let Some(sfx) = &method_suffix {
@@ -3291,6 +3296,21 @@ pub(crate) fn annotation_is_rust_clone(a: &juxc_ast::Annotation) -> bool {
 /// collection and takes the shared handle.
 pub(crate) fn annotation_is_rust_collection(a: &juxc_ast::Annotation) -> bool {
     a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rustcollection")
+}
+
+/// The trait path a stub's `@RustTrait("std::convert::From<_>")` names: the
+/// member is the type's only through that trait impl, and is reached as
+/// `<Type as Trait>::member` (sweep C3).
+pub(crate) fn rust_trait_annotation(annotations: &[juxc_ast::Annotation]) -> Option<String> {
+    annotations.iter().find_map(|a| {
+        let named = a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("rusttrait");
+        match a.args.first() {
+            Some(juxc_ast::AnnotationArg::Positional(juxc_ast::Expr::Literal(juxc_ast::Literal::String(s)))) if named => {
+                Some(s.clone())
+            }
+            _ => None,
+        }
+    })
 }
 
 /// True when an annotation names the bindgen `@MutSelf` marker

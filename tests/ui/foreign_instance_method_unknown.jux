@@ -1,5 +1,6 @@
 // A method a foreign value's stub does not declare is E0413, with the near
-// names it does declare (sweep C2).
+// INSTANCE names it does declare (sweep C2): a static such as `from_secs`
+// is no suggestion for a call on a value (sweep C3).
 import rust.std.Duration;
 
 void main() {

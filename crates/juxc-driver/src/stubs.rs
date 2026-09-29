@@ -73,7 +73,9 @@ const STD_POOL_CRATES: &[&str] = &["core"];
 /// maps and sets under their own names, and a collection must also iterate.
 /// 46: `@RustClosureShared` (closure arguments lent read-only).
 /// 47: `@Deprecated` on what the library deprecates (LEAKS L39).
-const STD_STUB_CACHE_VERSION: u32 = 47;
+/// 48: associated functions and constants a type has through a trait impl,
+/// marked `@RustTrait` (ERRATA E1XX-SWEEPC3).
+const STD_STUB_CACHE_VERSION: u32 = 48;
 
 /// A pre-generated `rust.std` surface, compiled into the binary as the
 /// last-resort fallback.
@@ -128,7 +130,9 @@ const VENDORED_RUST_STD: &str = include_str!("../stubs/rust-std.jux.d");
 /// of its module (`rust.naga.front.wgsl.Error`), marker names qualified the
 /// way signatures are, `@RustError`/`@RustTypeName`/`@RustErrorVariants`
 /// (ERRATA E148).
-const CRATE_STUB_CACHE_VERSION: u32 = 23;
+/// 24: trait-impl associated functions and constants, `@RustTrait` (ERRATA
+/// E1XX-SWEEPC3).
+const CRATE_STUB_CACHE_VERSION: u32 = 24;
 
 /// The first-line marker a generated crate stub must carry to be trusted.
 ///

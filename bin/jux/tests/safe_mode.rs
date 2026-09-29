@@ -163,6 +163,7 @@ const SLICE: &[&str] = &[
     "numeric_mixed_ops",
     "generic_declarations_print",
     "foreign_errors_as_jux_exceptions",
+    "trait_statics",
 ];
 
 /// Examples `run.rs` does not pin (its `EXCLUDED`), left out of the whole

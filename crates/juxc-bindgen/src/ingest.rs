@@ -1070,12 +1070,33 @@ fn collect_items(krate: &Crate) -> Vec<(String, StubItem)> {
 /// shape of the type the impl is written for (see [`type_shape_key`]).
 pub(crate) type InherentPool = std::collections::HashMap<String, Vec<StubFn>>;
 
+/// The pool key under which a primitive's trait-impl associated functions
+/// are kept (see [`collect_inherent_pool`]).
+fn primitive_trait_statics_key(prim: &str) -> String {
+    format!("trait-statics:prim:{prim}")
+}
+
 /// Record every inherent impl in `krate` into `pool`.
+///
+/// Also the trait-impl associated functions of every PRIMITIVE, under
+/// [`primitive_trait_statics_key`] (sweep C3): `impl FromStr for u32` lives in
+/// `core`, a pool crate the facade's primitive item does not list the trait
+/// impls of, so `u32.from_str` has to be carried across like a deref target's
+/// methods are.
 fn collect_inherent_pool(krate: &Crate, pool: &mut InherentPool) {
     // The projection fan-out (§G.6.4.5) records the real Rust path of every
     // named type an overload's parameter mentions, so the late pass can check
     // that this stub's declaration of that name really is that type.
     let public = PublicPaths::of(krate);
+    for item in krate.index.values() {
+        if let ItemEnum::Primitive(prim) = &item.inner {
+            let class = format!("{}_methods", prim.name);
+            let prim_name = prim.name.clone();
+            let is_prim = move |t: &Type| matches!(t, Type::Primitive(p) if *p == prim_name);
+            let (fns, _) = collect_trait_statics(krate, &public, &prim.impls, &class, &is_prim, &HashSet::new());
+            pool.entry(primitive_trait_statics_key(&prim.name)).or_default().extend(fns);
+        }
+    }
     for item in krate.index.values() {
         let ItemEnum::Impl(im) = &item.inner else {
             continue;
@@ -1343,6 +1364,7 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
                 // associated functions, called on the type.
                 for c in ctors {
                     methods.push(StubFn {
+                        trait_impl: None,
                         visibility: Vis::Public,
                         is_static: true,
                         is_default: false,
@@ -1366,8 +1388,41 @@ fn collect_items_with_ids(krate: &Crate, pool: &InherentPool) -> Vec<(u32, Strin
                     });
                 }
                 dedup_methods_by_name(&mut methods);
+                // `u32::from_str`, `f64::default()`: a primitive's trait
+                // impls' associated functions and constants (sweep C3), with
+                // the primitive itself for `Self`.
+                let taken: HashSet<String> = methods.iter().map(|m| m.name.clone()).collect();
+                let prim_name = prim.name.clone();
+                let is_prim = move |t: &Type| matches!(t, Type::Primitive(p) if *p == prim_name);
+                let (mut trait_fns, mut trait_consts) =
+                    collect_trait_statics(krate, &public, &prim.impls, &class, &is_prim, &taken);
+                // ...and those of the pool crates (`core`'s `impl FromStr for
+                // u32`), one per Jux signature.
+                for f in pool.get(&primitive_trait_statics_key(&prim.name)).into_iter().flatten() {
+                    let key = |g: &StubFn| {
+                        format!("{}#{}", g.name, g.params.iter().map(|p| p.ty.to_string()).collect::<Vec<_>>().join(","))
+                    };
+                    if !taken.contains(&f.name) && !trait_fns.iter().any(|g| key(g) == key(f)) {
+                        trait_fns.push(f.clone());
+                    }
+                }
+                let jux_prim = JuxType::Prim(primitive_jux_name(&prim.name));
+                for f in &mut trait_fns {
+                    replace_named(&mut f.ret, &class, &jux_prim);
+                    if let Some(t) = &mut f.throws {
+                        replace_named(t, &class, &jux_prim);
+                    }
+                    for p in &mut f.params {
+                        replace_named(&mut p.ty, &class, &jux_prim);
+                    }
+                }
+                for c in &mut trait_consts {
+                    replace_named(&mut c.ty, &class, &jux_prim);
+                }
+                methods.extend(trait_fns);
                 let mut st = StubType::new(TypeKind::Class, &class);
                 st.methods = methods;
+                st.fields = trait_consts;
                 st.primitive = Some(prim.name.clone());
                 st.rust_path = Some(prim.name.clone());
                 collected.push((item.id.0, class, StubItem::Type(st)));
@@ -1532,6 +1587,7 @@ fn build_struct(
                 }
                 if let Some(fname) = &fitem.name {
                     fields.push(StubField {
+                        trait_impl: None,
                         visibility: Vis::Public,
                         name: method_name(fname),
                         ty: map_type(ty),
@@ -1589,6 +1645,14 @@ fn build_struct(
     methods.extend(deref_members(krate, &s.impls, pool));
     methods.extend(iterator_next(krate, &s.impls));
     dedup_methods_by_name(&mut methods);
+    // What the type has only through a trait impl (after the dedup, which
+    // keys on the name alone and would keep one `from` of several).
+    let taken: HashSet<String> = methods.iter().map(|m| m.name.clone()).chain(assoc_consts.iter().map(|c| c.name.clone())).collect();
+    let own = item.id;
+    let (trait_fns, trait_consts) =
+        collect_trait_statics(krate, public, &s.impls, name, &|t| impl_target_is_the_plain_type(own, t), &taken);
+    methods.extend(trait_fns);
+    let assoc_consts: Vec<StubField> = assoc_consts.into_iter().chain(trait_consts).collect();
 
     // §G.6.3 kind selection: an all-public plain-fielded struct with no methods
     // maps to a Jux `struct`; anything with private fields or behaviour is a
@@ -1664,6 +1728,13 @@ fn build_enum(
     let (mut ctors, mut methods) = collect_inherent_members(krate, public, &e.impls, name);
     add_default_ctor(&mut ctors, name, implements_trait(krate, &e.impls, "Default"));
     dedup_methods_by_name(&mut methods);
+    // Its trait impls' associated functions (sweep C3). An enum's associated
+    // constants are not surfaced, trait ones included (see below).
+    let taken: HashSet<String> = methods.iter().map(|m| m.name.clone()).collect();
+    let own = item.id;
+    let (trait_fns, _) =
+        collect_trait_statics(krate, public, &e.impls, name, &|t| impl_target_is_the_plain_type(own, t), &taken);
+    methods.extend(trait_fns);
     st.constructors = ctors;
     st.methods = methods;
     // An enum's associated constants are not surfaced: a Jux enum body holds
@@ -1961,6 +2032,183 @@ fn collect_inherent_members(
     (ctors, methods)
 }
 
+/// The associated functions and constants a type has only through a TRAIT
+/// impl (Bindgen G.5.4f, ERRATA E1XX-SWEEPC3): `Default::default()`,
+/// `From::from(x)`, `FromStr::from_str(s)`, a crate trait's own associated
+/// function or constant. Each becomes a static member of the type's stub,
+/// marked with the trait it comes from (`StubFn::trait_impl`), because a Rust
+/// program calls it through the trait: the backend writes
+/// `<Type as Trait>::f(..)`, and the trait's name is nothing the program sees.
+///
+/// Which impls: one written for the type itself (`is_self`), not a blanket
+/// impl, not a synthetic or negative one, of a trait the emitted crate can
+/// name and a program means: the crate's own traits, and of the standard
+/// library's the conversion and construction traits [`STD_STATIC_TRAITS`]
+/// (the rest are marker traits, operating-system extensions, or unstable). A
+/// third crate's trait is left out: the program may not depend on it. Only
+/// members without a receiver: an instance method of a trait is reached
+/// through `implements` already. A name the type's inherent impls declare is
+/// theirs, as it is in Rust. One Jux signature is kept per name: `From<&str>`
+/// and `From<String>` are both `from(String)`.
+///
+/// An associated function whose error is the impl's own associated type
+/// (`Result<Self, Self::Err>`) throws that type; one whose error is
+/// `Infallible` throws nothing.
+fn collect_trait_statics(
+    krate: &Crate,
+    public: &PublicPaths,
+    impls: &[rustdoc_types::Id],
+    type_name: &str,
+    is_self: &dyn Fn(&Type) -> bool,
+    taken: &HashSet<String>,
+) -> (Vec<StubFn>, Vec<StubField>) {
+    let mut fns: Vec<StubFn> = Vec::new();
+    let mut consts: Vec<StubField> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for impl_id in impls {
+        let Some(impl_item) = krate.index.get(impl_id) else { continue };
+        let ItemEnum::Impl(im) = &impl_item.inner else { continue };
+        let Some(tr) = &im.trait_ else { continue };
+        if im.is_synthetic || im.is_negative || im.blanket_impl.is_some() || !is_self(&im.for_) {
+            continue;
+        }
+        let Some(trait_path) = nameable_trait_path(krate, public, &tr.id) else { continue };
+        let arity = match tr.args.as_deref() {
+            Some(GenericArgs::AngleBracketed { args, .. }) => {
+                args.iter().filter(|a| matches!(a, GenericArg::Type(_) | GenericArg::Const(_))).count()
+            }
+            _ => 0,
+        };
+        let written = if arity == 0 {
+            trait_path
+        } else {
+            format!("{trait_path}<{}>", vec!["_"; arity].join(", "))
+        };
+        // The impl's associated types: `type Err = ParseIntError;`.
+        let assoc_types: HashMap<String, Type> = im
+            .items
+            .iter()
+            .filter_map(|id| krate.index.get(id))
+            .filter_map(|it| match (&it.name, &it.inner) {
+                (Some(n), ItemEnum::AssocType { type_: Some(t), .. }) => Some((n.clone(), t.clone())),
+                _ => None,
+            })
+            .collect();
+        for mid in &im.items {
+            let Some(mitem) = krate.index.get(mid) else { continue };
+            let Some(mname) = &mitem.name else { continue };
+            if taken.contains(mname) {
+                continue;
+            }
+            match &mitem.inner {
+                ItemEnum::Function(f) if !has_self_receiver(f) => {
+                    let mut sf = map_function(krate, mname, f);
+                    // A generic associated function (`from_iter<I>`) has a
+                    // parameter only its trait bound describes; left out.
+                    if !sf.generics.is_empty() {
+                        continue;
+                    }
+                    sf.is_static = true;
+                    sf.trait_impl = Some(written.clone());
+                    sf.throws = impl_error_type(krate, &f.sig.output, &assoc_types).unwrap_or(sf.throws);
+                    substitute_self_in_fn(&mut sf, type_name);
+                    let key = format!(
+                        "{mname}#{}",
+                        sf.params.iter().map(|p| p.ty.to_string()).collect::<Vec<_>>().join(",")
+                    );
+                    if seen.insert(key) {
+                        fns.push(sf);
+                    }
+                }
+                ItemEnum::AssocConst { type_, .. } => {
+                    let ty = substitute_self(&map_type(type_), type_name);
+                    if ty.is_spellable() && seen.insert(format!("{mname}#const")) {
+                        consts.push(StubField {
+                            trait_impl: Some(written.clone()),
+                            visibility: Vis::Public,
+                            name: mname.clone(),
+                            ty,
+                            is_static: true,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    (fns, consts)
+}
+
+/// The standard library's traits whose associated functions a type's stub
+/// carries (see [`collect_trait_statics`]): what constructs or converts a
+/// value, by the trait's simple name.
+const STD_STATIC_TRAITS: &[&str] = &["Default", "From", "TryFrom", "FromStr"];
+
+/// The `throws` of a trait impl's associated function whose `Result` error is
+/// one of the impl's associated types (`Self::Err`): `Some(Some(E))` for that
+/// type, `Some(None)` when it is `Infallible` (the call cannot fail), and
+/// `None` when the error is anything else (the ordinary mapping stands).
+fn impl_error_type(krate: &Crate, output: &Option<Type>, assoc: &HashMap<String, Type>) -> Option<Option<JuxType>> {
+    let Some(Type::ResolvedPath(p)) = output else { return None };
+    if resolved_name(krate, p) != "Result" {
+        return None;
+    }
+    let args = path_type_args(&p.args);
+    let Some(Type::QualifiedPath { name, .. }) = args.get(1) else { return None };
+    let target = assoc.get(name)?;
+    if let Type::ResolvedPath(tp) = target {
+        if last_segment(&tp.path) == "Infallible" {
+            return Some(None);
+        }
+    }
+    match map_type(target) {
+        t @ JuxType::User { .. } => Some(Some(t)),
+        _ => Some(Some(JuxType::user("Error"))),
+    }
+}
+
+/// The path the emitted crate names trait `id` by, when it can: the crate's
+/// own trait by its public path, one of [`STD_STATIC_TRAITS`] by its public
+/// `std` path. `None` otherwise (see [`collect_trait_statics`]).
+fn nameable_trait_path(krate: &Crate, public: &PublicPaths, id: &Id) -> Option<String> {
+    let summary = krate.paths.get(id);
+    let std_root = |path: &[String]| matches!(path.first().map(String::as_str), Some("core" | "alloc" | "std"));
+    if let Some(item) = krate.index.get(id) {
+        let is_std = summary.is_some_and(|s| std_root(&s.path));
+        if matches!(item.inner, ItemEnum::Trait(_)) && is_public(&item.visibility) && !is_std {
+            return real_rust_path(krate, item, public);
+        }
+    }
+    let path = &summary?.path;
+    if !std_root(path) {
+        return None;
+    }
+    let simple = path.last()?;
+    if !STD_STATIC_TRAITS.contains(&simple.as_str()) || path.len() < 3 {
+        return None;
+    }
+    // The definition path threads private modules (`core::str::traits::
+    // FromStr`); every one of these traits is re-exported from its top-level
+    // module, `std::str::FromStr`.
+    Some(format!("std::{}::{simple}", path[1]))
+}
+
+/// Replace every occurrence of the user type `name` in `ty` with `with`.
+fn replace_named(ty: &mut JuxType, name: &str, with: &JuxType) {
+    match ty {
+        JuxType::User { name: n, args } if n == name && args.is_empty() => *ty = with.clone(),
+        JuxType::User { args, .. } => args.iter_mut().for_each(|a| replace_named(a, name, with)),
+        JuxType::Nullable(inner) | JuxType::RawPtr(inner) => replace_named(inner, name, with),
+        JuxType::Array { elem, .. } => replace_named(elem, name, with),
+        JuxType::Tuple(items) => items.iter_mut().for_each(|a| replace_named(a, name, with)),
+        JuxType::Fn { params, ret, .. } => {
+            params.iter_mut().for_each(|a| replace_named(a, name, with));
+            replace_named(ret, name, with);
+        }
+        _ => {}
+    }
+}
+
 /// The methods a type inherits through `Deref`.
 ///
 /// Rust resolves `vec.first()` by dereferencing `Vec<T>` to `[T]` and finding
@@ -2154,6 +2402,7 @@ pub(crate) fn map_function(krate: &Crate, name: &str, f: &Function) -> StubFn {
         .filter(|(_, args)| !args.is_empty())
         .collect();
     StubFn {
+        trait_impl: None,
         closure_ref_params,
         closure_shared,
         visibility: Vis::Public,
@@ -2830,6 +3079,7 @@ fn iterator_next(krate: &Crate, impls: &[rustdoc_types::Id]) -> Option<StubFn> {
     let borrowed = matches!(item, Type::BorrowedRef { .. });
     let (elem, throws) = map_return(krate, &Some(item));
     Some(StubFn {
+        trait_impl: None,
         visibility: Vis::Public,
         is_static: false,
         is_default: false,
@@ -2867,6 +3117,7 @@ fn tuple_struct_fields(krate: &Crate, fids: &[Option<Id>]) -> Option<Vec<StubFie
             return None;
         };
         out.push(StubField {
+            trait_impl: None,
             visibility: Vis::Public,
             name: format!("_{i}"),
             ty: map_type(ty),
@@ -2901,6 +3152,7 @@ fn collect_assoc_consts(krate: &Crate, impls: &[Id], type_name: &str) -> Vec<Stu
                 continue;
             }
             out.push(StubField {
+                trait_impl: None,
                 visibility: Vis::Public,
                 name: cname.clone(),
                 ty,
