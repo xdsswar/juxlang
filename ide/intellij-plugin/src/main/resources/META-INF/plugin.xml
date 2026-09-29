@@ -824,6 +824,24 @@
         enabledByDefault="true"
         level="ERROR"
         implementationClass="dev.jux.intellij.inspections.JuxTypeAliasInspection"/>
+    <!-- ERRATA E135: what a type parameter's bound can name, and a type's
+         argument count at any depth. -->
+    <localInspection
+        language="Jux"
+        shortName="JuxTypeParameterBound"
+        displayName="Bound no type can meet, or two classes in an intersection (E0459, E0419)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxTypeParameterBoundInspection"/>
+    <localInspection
+        language="Jux"
+        shortName="JuxTypeArgumentCount"
+        displayName="Wrong number of type arguments at any depth (E0443)"
+        groupName="Jux"
+        enabledByDefault="true"
+        level="ERROR"
+        implementationClass="dev.jux.intellij.inspections.JuxTypeArgumentCountInspection"/>
     <localInspection
         language="Jux"
         shortName="JuxDeprecatedUsage"

@@ -13,6 +13,7 @@ import dev.jux.intellij.psi.JuxFile
 import dev.jux.intellij.psi.JuxTypeDeclaration
 import dev.jux.intellij.quickfix.JuxMakeClassAbstractFix
 import dev.jux.intellij.resolve.JuxHierarchy
+import dev.jux.intellij.resolve.JuxTypeIndex
 
 /**
  * E0429 mirrored IDE-side: a **non-abstract class** must implement every
@@ -42,6 +43,9 @@ class JuxAbstractNotImplementedInspection : LocalInspectionTool() {
             if (JuxHierarchy.isAbstractType(type)) continue
             val name = type.name ?: continue
             val target = type.nameIdentifier ?: continue
+            // A class extending a Rust type is E0420 and only that (ERRATA
+            // E135): the type's methods are the crate's, not ones to implement.
+            if (extendsRustType(type)) continue
 
             val missing = JuxOverrideMembers.candidates(type)
                 .filter { it.kind == JuxOverrideMembers.Kind.IMPLEMENT }
@@ -69,6 +73,19 @@ class JuxAbstractNotImplementedInspection : LocalInspectionTool() {
             )
         }
         return problems.toTypedArray()
+    }
+
+    /** Whether [type]'s `extends` clause names a Rust type, anywhere up its chain. */
+    private fun extendsRustType(type: JuxTypeDeclaration): Boolean {
+        val seen = HashSet<JuxTypeDeclaration>()
+        var current: JuxTypeDeclaration? = type
+        while (current != null && seen.add(current)) {
+            val ref = JuxHierarchy.supertypeReferences(current).firstOrNull { it.second }?.first ?: return false
+            val parent = JuxTypeIndex.findTypeThroughAliases(ref, JuxHierarchy.bareTypeName(ref)) ?: return false
+            if (JuxHierarchy.isRustType(parent)) return true
+            current = parent
+        }
+        return false
     }
 
     /**

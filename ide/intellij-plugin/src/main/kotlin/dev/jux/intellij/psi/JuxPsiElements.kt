@@ -90,7 +90,28 @@ abstract class JuxNamedElementImpl(node: ASTNode) : JuxCompositeElement(node), J
 }
 
 /** A top-level or nested type: class / interface / enum / record / struct / annotation. */
-class JuxTypeDeclaration(node: ASTNode) : JuxNamedElementImpl(node)
+open class JuxTypeDeclaration(node: ASTNode) : JuxNamedElementImpl(node)
+
+/**
+ * The body of `new T(..) { .. }`: an anonymous class (JUX-LANG-V1 §7).
+ *
+ * It is a type declaration with no name, so everything that asks "which type
+ * is this member in?" gets the right answer: `this` inside it is the
+ * anonymous object, its own members and its supertype's are found first, and
+ * a bare name it does not declare falls through to the captured locals and
+ * then to the enclosing object's members (ERRATA E138). Its one supertype is
+ * the type the `new` names ([supertypeReference]); it has no clauses of its
+ * own, and nothing can name it, so no index or lookup by name ever finds it.
+ */
+class JuxAnonymousClass(node: ASTNode) : JuxTypeDeclaration(node) {
+    override fun getNameIdentifier(): PsiElement? = null
+
+    override fun getName(): String? = null
+
+    /** The `T` of `new T(..) { .. }`: the class it extends or the interface it implements. */
+    fun supertypeReference(): PsiElement? =
+        parent?.node?.findChildByType(JuxElementTypes.TYPE_REFERENCE)?.psi
+}
 
 /** A method or free function declaration, or an `operator` declaration. */
 class JuxMethodDeclaration(node: ASTNode) : JuxNamedElementImpl(node) {

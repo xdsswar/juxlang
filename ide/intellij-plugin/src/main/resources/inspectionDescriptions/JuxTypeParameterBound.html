@@ -1,0 +1,14 @@
+<html>
+<body>
+Reports a type parameter bound the compiler refuses (type system &sect;T.4.6):
+<ul>
+<li>a bound no other type can meet: a Rust type, a record, an enum, a primitive or <code>String</code>,
+as in <code>&lt;V extends Vec&lt;int&gt;&gt;</code> (<b>E0459</b>). Such a bound admits only that one type, so
+write the type where the parameter is used, or bound the parameter by an interface. A <code>final</code>
+Jux class is still a legal bound;</li>
+<li>an intersection naming two classes, <code>&lt;T extends Animal &amp; Machine&gt;</code> (<b>E0419</b>):
+a class extends one class, so no type is both. Keep one class and any number of interfaces, in any order
+(<code>T extends Named &amp; Base</code> is legal).</li>
+</ul>
+</body>
+</html>

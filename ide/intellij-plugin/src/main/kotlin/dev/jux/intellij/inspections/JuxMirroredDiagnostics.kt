@@ -86,6 +86,8 @@ object JuxMirroredDiagnostics {
         Source("JuxSetterEarlyReturn", setOf("W0973")) { JuxSetterEarlyReturnInspection() },
         Source("JuxTimeSpan", setOf("E0487")) { JuxTimeSpanInspection() },
         Source("JuxTypeAlias", setOf("E0443", "E0498")) { JuxTypeAliasInspection() },
+        Source("JuxTypeArgumentCount", setOf("E0443")) { JuxTypeArgumentCountInspection() },
+        Source("JuxTypeParameterBound", setOf("E0419", "E0459")) { JuxTypeParameterBoundInspection() },
         // "Cannot resolve symbol / type" is the compiler's E0301 without the code in its text.
         Source("JuxUnresolvedReference", setOf("E0301")) { JuxUnresolvedReferenceInspection() },
         // The syntax-hint annotator's keyword-as-binding-name check.

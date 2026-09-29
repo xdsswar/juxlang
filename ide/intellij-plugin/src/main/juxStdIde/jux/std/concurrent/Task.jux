@@ -1,0 +1,53 @@
+/**
+ * jux.std.concurrent.Task<T>: the handle `spawn` returns (JUX-ASYNC §18.1.4).
+ *
+ * The compiler binds `Task` structurally and never writes it as source; this
+ * file describes it for the editor only, as §18.1.4 declares it. There is one
+ * `Task<T>` (ERRATA E136): `spawn` and `Worker.spawn` both return it, and a
+ * written `Task<T>` names it as a field, a parameter, a return or an element.
+ * Copies of a task name the same task, and whichever is awaited first takes
+ * the result: `await t`, `blockingGet()`, `join()`, `map` and `flatMap` each
+ * take it.
+ */
+package jux.std.concurrent;
+
+public class Task<T> {
+    /** Blocks the calling thread until the task settles; rethrows its failure. */
+    public T blockingGet() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** `blockingGet()`'s other name. */
+    public T join() { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Requests cancellation; the task sees it at its next suspension point. */
+    public void cancel() {}
+
+    /** True once `cancel()` was called. */
+    public bool isCancelled() { return false; }
+
+    /** True once the task has an outcome, a value or a failure. */
+    public bool isResolved() { return false; }
+
+    /** A task of `f` applied to this task's value; takes this task. */
+    public <U> Task<U> map((T) -> U f) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** A task of the task `f` returns for this task's value; takes this task. */
+    public <U> Task<U> flatMap((T) -> Task<U> f) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** A task settled at birth with `value`. */
+    public static <T> Task<T> completed(T value) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** A task settled at birth with the failure `error`; awaiting it rethrows `error`. */
+    public static <T> Task<T> failed(Exception error) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Resolves when every task resolves, with their values in order; fails on the first failure. */
+    public static <T> Task<Vec<T>> all(Task<T>... tasks) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Resolves with the first task to settle. */
+    public static <T> Task<T> race(Task<T>... tasks) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Resolves with the first success; fails with the last failure when every task fails. */
+    public static <T> Task<T> any(Task<T>... tasks) { throw new UnsupportedOperationException("intrinsic"); }
+
+    /** Resolves when every task settles, each as `Result.Ok(value)` or `Result.Err(exception)`. */
+    public static <T> Task<Vec<Result<T, Exception>>> allSettled(Task<T>... tasks) { throw new UnsupportedOperationException("intrinsic"); }
+}

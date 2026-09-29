@@ -1,0 +1,9 @@
+<html>
+<body>
+Reports a Jux class, interface, record or enum written with the wrong number of type arguments, at any
+depth of nesting (<b>E0443</b>): <code>Vec&lt;Vec&lt;Pair&lt;int&gt;&gt;&gt;</code> for a <code>Pair&lt;K, V&gt;</code>
+is reported at the inner <code>Pair&lt;int&gt;</code>, in a field, a parameter, a return, a local, a
+<code>new</code>, a supertype or a bound. A Rust type may leave defaulted parameters unwritten, and a
+type written with no arguments is left to inference.
+</body>
+</html>
