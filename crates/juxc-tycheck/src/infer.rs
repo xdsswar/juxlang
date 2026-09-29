@@ -405,6 +405,57 @@ pub const TYPED_ASSERT_THROWS_FQN: &str = "jux.std.testing.assertThrows";
 /// The root of the throwable hierarchy `assertThrows<E>` accepts.
 pub const EXCEPTION_FQN: &str = "jux.std.exceptions.Exception";
 
+/// The standard `Result` enum (§K.4), whose `Result.from(() -> ...)`
+/// (EXCEPTIONS §X.5.4) is a compiler intrinsic rather than a library static.
+pub const RESULT_FQN: &str = "jux.std.result.Result";
+
+/// Whether `c` is written `Result.from(...)`: a call of `from` on the bare type
+/// name `Result`. What `Result` names is the caller's question.
+pub fn is_result_from_shape(c: &CallExpr) -> bool {
+    match c.callee.as_ref() {
+        Expr::Field(f) => {
+            f.field.text == "from"
+                && matches!(f.object.as_ref(), Expr::Path(qn) if qn.segments.len() == 1 && qn.segments[0].text == "Result")
+        }
+        _ => false,
+    }
+}
+
+/// What a function value passed where no parameter type is known produces:
+/// a zero-parameter lambda's body (a lambda has no type of its own in Phase
+/// 1), or the return type of any other function value.
+pub(crate) fn produced_value_type(arg: Option<&Expr>, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    match arg {
+        Some(Expr::Lambda(l)) if l.params.is_empty() => match &l.body {
+            juxc_ast::LambdaBody::Expr(e) => infer_expr(e, env, symbols),
+            juxc_ast::LambdaBody::Block(b) => match b.statements.last() {
+                Some(Stmt::Expr(tail)) => infer_expr(tail, env, symbols),
+                Some(Stmt::Return(Some(e), _)) => infer_expr(e, env, symbols),
+                _ => Ty::Void,
+            },
+        },
+        Some(other) => match infer_expr(other, env, symbols) {
+            Ty::Fn { return_type, .. } => *return_type,
+            t => t,
+        },
+        None => Ty::Unknown,
+    }
+}
+
+/// The type of `Result.from(f)` (EXCEPTIONS §X.5.4): `Result<T, E>`, `T` what
+/// `f` produces and `E` the one explicit type argument, else `Exception`.
+/// Local to the call: the checker fills the type argument in from a written
+/// target type before anything is inferred (`crate::result_from`), so no
+/// expected type has to flow into inference.
+pub fn result_from_type(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
+    let value = produced_value_type(c.args.first(), env, symbols);
+    let error = match c.explicit_generic_args.as_slice() {
+        [e] => ty_from_ref(e, env, symbols),
+        _ => Ty::User { name: EXCEPTION_FQN.to_string(), generic_args: Vec::new() },
+    };
+    Ty::User { name: RESULT_FQN.to_string(), generic_args: vec![value, error] }
+}
+
 /// The fully-qualified name a bare TYPE name means in `env`: an import or
 /// same-package sibling, the name itself, or a same-package-preferring scan.
 /// The owner-resolution step of nested-type access, shared with
@@ -1291,21 +1342,7 @@ pub fn named_operator_call_type(c: &CallExpr) -> Option<Ty> {
 /// `f` produces. A lambda has no type of its own in Phase 1, so its body is
 /// read; an `async` call hands back what the call produces.
 fn spawned_task_type(arg: Option<&Expr>, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
-    let value = match arg {
-        Some(Expr::Lambda(l)) if l.params.is_empty() => match &l.body {
-            juxc_ast::LambdaBody::Expr(e) => infer_expr(e, env, symbols),
-            juxc_ast::LambdaBody::Block(b) => match b.statements.last() {
-                Some(Stmt::Expr(tail)) => infer_expr(tail, env, symbols),
-                Some(Stmt::Return(Some(e), _)) => infer_expr(e, env, symbols),
-                _ => Ty::Void,
-            },
-        },
-        Some(other) => match infer_expr(other, env, symbols) {
-            Ty::Fn { return_type, .. } => *return_type,
-            t => t,
-        },
-        None => Ty::Unknown,
-    };
+    let value = produced_value_type(arg, env, symbols);
     Ty::User {
         name: juxc_ast::TASK_SENTINEL.to_string(),
         generic_args: vec![value],
@@ -1648,7 +1685,8 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
             // code, so it has the type the task carries. Left untyped, the
             // `Vec` handle `Task.all(..).blockingGet()` answers with was
             // iterated as though it were a plain sequence.
-            if matches!(method_name, "blockingGet" | "join") && c.args.is_empty() {
+            // `task.await()` is `await task` (§18.1.4), and reads the same value.
+            if matches!(method_name, "blockingGet" | "join" | "await") && c.args.is_empty() {
                 if let Ty::User { name, generic_args } =
                     infer_expr(&field.object, env, symbols)
                 {
@@ -1708,6 +1746,10 @@ fn infer_call(c: &CallExpr, env: &TypeEnv, symbols: &SymbolTable) -> Ty {
                 if qn.segments.len() == 1 {
                     let bare = qn.segments[0].text.as_str();
                     if let Some((enum_fqn, enum_sig)) = symbols.lookup_enum(bare) {
+                        // `Result.from(() -> ...)` (§X.5.4), the intrinsic.
+                        if enum_fqn == RESULT_FQN && method_name == "from" && env.lookup(bare).is_none() {
+                            return result_from_type(c, env, symbols);
+                        }
                         // `HttpResponse.Ok(200, "fine")` builds a value of the enum.
                         // Untyped, a later `var b = ok;` could not tell the value
                         // must be copied, and moved it instead.

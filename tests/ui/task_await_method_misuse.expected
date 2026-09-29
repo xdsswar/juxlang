@@ -1,0 +1,4 @@
+task_await_method_misuse.jux:10:14: [E0700] error: `task.await()` suspends like `await task`, so it is only allowed inside an async function, method, or lambda -- mark the enclosing function `async` (e.g. `async T f()`), or read the value from sync code with `task.blockingGet()`
+task_await_method_misuse.jux:15:13: [E0411] error: `await()` takes no arguments, but 1 was supplied (§18.1.4)
+task_await_method_misuse.jux:17:16: [E0707] error: task `t` was already consumed: awaiting a task, `blockingGet()`, `map`, `flatMap`, or passing it to `Task.all`/`any`/`race`/`allSettled` takes its result, and a task has only one (§18.1.4)
+task_await_method_misuse.jux:25:7: [E0413] error: no method `cancle` on `Task` -- a task's own members are `await()`, `cancel()`, `isCancelled()`, `isResolved()`, `blockingGet()` (or `join()`), `map(f)` and `flatMap(f)`; `await task` (or `task.await()`) is what reads its value in async code (§18.1.4)

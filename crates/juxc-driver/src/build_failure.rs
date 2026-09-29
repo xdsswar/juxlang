@@ -128,6 +128,60 @@ pub(crate) fn from_messages(messages: &str, map: &SourceMap) -> Option<BuildFail
 /// binary needs one, and the binary is what reports it. An empty file is the
 /// plainest case (FEATURES-TODO release blockers, gap 35).
 fn no_entry_point() -> Diagnostic {
+    no_entry_point_diagnostic()
+}
+
+/// `E0327` before anything is built: `units` are one binary target's and
+/// none of them declares an entry point (Entry Points §E.1, §E.2). Raised by
+/// every front-end entry point that knows its sources are a binary's
+/// ([`crate::cfg::CfgFacts::binary`]): `jux check`, `juxc --check`, the
+/// language server, and the build itself, which used to learn it only from
+/// rustc. `None` when `diagnostics` already holds an error: the build stops
+/// at the first error it has, so a program with one is not also told it has
+/// nothing to run, which is exactly when the build would say so.
+///
+/// An entry point is a free `main` (top-level statements become one, §E.1.1),
+/// a class's `static main` (§E.1.2.2), or an `@entry` function (§E.2), in a
+/// unit of the program's own. The diagnostic is placed at the start of the
+/// target's entry file (its `[[bin]]` path when there is one, else its first
+/// file), so the editor has somewhere to show it.
+pub(crate) fn missing_entry_point(
+    units: &[juxc_ast::CompilationUnit],
+    sources: &[juxc_source::SourceFile],
+    user_start: usize,
+    diagnostics: &[Diagnostic],
+    cfg: &crate::cfg::CfgFacts,
+) -> Option<Diagnostic> {
+    use juxc_ast::TopLevelDecl;
+    if !cfg.binary() || diagnostics.iter().any(|d| matches!(d.severity, juxc_diagnostics::Severity::Error)) {
+        return None;
+    }
+    let is_entry = |item: &TopLevelDecl| match item {
+        TopLevelDecl::Function(f) => {
+            f.name.text == "main"
+                || f.annotations.iter().any(|a| a.name.segments.last().is_some_and(|s| s.text.eq_ignore_ascii_case("entry")))
+        }
+        TopLevelDecl::Class(c) => c
+            .methods
+            .iter()
+            .any(|m| m.name.text == "main" && m.modifiers.iter().any(|md| matches!(md, juxc_ast::FnModifier::Static))),
+        _ => false,
+    };
+    let own = |i: &usize| *i >= user_start && units.get(*i).is_some_and(|u| !u.is_external);
+    if (0..units.len()).filter(own).any(|i| units[i].items.iter().any(is_entry)) {
+        return None;
+    }
+    let user: Vec<usize> = (0..sources.len()).filter(own).collect();
+    let entry_file = user
+        .iter()
+        .copied()
+        .find(|i| cfg.bin_entries().iter().any(|b| b.components().eq(sources[*i].path().components())))
+        .or_else(|| user.first().copied())?;
+    let span = juxc_source::Span { start: 0, end: 0, file: entry_file as u32 };
+    Some(no_entry_point_diagnostic().with_span(span).with_file(entry_file))
+}
+
+fn no_entry_point_diagnostic() -> Diagnostic {
     Diagnostic::error(Code::E0327_NoEntryPoint, "this program has no entry point, so there is nothing to run")
         .with_help(
             "declare `void main() { ... }`, write the program's statements at the top level of \

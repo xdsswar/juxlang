@@ -839,6 +839,25 @@ impl RustEmitter {
                 (joined, true)
             }
         };
+        // Safe level (gap 34, sweep C): a program type is named from the crate
+        // root, whatever module the code sits in (see `emit_fqn_path_in_rust`).
+        // The test hook `path` drops the root from a cross-package name (gap
+        // 31 L3, gap 35's `crate::Phone`), which only the safe answer
+        // overrides.
+        let safe = self.safe_here();
+        let program_fqn = (safe && !shadows_an_import && n.class_name.segments.len() == 1)
+            .then(|| self.external_class_real_path(&n.class_name))
+            .filter(Option::is_none)
+            .and_then(|_| self.resolve_bare_type_fqn(&n.class_name.segments[0].text))
+            .filter(|fqn| {
+                self.symbols.classes.get(fqn).is_some_and(|c| !c.is_external)
+                    || self.symbols.records.contains_key(fqn)
+                    || self.symbols.enums.contains_key(fqn)
+            });
+        let (path, prepend_crate) = match program_fqn {
+            Some(fqn) => (juxc_lex::to_rust_path(&fqn), true),
+            None => (path, prepend_crate && (safe || !self.broken_here(crate::BreakKind::Path))),
+        };
         // A foreign ctor lowered from `new() -> Result<Self, E>`
         // (§G.5.4): wrap the whole call so the `Result` is unwrapped at
         // the use site, re-throwing on `Err` via `panic_any` for an

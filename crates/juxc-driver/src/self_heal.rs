@@ -37,9 +37,11 @@
 //!
 //! **`JUX_FORCE_SAFE=1`** lowers everything at the safe level from the start,
 //! which is how the corpus proves the safe level is itself correct
-//! (`bin/jux/tests/safe_mode.rs`). **`JUX_TEST_BREAK_FAST=<key>`** is a
-//! test-only hook: the named function's fast lowering opens with a borrow
-//! conflict, so the tests can watch a heal happen.
+//! (`bin/jux/tests/safe_mode.rs`). **`JUX_TEST_BREAK_FAST=[<kind>:]<key>`**
+//! is a test-only hook that puts a historical backend bug back into the named
+//! function (`juxc_backend_rust::BreakKind`: a borrow conflict by default, or
+//! one of the judgements gaps 30-40b fixed), so the tests can watch a heal
+//! happen and prove the safe level rescues each family of rustc error.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

@@ -115,6 +115,19 @@ pub struct SymbolTable {
     /// backend lowers each one at the call site to the type dispatch a
     /// `catch (E e)` clause uses; a generic library function could not.
     pub typed_assert_throws: HashMap<juxc_source::Span, String>,
+    /// `Result.from(f)` calls (EXCEPTIONS §X.5.4) found by the checker -- call
+    /// span -> the FQN of the exception class the `Err` holds. The backend
+    /// runs `f` under the dispatch a `catch (E e)` clause uses.
+    pub result_from_calls: HashMap<juxc_source::Span, String>,
+    /// Generic free-function calls found by the checker -- call span -> the
+    /// type arguments it binds, and whether the call wrote them (`f<int>()`)
+    /// rather than leaving them to inference. The safe lowering level writes
+    /// them as the call's turbofish (sweep C).
+    pub call_type_args: HashMap<juxc_source::Span, (Vec<crate::ty::Ty>, bool)>,
+    /// `task.await()` calls the checker accepted (ASYNC §18.1.4), by call
+    /// span: the driver rewrites each as `await task`
+    /// (`expand::apply_task_awaits`).
+    pub task_await_calls: std::collections::HashSet<juxc_source::Span>,
     /// Record patterns in `switch` arms (grammar §A.3) -- the pattern's span
     /// -> the FQN of the record it names. A `Name(...)` pattern is a record or
     /// an enum variant depending on what `Name` resolves to, and the checker

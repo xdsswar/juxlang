@@ -75,7 +75,9 @@ impl RustEmitter {
         let is_str_literal = |e: &juxc_ast::Expr| {
             matches!(e, juxc_ast::Expr::Literal(juxc_ast::Literal::String(_)))
         };
-        let own_string_arms = matches!(
+        // Test hook `arms`: each arm as it lowers, the shape gap 35 fixed.
+        let own_string_arms = !self.broken_by(crate::BreakKind::Arms, s.span)
+            && matches!(
             self.expr_types.get(&s.span),
             Some(juxc_tycheck::Ty::String)
         ) && s.arms.iter().any(|arm| match &arm.body {

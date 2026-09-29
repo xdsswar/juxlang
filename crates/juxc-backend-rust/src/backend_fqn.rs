@@ -643,14 +643,22 @@ impl crate::RustEmitter {
     /// signature so existing call sites still compile; new code
     /// can pass `false` and get the right behavior.
     pub(crate) fn emit_fqn_path_in_rust(&mut self, fqn: &str, _force_root: bool) {
+        // Safe level (gap 34, sweep C): every program type is named from the
+        // crate root, whatever module the code sits in. The test hook `path`
+        // puts back the relative path gap 31 (L3) and gap 35 (`crate::Phone`)
+        // fixed, which only the safe level's answer overrides.
+        let safe = self.safe_here();
+        let rooted = safe || !self.broken_here(crate::BreakKind::Path);
         if let Some(pkg) = fqn_package(fqn) {
-            self.w.push_str("crate::");
+            if rooted {
+                self.w.push_str("crate::");
+            }
             for seg in pkg.split('.') {
                 // A package segment may be a Rust keyword (`demo.box`).
                 self.w.push_str(&juxc_lex::to_rust_ident(seg));
                 self.w.push_str("::");
             }
-        } else if self.split_files.is_some() {
+        } else if self.split_files.is_some() || safe {
             // Multi-file output: a no-package user type lives at the crate root
             // (in `main.rs`). A packaged unit now lives in its own deeper module
             // file, where a bare `Foo` would resolve relative to that module —

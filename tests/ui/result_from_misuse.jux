@@ -1,0 +1,13 @@
+// `Result.from(() -> ...)` (EXCEPTIONS §X.5.4) runs a function that takes
+// nothing and packages its value as `Ok` or the exception it throws as `Err`.
+// So the error type must be an exception, the function must take no
+// arguments and produce a value, and there is one function to run.
+public void main() {
+    Result<int, String> text = Result.from(() -> 1);
+    var takesOne = Result.from(x -> x);
+    var nothing = Result.from(() -> { print("side effect"); });
+    var none = Result.from();
+    var two = Result.from<Exception, int>(() -> 1);
+    var fine = Result.from(() -> 2);
+    print(fine.isOk());
+}

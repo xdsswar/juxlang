@@ -1,0 +1,97 @@
+// `Result.from(() -> ...)` runs a function and packages what happens as a
+// `Result` (EXCEPTIONS §X.5.4): the value it returns is `Ok(value)`, and an
+// exception it throws is `Err(e)`. It is how code written in the `throws`
+// style is called from code that wants a `Result`.
+//
+// The `Err`'s type comes from where the call is written: the `Result<T, E>` a
+// function returns or a local is declared with, or `Result.from<E>(...)`, or
+// `Exception` when nothing names it (a `var`). Only an `E` is caught; any
+// other exception goes on up, as it would past a `catch (E e)`.
+
+class ConfigError extends Exception {
+    public ConfigError(String message) { super(message); }
+}
+
+class MissingKey extends ConfigError {
+    public MissingKey(String key) { super($"missing key: ${key}"); }
+}
+
+record Config(String name, int port) {}
+
+Config readConfig(String text) throws ConfigError {
+    if (text.isEmpty()) {
+        throw new MissingKey("name");
+    }
+    if (!text.contains(":")) {
+        throw new ConfigError($"no port in `${text}`");
+    }
+    var parts = text.split(":");
+    return new Config(parts[0], parts[1].parse<int>());
+}
+
+// §X.5.4's own example: the `throws` function called from `Result` code.
+Result<Config, ConfigError> readConfigSafe(String text) {
+    return Result.from(() -> readConfig(text));
+}
+
+int divide(int a, int b) {
+    return a / b;
+}
+
+String describe(Result<Config, ConfigError> r) {
+    return switch (r) {
+        case Result.Ok(var c) -> $"ok ${c.name} on ${c.port}";
+        case Result.Err(var e) -> $"config error: ${e.getMessage()}";
+    };
+}
+
+void main() {
+    // A value: Ok.
+    print(describe(readConfigSafe("web:8080")));
+    // A checked exception, and a subclass of the one caught.
+    print(describe(readConfigSafe("web")));
+    print(describe(readConfigSafe("")));
+
+    // A runtime exception, into an `Err` typed by the local's declaration.
+    Result<int, ArithmeticException> quotient = Result.from(() -> divide(7, 0));
+    print(quotient.isErr());
+    print(Result.from<ArithmeticException>(() -> divide(8, 2)).unwrap());
+
+    // A library's error surfaces as the Jux exception it maps to (E134):
+    // a failed parse is a NumberFormatException.
+    Result<int, NumberFormatException> parsed = Result.from(() -> "12x".parse<int>());
+    switch (parsed) {
+        case Result.Ok(var n) -> print($"parsed ${n}");
+        case Result.Err(var e) -> print($"not a number: ${e.getMessage()}");
+    }
+    // ...and an IllegalArgumentException catches it too.
+    Result<int, IllegalArgumentException> wide = Result.from(() -> "".parse<int>());
+    print(wide.isErr());
+
+    // With `var` there is no written type, so the `Err` holds an Exception.
+    var anything = Result.from(() -> divide(1, 0));
+    switch (anything) {
+        case Result.Ok(var n) -> print(n);
+        case Result.Err(var e) -> print($"caught: ${e.getMessage()}");
+    }
+    var fine = Result.from(() -> divide(9, 3) + 1);
+    print(fine.unwrapOr(-1) * 10);
+
+    // A block lambda, and a nested Result: the inner call's failure is a
+    // value, so the outer one is Ok.
+    var nested = Result.from(() -> {
+        var inner = Result.from(() -> divide(2, 0));
+        return inner.isErr();
+    });
+    print(nested);
+    var doubled = Result.from(() -> Result.from(() -> divide(4, 2)));
+    print(doubled.unwrap().unwrap());
+
+    // An exception that is not the `E` asked for is not caught.
+    try {
+        Result<int, ConfigError> wrong = Result.from(() -> divide(1, 0));
+        print(wrong);
+    } catch (ArithmeticException e) {
+        print($"propagated: ${e.getMessage()}");
+    }
+}

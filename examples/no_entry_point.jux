@@ -1,7 +1,9 @@
 // A file with declarations and nothing to run. As a program it has no entry
 // point: no `main`, no `@entry` function and no top-level statements, so it
 // is E0327 (Entry Points E.1). The same file is a fine member of a library,
-// which is why the build, not the checker, reports it (gap 35).
+// so E0327 is a fact of the build target, not of the file: `jux check`, the
+// editor and the build all report it for a binary, and never for a library
+// member (gap 35, sweep C).
 
 class Unused {
     public int n = 0;

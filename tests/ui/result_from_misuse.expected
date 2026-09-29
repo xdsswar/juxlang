@@ -1,0 +1,5 @@
+result_from_misuse.jux:6:32: [E0446] error: `Result.from` packages a thrown exception as the `Err`, so the error type must be `Exception` or a subclass of it, and `String` is not (§X.5.4)
+result_from_misuse.jux:7:32: [E0411] error: the function `Result.from` runs is called with no arguments, so it cannot take parameters (§X.5.4)
+result_from_misuse.jux:8:31: [E0410] error: the function `Result.from` runs must produce a value for `Ok`, and this one returns nothing (§X.5.4)
+result_from_misuse.jux:9:16: [E0411] error: `Result.from` takes one argument, the function to run, but 0 were supplied (§X.5.4)
+result_from_misuse.jux:10:15: [E0443] error: `Result.from` takes one type argument, the exception its `Err` holds, but 2 were supplied (§X.5.4)

@@ -18,6 +18,14 @@
 //!   prints the right output, that the cache sends the next build straight to
 //!   the safe level, and that under `JUX_SELFCHECK=1` the same heal fails
 //!   loudly, naming the function and rustc's original error.
+//! - the regression harness (sweep C) takes the backend bugs gaps 30-40b
+//!   fixed, re-introduces each in one function of one project
+//!   (`JUX_TEST_BREAK_FAST=<kind>:<function>`, a break kind per bug), and
+//!   checks that rustc refuses the fast lowering with that bug's error family
+//!   and that the safe level rescues it: the build succeeds, only that
+//!   function is compiled in compatibility mode, and the program prints what
+//!   it prints unbroken. Every kind but `borrow` corrupts the judgement at
+//!   both levels, so only a safe switch that replaces the judgement heals it.
 
 mod common;
 
@@ -135,6 +143,26 @@ const SLICE: &[&str] = &[
     "try_finally_semantics",
     "result_propagation",
     "crm_demo",
+    // Sweep C: the programs behind the historical bugs the regression harness
+    // below re-introduces, and the forms added with it.
+    "result_from",
+    "task_await_method",
+    "no_entry_point",
+    "release_blockers",
+    "intersection_bounds",
+    "dependent_bounds",
+    "generic_supertypes",
+    "bounded_params_in_hierarchy",
+    "polymorphic_recursion_ordered_keys",
+    "polymorphic_recursion_fbounded",
+    "collection_alias_channels",
+    "var_lambda_types",
+    "private_overloads_dispatch",
+    "overload_by_type",
+    "out_params",
+    "numeric_mixed_ops",
+    "generic_declarations_print",
+    "foreign_errors_as_jux_exceptions",
 ];
 
 /// Examples `run.rs` does not pin (its `EXCLUDED`), left out of the whole
@@ -374,4 +402,256 @@ fn a_sound_program_stays_fast() {
     assert!(!err.contains("compatibility mode"), "{err}");
     assert!(!dir.join("out").join(".jux-safe-fns").exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// The regression harness (sweep C)
+// ---------------------------------------------------------------------------
+
+/// One historical backend bug, re-introduced in one function by a break kind
+/// (`juxc_backend_rust::BreakKind`).
+struct Regression {
+    /// `JUX_TEST_BREAK_FAST`'s kind.
+    kind: &'static str,
+    /// The function it breaks, as the retry loop names it.
+    key: &'static str,
+    /// The rustc error family the bug produced.
+    rustc: &'static str,
+    /// Where the bug was fixed.
+    history: &'static str,
+}
+
+/// Every bug the harness puts back, one per break kind. Each program shape is
+/// the reproducer the fix recorded (GAPS.md, ERRATA), reduced to one function
+/// of [`REGRESSION_MAIN`].
+const REGRESSIONS: &[Regression] = &[
+    Regression { kind: "borrow", key: "aliasPush", rustc: "E0502", history: "gap 30 (L12, L14): a borrow alive across an argument" },
+    Regression { kind: "move", key: "aliasPush", rustc: "E0382", history: "gap 40 (E144): `w = v` moved the handle `v.len()` read" },
+    Regression { kind: "clone", key: "Cell.get", rustc: "E0599", history: "gap 2 (E118, E120): a member copying `T` without `Clone`" },
+    Regression { kind: "keybound", key: "put", rustc: "E0277", history: "gap 40b (E145): a generic key with no `Ord`" },
+    Regression { kind: "arms", key: "label", rustc: "E0308", history: "gap 35 (E131): `\"ab \" + e` against `\"c\"`" },
+    Regression { kind: "numeric", key: "total", rustc: "E0277", history: "gap 39 (E135): `isize + f64` through an intersection bound" },
+    Regression { kind: "path", key: "Basket.corner", rustc: "E0433", history: "gap 31 L3, gap 35 (E131): a type named without `crate::`" },
+    Regression { kind: "infer", key: "emptyCount", rustc: "E0283", history: "gap 36 L30, gap 40b: a type argument nothing infers" },
+    Regression { kind: "overload", key: "sumTwo", rustc: "E0061", history: "gap 39f (E140): a stale overload pick" },
+    Regression { kind: "mutability", key: "outLen", rustc: "E0596", history: "gap 30 L8/L9 (E127): a `&mut` lend of a non-`mut` binding" },
+];
+
+/// The project the harness breaks: one function per historical bug.
+const REGRESSION_MAIN: &str = r#"import shop.Basket;
+import rust.std.*;
+
+// move (gap 40): a handle assigned to another local, then read again.
+int aliasPush() {
+    var v = new Vec<int>();
+    v.push(1);
+    var w = new Vec<int>();
+    w = v;
+    w.push(7);
+    return (int) v.len();
+}
+
+// clone (gap 2, E118/E120): a member of a relaxed generic class that copies
+// its `T`.
+class Cell<T> {
+    T value;
+    Cell(T v) { value = v; }
+    T get() { return value; }
+}
+
+// keybound (gap 40b): a generic function's own parameter as an ordered key.
+<T> int put(BTreeMap<T, int> m, T k) {
+    m.insert(k, 1);
+    return (int) m.len();
+}
+
+// arms (gap 35): a `String` switch with a computed arm and a literal arm.
+void label(int e) {
+    print(switch (e) {
+        case 1 -> "ab " + e;
+        default -> "c";
+    });
+}
+
+// numeric (gap 39): members reached through an intersection bound.
+interface Aged { int age(); }
+interface Scored { double score(); }
+class Pupil implements Aged, Scored {
+    public int age() { return 12; }
+    public double score() { return 0.5; }
+}
+<T extends Aged & Scored> double total(T t) {
+    return t.age() + t.score();
+}
+
+// infer (gap 36 L30, 40b): a type argument nothing in the call can infer.
+<T> Vec<T> empty() {
+    return new Vec<T>();
+}
+int emptyCount() {
+    var e = empty<int>();
+    return (int) e.len();
+}
+
+// overload (gap 39f): an overloaded method called with two arguments.
+class Adder {
+    int add(int a) { return a; }
+    int add(int a, int b) { return a + b; }
+}
+int sumTwo() {
+    var a = new Adder();
+    return a.add(2, 3);
+}
+
+// mutability (gap 30 L8/L9): a local lent mutably, through `out`.
+bool measure(String s, out int result) {
+    result = s.length();
+    return true;
+}
+int outLen() {
+    int n = 0;
+    measure("abcd", out n);
+    return n;
+}
+
+void main() {
+    print(aliasPush());
+    print(Basket.corner());
+    var c = new Cell<String>("kept");
+    print(c.get());
+    var m = new BTreeMap<String, int>();
+    print(put(m, "a"));
+    label(1);
+    label(2);
+    print(total(new Pupil()));
+    print(emptyCount());
+    print(sumTwo());
+    print(outLen());
+}
+"#;
+
+/// A packaged class naming a type of another package (the `path` case).
+const REGRESSION_BASKET: &str = "package shop;
+
+import geo.Point;
+
+public class Basket {
+    public static int corner() {
+        var p = new Point(3, 4);
+        return p.x + p.y;
+    }
+}
+";
+
+const REGRESSION_POINT: &str = "package geo;
+
+public record Point(int x, int y) {}
+";
+
+/// What the project prints, broken or not.
+const REGRESSION_OUTPUT: &str = "2\n7\nkept\n1\nab 1\nc\n12.5\n0\n5\n4\n";
+
+fn regression_project() -> PathBuf {
+    let dir = common::workspace_root().join("target").join("it-heal-regressions");
+    let _ = std::fs::remove_dir_all(&dir);
+    for (rel, text) in [
+        ("jux.toml", "[package]\nname = \"probe.regressions\"\nversion = \"0.1.0\"\nedition = \"2026\"\n"),
+        ("src/main.jux", REGRESSION_MAIN),
+        ("src/shop/Basket.jux", REGRESSION_BASKET),
+        ("src/geo/Point.jux", REGRESSION_POINT),
+    ] {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    dir
+}
+
+fn jux_run_project(dir: &Path, envs: &[(&str, &str)]) -> Output {
+    // A heal is cached in the build directory; every run here starts cold.
+    let _ = std::fs::remove_file(dir.join("target").join(".rust-build").join("bin-regressions").join(".jux-safe-fns"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_jux"));
+    cmd.arg("run").arg("--verbose").current_dir(dir);
+    cmd.env_remove("JUX_SELFCHECK").env_remove("JUX_FORCE_SAFE").env_remove("JUX_TEST_BREAK_FAST");
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    cmd.output().expect("spawning jux")
+}
+
+/// Every historical bug, put back into its function, is caught by the net:
+/// rustc refuses the fast lowering with the bug's own error family, the retry
+/// loop traces it to that one function, and the safe level compiles it to a
+/// program that prints what the unbroken one prints. Under `JUX_SELFCHECK=1`
+/// the same heal is the `E0900` naming the function and the rustc code, which
+/// the driver reports only after the safe lowering built.
+#[test]
+fn the_safe_level_rescues_every_historical_backend_bug() {
+    let dir = regression_project();
+
+    // Unbroken, the program builds fast.
+    let sound = jux_run_project(&dir, &[("JUX_SELFCHECK", "1")]);
+    let (out, err) = text(&sound);
+    assert!(sound.status.success(), "the unbroken program must build fast:\n{out}{err}");
+    assert_eq!(out, REGRESSION_OUTPUT, "{err}");
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut table = String::from("| kind | function | rustc | fixed in | rescued |\n|---|---|---|---|---|\n");
+    for r in REGRESSIONS {
+        let spec = format!("{}:{}", r.kind, r.key);
+        let mut rescued = true;
+
+        // The fast lowering with the bug is refused, with the bug's family,
+        // and traced to the function.
+        let checked = jux_run_project(&dir, &[("JUX_TEST_BREAK_FAST", &spec), ("JUX_SELFCHECK", "1")]);
+        let (out, err) = text(&checked);
+        let named = format!("`{}` compiled only in compatibility mode", r.key);
+        let code = format!("rustc reported error[{}]", r.rustc);
+        if checked.status.code() != Some(101) || !err.contains(&named) || !err.contains(&code) {
+            rescued = false;
+            failures.push(format!("{spec}: under the self-check expected `{named}` and `{code}`:\n{out}{err}"));
+        }
+
+        // Without the self-check the build heals, lowering that function
+        // alone at the safe level, and the program is right.
+        let healed = jux_run_project(&dir, &[("JUX_TEST_BREAK_FAST", &spec)]);
+        let (out, err) = text(&healed);
+        let retry = format!("retrying `{}` in compatibility mode", r.key);
+        if !healed.status.success()
+            || out != REGRESSION_OUTPUT
+            || !err.contains(&retry)
+            || !err.contains("note: 1 function compiled in compatibility mode")
+        {
+            rescued = false;
+            failures.push(format!("{spec}: the heal did not rescue it:\n{out}{err}"));
+        }
+        table.push_str(&format!(
+            "| {} | `{}` | {} | {} | {} |\n",
+            r.kind,
+            r.key,
+            r.rustc,
+            r.history,
+            if rescued { "yes" } else { "NO" }
+        ));
+    }
+    eprintln!("{table}");
+    let families: std::collections::BTreeSet<&str> = REGRESSIONS.iter().map(|r| r.rustc).collect();
+    assert!(families.len() >= 8, "the harness must cover at least 8 rustc error families, has {families:?}");
+    assert!(failures.is_empty(), "{} regression(s) not rescued:\n\n{}", failures.len(), failures.join("\n\n"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The hook's spelling: `<kind>:<key>`, or a bare key for the borrow break a
+/// hook without a kind always meant.
+#[test]
+fn a_break_names_its_kind_or_defaults_to_borrow() {
+    use juxc_driver::BreakKind;
+    assert_eq!(BreakKind::parse("Counter.bump"), (BreakKind::Borrow, "Counter.bump"));
+    assert_eq!(BreakKind::parse("clone:Cell.get"), (BreakKind::Clone, "Cell.get"));
+    assert_eq!(BreakKind::parse("nosuch:f"), (BreakKind::Borrow, "nosuch:f"));
+    for k in BreakKind::ALL {
+        assert_eq!(BreakKind::parse(&format!("{}:x", k.name())), (k, "x"));
+    }
+    assert!(REGRESSIONS.iter().all(|r| BreakKind::ALL.iter().any(|k| k.name() == r.kind)));
+    assert_eq!(REGRESSIONS.len(), BreakKind::ALL.len(), "one historical bug per break kind");
 }

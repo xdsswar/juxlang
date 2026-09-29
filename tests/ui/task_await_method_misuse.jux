@@ -1,0 +1,26 @@
+// `task.await()` is `await task` (ASYNC §18.1.4), so it suspends: outside an
+// async function it is E0700, as the keyword is. It takes no arguments, and
+// like `await` it takes the task, so a second read is E0707.
+async int compute() {
+    return 1;
+}
+
+int fromSync() {
+    var t = spawn(compute());
+    return t.await();
+}
+
+async int twice() {
+    var t = spawn(compute());
+    var a = t.await(1);
+    var b = t.await();
+    return b + t.await();
+}
+
+public void main() {
+    print(fromSync());
+}
+
+void typo(Task<int> t) {
+    t.cancle();
+}

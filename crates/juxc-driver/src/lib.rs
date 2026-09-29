@@ -264,6 +264,9 @@ pub mod workspace;
 
 pub use build_failure::BuildFailure;
 pub use cfg::CfgFacts;
+/// The test hook's break kinds (`JUX_TEST_BREAK_FAST=<kind>:<function>`,
+/// GAPS.md gap 34, sweep C), for the tests that drive it.
+pub use juxc_backend_rust::BreakKind;
 pub use juxc_tycheck::Profile;
 pub use manifest::{Manifest, ManifestError};
 pub use project::{ensure_project_stubs, StubSyncReport};
@@ -480,6 +483,9 @@ where
     stubs::mark_external_units(&mut units, &sources);
     // An import alias is written back as the type it names (gap 37).
     juxc_tycheck::aliases::expand_import_aliases(&mut units);
+    // `Result.from(...)` takes the error type its written target spells
+    // (EXCEPTIONS §X.5.4).
+    juxc_tycheck::result_from::fill_error_types(&mut units);
     diagnostics.extend(juxc_tycheck::type_aliases::expand_type_aliases(&mut units));
 
     // Enforce the source-layout rule (§B.1): a file's `package` must match its
@@ -530,6 +536,8 @@ where
     // positional calls (per the checker's recorded plans) so the
     // backend and its analyses never see the sugar.
     juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
+    // `task.await()` is `await task` from here on (ASYNC §18.1.4).
+    juxc_tycheck::expand::apply_task_awaits(&mut units, &typed.symbols.task_await_calls);
     juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
     // A supertype written by its qualified name reaches the backend as one
     // name it can look up (gap 37).
@@ -544,6 +552,8 @@ where
     // W0820 and the lint levels, which have to be settled before anything
     // asks whether there were errors (DIAGNOSTICS §D.5.4).
     finish_lints(&mut diagnostics, &sources, &units, user_start, cfg);
+    // A binary with nothing to run (E0327), said before anything is built.
+    diagnostics.extend(build_failure::missing_entry_point(&units, &sources, user_start, &diagnostics, cfg));
 
     let has_errors = diagnostics
         .iter()
@@ -616,6 +626,9 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     stubs::mark_external_units(&mut units, &sources);
     // An import alias is written back as the type it names (gap 37).
     juxc_tycheck::aliases::expand_import_aliases(&mut units);
+    // `Result.from(...)` takes the error type its written target spells
+    // (EXCEPTIONS §X.5.4).
+    juxc_tycheck::result_from::fill_error_types(&mut units);
     diagnostics.extend(juxc_tycheck::type_aliases::expand_type_aliases(&mut units));
     // Source-layout rule (§B.1), same as the main compile path.
     diagnostics.extend(package_check::check_package_paths(&units, &sources, cfg.bin_entries()));
@@ -653,6 +666,8 @@ pub fn compile_workspace_test_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts)
     // positional calls (per the checker's recorded plans) so the
     // backend and its analyses never see the sugar.
     juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
+    // `task.await()` is `await task` from here on (ASYNC §18.1.4).
+    juxc_tycheck::expand::apply_task_awaits(&mut units, &typed.symbols.task_await_calls);
     juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
     // A supertype written by its qualified name reaches the backend as one
     // name it can look up (gap 37).
@@ -791,6 +806,9 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     stubs::mark_external_units(&mut units, &sources);
     // An import alias is written back as the type it names (gap 37).
     juxc_tycheck::aliases::expand_import_aliases(&mut units);
+    // `Result.from(...)` takes the error type its written target spells
+    // (EXCEPTIONS §X.5.4).
+    juxc_tycheck::result_from::fill_error_types(&mut units);
     diagnostics.extend(juxc_tycheck::type_aliases::expand_type_aliases(&mut units));
 
     // Source-layout rule (§B.1): surface a package/path mismatch as a precise
@@ -823,6 +841,8 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     // positional calls (per the checker's recorded plans) so the
     // backend and its analyses never see the sugar.
     juxc_tycheck::expand::apply_call_expansions(&mut units, &typed.call_expansions);
+    // `task.await()` is `await task` from here on (ASYNC §18.1.4).
+    juxc_tycheck::expand::apply_task_awaits(&mut units, &typed.symbols.task_await_calls);
     juxc_tycheck::expand::apply_component_names(&mut units, &typed.component_names);
 
     // Trusted foreign-API stubs are never validated (see
@@ -835,6 +855,9 @@ pub fn check_workspace_cfg(sources: Vec<SourceFile>, cfg: &cfg::CfgFacts) -> Che
     // as the error the build will report.
     let checking = cfg.clone().with_checking(true);
     finish_lints(&mut diagnostics, &sources, &units, user_start, &checking);
+    // A binary with nothing to run is E0327 here too, the rule the build
+    // applies (a library member stays valid: the facts say which it is).
+    diagnostics.extend(build_failure::missing_entry_point(&units, &sources, user_start, &diagnostics, cfg));
 
     CheckResult {
         diagnostics,

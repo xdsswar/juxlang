@@ -1,0 +1,50 @@
+// `task.await()` is `await task` (ASYNC §18.1.4: `public async T await();`,
+// "suspends; same as `await task` syntax"). It reads the task's value inside
+// an async function, method or lambda, and like `await` it is E0700 anywhere
+// else. A task yields its value once, whichever form takes it.
+
+async int slowDouble(int n) {
+    await Task.delay(5);
+    return n * 2;
+}
+
+async int fails() {
+    throw new IllegalStateException("no value");
+}
+
+async String greet(String who) {
+    return $"hello, ${who}";
+}
+
+class Pipeline {
+    async int run(int seed) {
+        var first = spawn(slowDouble(seed));
+        var a = first.await();
+        var second = spawn(slowDouble(a));
+        return second.await() + 1;
+    }
+}
+
+async void main() {
+    var t = spawn(slowDouble(21));
+    print(t.await());
+
+    // The method form and the keyword form read the same value.
+    var u = spawn(greet("method"));
+    var v = spawn(greet("keyword"));
+    print(u.await());
+    print(await v);
+
+    // Inside an expression, and through a class's async method.
+    var total = spawn(slowDouble(1)).await() + spawn(slowDouble(2)).await();
+    print(total);
+    print(await new Pipeline().run(5));
+
+    // A task that failed rethrows from `await()` as it does from `await`.
+    var failing = spawn(fails());
+    try {
+        print(failing.await());
+    } catch (IllegalStateException e) {
+        print($"caught: ${e.getMessage()}");
+    }
+}

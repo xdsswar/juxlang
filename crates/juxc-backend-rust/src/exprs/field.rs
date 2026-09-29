@@ -125,7 +125,7 @@ impl RustEmitter {
         // here (only when this field IS the call callee) so a nested
         // receiver's own field emissions can't consume it.
         let method_suffix: Option<String> = if is_call_callee {
-            self.pending_method_suffix.take()
+            self.take_method_suffix()
         } else {
             None
         };

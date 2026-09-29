@@ -66,6 +66,7 @@ pub mod java_habits;
 pub(crate) mod pattern_check;
 pub mod assigned;
 pub mod return_check;
+pub mod result_from;
 pub mod static_init;
 pub mod symbol_table;
 pub(crate) mod task_consume;
@@ -332,6 +333,9 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     let mut all_method_selections = std::collections::HashMap::new();
     let mut all_function_selections = std::collections::HashMap::new();
     let mut all_typed_assert_throws = std::collections::HashMap::new();
+    let mut all_result_from_calls = std::collections::HashMap::new();
+    let mut all_call_type_args = std::collections::HashMap::new();
+    let mut all_task_awaits = std::collections::HashSet::new();
     let mut all_record_patterns = std::collections::HashMap::new();
     let mut all_component_names = std::collections::HashMap::new();
     let mut all_free_operator_calls = std::collections::HashMap::new();
@@ -356,6 +360,9 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
         }
         all_inst_facts.append(&mut checker.inst_facts);
         all_bare_field_refs.extend(std::mem::take(&mut checker.bare_field_refs));
+        all_result_from_calls.extend(std::mem::take(&mut checker.result_from_calls));
+        all_call_type_args.extend(std::mem::take(&mut checker.call_type_args));
+        all_task_awaits.extend(std::mem::take(&mut checker.task_await_calls));
         let (
             expr_types,
             call_expansions,
@@ -390,6 +397,9 @@ pub fn typecheck_workspace(units: &[CompilationUnit]) -> TypeCheckResult {
     symbols.method_selections = all_method_selections;
     symbols.function_selections = all_function_selections;
     symbols.typed_assert_throws = all_typed_assert_throws;
+    symbols.result_from_calls = all_result_from_calls;
+    symbols.call_type_args = all_call_type_args;
+    symbols.task_await_calls = all_task_awaits;
     symbols.record_patterns = all_record_patterns;
     symbols.free_operator_calls = all_free_operator_calls;
     symbols.operator_selections = all_operator_selections;

@@ -122,3 +122,49 @@ fn a_fully_qualified_package_private_type_is_e0416() {
     );
     assert!(!text.contains("made"), "{text}");
 }
+
+/// `jux check` reports `E0327` whenever the build would (sweep C): an empty
+/// loose file, and a package's `[[bin]]` entry with no `main`. It used to say
+/// `check ok` to both and leave the error to `jux build`.
+#[test]
+fn jux_check_reports_a_binary_with_no_entry_point() {
+    let dir = TempDir::new("check-e0327");
+    let root = dir.path();
+    write(root, "empty.jux", "");
+    let (text, code) = jux(root, &["check", "empty.jux"]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("empty.jux:1:1: [E0327] error: this program has no entry point"), "{text}");
+    assert!(!text.contains("check ok"), "{text}");
+
+    // Top-level statements are an entry point.
+    write(root, "script.jux", "print(\"hi\");\n");
+    let (text, code) = jux(root, &["check", "script.jux"]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("check ok"), "{text}");
+
+    // A project whose binary's entry declares nothing to run.
+    let project = root.join("app");
+    write(&project, "jux.toml", &manifest("probe.noentry"));
+    write(&project, "src/main.jux", "class Unused {\n    public int n = 0;\n}\n");
+    let (text, code) = jux(&project, &["check"]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(text.contains("[E0327] error: this program has no entry point"), "{text}");
+    assert!(text.contains("main.jux:1:1"), "reported on the entry file: {text}");
+}
+
+/// A library member needs no entry point: `jux check` of a lib-only package
+/// whose files declare no `main` stays clean.
+#[test]
+fn jux_check_of_a_library_member_stays_clean() {
+    let dir = TempDir::new("check-lib");
+    let root = dir.path();
+    write(
+        root,
+        "jux.toml",
+        "[package]\nname = \"probe.shapes\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[lib]\nname = \"shapes\"\n",
+    );
+    write(root, "src/shapes/Shape.jux", "package shapes;\n\npublic class Shape {\n    public int sides = 3;\n}\n");
+    let (text, code) = jux(root, &["check"]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(!text.contains("E0327"), "{text}");
+}

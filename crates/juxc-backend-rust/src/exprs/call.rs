@@ -860,6 +860,85 @@ impl RustEmitter {
         self.w.push('}');
     }
 
+    /// Lower `Result.from(f)` (EXCEPTIONS §X.5.4), the compiler intrinsic.
+    ///
+    /// ```text
+    /// match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (f)())) {
+    ///     Ok(__jux_v) => Result::Ok(__jux_v),
+    ///     Err(__jux_p) => Result::Err('__jux_thrown: {
+    ///         let __jux_p = crate::__jux_foreign_as::<E>(__jux_p);
+    ///         let __jux_p = match __jux_p.downcast::<E>() { Ok(__jux_e) => break '__jux_thrown *__jux_e, Err(__jux_p) => __jux_p };
+    ///         let __jux_p = match __jux_p.downcast::<Sub>() { Ok(__jux_e) => break '__jux_thrown (*__jux_e).__parent, Err(__jux_p) => __jux_p };
+    ///         std::panic::resume_unwind(__jux_p)
+    ///     }),
+    /// }
+    /// ```
+    ///
+    /// The `Err` side is exactly a `catch (E e)` clause's dispatch, the one
+    /// `assertThrows<E>` uses: every known subclass of `E` by name, sliced
+    /// down to its `E` part, and a library's error first turned into the Jux
+    /// exception it surfaces as (Bindgen G.5.4). Anything that is not an `E`
+    /// propagates untouched. The `Ok` side's type is what `f` returns, so the
+    /// expression needs no type written out.
+    fn emit_result_from(&mut self, call: &CallExpr, exception_fqn: &str) {
+        const RESULT: &str = "jux.std.result.Result";
+        self.w.push_str("match std::panic::catch_unwind(std::panic::AssertUnwindSafe(");
+        match call.args.first() {
+            Some(lambda @ Expr::Lambda(_)) => {
+                // A lambda written in place IS the closure `catch_unwind`
+                // runs, emitted bare.
+                self.lambda_bare_target = true;
+                self.emit_expr(lambda);
+                self.lambda_bare_target = false;
+            }
+            Some(other) => {
+                self.w.push_str("|| (");
+                self.emit_expr(other);
+                self.w.push_str(")()");
+            }
+            None => self.w.push_str("|| ()"),
+        }
+        self.w.push_str(")) {\n");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("Ok(__jux_v) => ");
+        self.emit_fqn_path_in_rust(RESULT, true);
+        self.w.push_str("::Ok(__jux_v),\n");
+        self.w.emit_indent();
+        self.w.push_str("Err(__jux_p) => ");
+        self.emit_fqn_path_in_rust(RESULT, true);
+        self.w.push_str("::Err('__jux_thrown: {\n");
+        self.w.indent_inc();
+        self.w.emit_indent();
+        self.w.push_str("let __jux_p = crate::__jux_foreign_as::<");
+        self.emit_fqn_path_in_rust(exception_fqn, exception_fqn.contains('.'));
+        self.w.push_str(">(__jux_p);\n");
+        let mut candidates = vec![exception_fqn.to_string()];
+        candidates.extend(self.subclass_fqns_of(exception_fqn));
+        for class in candidates {
+            let depth = self.extends_chain_distance(&class, exception_fqn).unwrap_or(0);
+            self.w.emit_indent();
+            self.w.push_str("let __jux_p = match __jux_p.downcast::<");
+            self.emit_fqn_path_in_rust(&class, class.contains('.'));
+            self.w.push_str(">() { Ok(__jux_e) => break '__jux_thrown ");
+            if depth == 0 {
+                self.w.push_str("*__jux_e");
+            } else {
+                self.w.push_str("(*__jux_e)");
+                for _ in 0..depth {
+                    self.w.push_str(".__parent");
+                }
+            }
+            self.w.push_str(", Err(__jux_p) => __jux_p };\n");
+        }
+        self.w.line("std::panic::resume_unwind(__jux_p)");
+        self.w.indent_dec();
+        self.w.line("}),");
+        self.w.indent_dec();
+        self.w.emit_indent();
+        self.w.push('}');
+    }
+
     /// A fully-qualified static call, `rust.std.File.open(p)`, re-shaped so its
     /// receiver is the class PATH it names rather than a field chain, or `None`
     /// when the callee is not such a chain.
@@ -886,6 +965,15 @@ impl RustEmitter {
     }
 
     pub(crate) fn emit_call(&mut self, call: &CallExpr) {
+        // The calls being emitted, innermost last: the safe level reads a
+        // method name's overload pick for the call on top
+        // (`take_method_suffix`).
+        self.method_call_stack.push(call.span);
+        self.emit_call_inner(call);
+        self.method_call_stack.pop();
+    }
+
+    fn emit_call_inner(&mut self, call: &CallExpr) {
         // §O.2.7: `x.operator hash()` / `x.operator string()`.
         if juxc_tycheck::infer::named_operator_call_type(call).is_some() {
             self.emit_named_operator_call(call);
@@ -952,6 +1040,11 @@ impl RustEmitter {
         // recorded `E`; the dispatch it needs is written out here.
         if let Some(exception) = self.symbols.typed_assert_throws.get(&call.span).cloned() {
             self.emit_typed_assert_throws(call, &exception);
+            return;
+        }
+        // `Result.from(f)` (§X.5.4): the checker recorded the `Err`'s class.
+        if let Some(exception) = self.symbols.result_from_calls.get(&call.span).cloned() {
+            self.emit_result_from(call, &exception);
             return;
         }
         // **Statement-scoped handle guard (§6.5.1).** A call on a collection
@@ -1046,8 +1139,11 @@ impl RustEmitter {
         // that writes the member name. Cleared first so a stale value
         // from an aborted emission can't leak in.
         self.pending_method_suffix = None;
+        // Test hook `overload`: the pick is lost, the shape of gap 39f's
+        // stale pick (ERRATA E140). The safe level reads the pick again where
+        // the name is written (`take_method_suffix`).
         if let Some(k) = self.symbols.method_selections.get(&call.span) {
-            if *k > 0 {
+            if *k > 0 && !self.broken_by(crate::BreakKind::Overload, call.span) {
                 self.pending_method_suffix = Some(format!("__ov{k}"));
             }
         }
@@ -1121,8 +1217,7 @@ impl RustEmitter {
                 // tycheck's recorded pick; fall back to argument count when the
                 // super receiver gave it no class type to resolve against.
                 if let Some(sfx) = self
-                    .pending_method_suffix
-                    .take()
+                    .take_method_suffix()
                     .or_else(|| self.super_overload_suffix(&f.field.text, call.args.len()))
                 {
                     self.w.push_str(&sfx);
@@ -2289,7 +2384,7 @@ impl RustEmitter {
                     self.w.push_str(&class_name);
                     self.w.push_str("::");
                     self.w.push_str(&to_rust_ident(name));
-                    if let Some(sfx) = self.pending_method_suffix.take() {
+                    if let Some(sfx) = self.take_method_suffix() {
                         self.w.push_str(&sfx);
                     }
                     self.w.push('(');
@@ -2349,7 +2444,7 @@ impl RustEmitter {
                     self.w.push_str(alias);
                     self.w.push('.');
                     self.w.push_str(&to_rust_ident(name));
-                    if let Some(sfx) = self.pending_method_suffix.take() {
+                    if let Some(sfx) = self.take_method_suffix() {
                         self.w.push_str(&sfx);
                     }
                     self.w.push('(');
@@ -2544,7 +2639,7 @@ impl RustEmitter {
                         // Free-fn form joins with `_`; associated form with `::`.
                         self.w.push_str(if lift_to_free_fn { "_" } else { "::" });
                         self.w.push_str(&to_rust_ident(&f.field.text));
-                        if let Some(sfx) = self.pending_method_suffix.take() {
+                        if let Some(sfx) = self.take_method_suffix() {
                             self.w.push_str(&sfx);
                         }
                         self.w.push('(');
@@ -2818,20 +2913,7 @@ impl RustEmitter {
         // generic-arg slot (owned `String`, `Rc<dyn …>` for poly/iface
         // types) so it matches how the same `T` is monomorphized when
         // the call relies on inference.
-        if !call.explicit_generic_args.is_empty() {
-            self.w.push_str("::<");
-            for (i, ty) in call.explicit_generic_args.iter().enumerate() {
-                if i > 0 {
-                    self.w.push_str(", ");
-                }
-                if crate::analysis::is_jux_string_type(ty) && !self.call_type_args_erased(call) {
-                    self.w.push_str("String");
-                } else {
-                    self.emit_turbofish_arg(call, ty);
-                }
-            }
-            self.w.push('>');
-        }
+        self.emit_free_call_turbofish(call);
         self.w.push('(');
         // Same flag discipline as above: a regular call's args
         // consume String values, so any inner string literal needs
@@ -3532,7 +3614,7 @@ impl RustEmitter {
         self.emitting_call_callee = true;
         self.emit_expr(&call.callee);
         self.emitting_call_callee = prev_callee;
-        if let Some(sfx) = self.pending_method_suffix.take() {
+        if let Some(sfx) = self.take_method_suffix() {
             self.w.push_str(&sfx);
         }
         self.w.push('(');
@@ -5084,20 +5166,7 @@ impl RustEmitter {
         self.emitting_format_arg = prev_fmt;
         self.emitting_comparison_operand = prev_cmp;
         self.emitting_call_callee = prev_callee;
-        if !call.explicit_generic_args.is_empty() {
-            self.w.push_str("::<");
-            for (i, ty) in call.explicit_generic_args.iter().enumerate() {
-                if i > 0 {
-                    self.w.push_str(", ");
-                }
-                if crate::analysis::is_jux_string_type(ty) && !self.call_type_args_erased(call) {
-                    self.w.push_str("String");
-                } else {
-                    self.emit_turbofish_arg(call, ty);
-                }
-            }
-            self.w.push('>');
-        }
+        self.emit_free_call_turbofish(call);
         self.w.push('(');
         for i in 0..call.args.len() {
             if i > 0 {
@@ -5242,7 +5311,7 @@ impl RustEmitter {
         // This call's overload pick, taken now: emitting the receiver and the
         // arguments below emits their own calls, and each re-arms the pick
         // for itself (ERRATA E140).
-        let own_suffix = self.pending_method_suffix.take();
+        let own_suffix = self.take_method_suffix();
         self.w.push_str("({ let __jux_recv = ");
         // Value position → the wrapper-field read appends `.clone()`, producing
         // an owned handle and dropping the `borrow()` temporary at the `;`.
@@ -7620,6 +7689,54 @@ impl RustEmitter {
     /// collection type argument is the plain Rust collection there
     /// (`collect::<Vec<isize>>()`); the call's result is put behind a handle
     /// where it lands (see `call_returns_foreign_collection`).
+    /// The turbofish of a free-function call. Explicit call-site type
+    /// arguments (`id<int>(5)`) lower to `id::<isize>(5)`: Rust would
+    /// otherwise infer the parameter from the argument values, ignoring the
+    /// annotation (`identity<long>(5)` must bind `i64`). Each argument is
+    /// lowered as a generic-argument slot (owned `String`, `Rc<dyn …>` for
+    /// polymorphic and interface types) so it matches how the same `T` is
+    /// monomorphized when the call relies on inference.
+    ///
+    /// At the safe level the turbofish comes from the checker's record of the
+    /// call instead (`RustEmitter::safe_turbofish`), which also writes a type
+    /// argument nothing in the call could infer. The test hook `infer` drops
+    /// the written one (the shape of gap 36 L30's lost type), which only the
+    /// safe level's record puts back.
+    fn emit_free_call_turbofish(&mut self, call: &CallExpr) {
+        if let Some(args) = self.safe_turbofish(call) {
+            self.w.push_str("::<");
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    self.w.push_str(", ");
+                }
+                match arg {
+                    Some(ty) if crate::analysis::is_jux_string_type(ty) && !self.call_type_args_erased(call) => {
+                        self.w.push_str("String")
+                    }
+                    Some(ty) => self.emit_turbofish_arg(call, ty),
+                    None => self.w.push('_'),
+                }
+            }
+            self.w.push('>');
+            return;
+        }
+        if call.explicit_generic_args.is_empty() || self.broken_by(crate::BreakKind::Infer, call.span) {
+            return;
+        }
+        self.w.push_str("::<");
+        for (i, ty) in call.explicit_generic_args.iter().enumerate() {
+            if i > 0 {
+                self.w.push_str(", ");
+            }
+            if crate::analysis::is_jux_string_type(ty) && !self.call_type_args_erased(call) {
+                self.w.push_str("String");
+            } else {
+                self.emit_turbofish_arg(call, ty);
+            }
+        }
+        self.w.push('>');
+    }
+
     fn emit_turbofish_arg(&mut self, call: &CallExpr, ty: &juxc_ast::TypeRef) {
         // An erased function or method is instantiated at the erased type
         // only (ERRATA E141).

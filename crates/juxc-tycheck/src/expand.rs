@@ -48,7 +48,30 @@ pub fn apply_call_expansions(
     if plans.is_empty() {
         return;
     }
-    rewrite_units(units, &Rewrites { plans, components: &HashMap::new(), destructuring: false, anon: None, outer: None, late: None, private: None });
+    rewrite_units(units, &Rewrites { plans, components: &HashMap::new(), destructuring: false, anon: None, outer: None, late: None, private: None, awaits: None });
+}
+
+/// Rewrite each `task.await()` the checker found (`spans`, call spans) as
+/// `await task`: ASYNC §18.1.4 declares the method as the keyword's other
+/// spelling, so everything after the checker (the suspension analyses, the
+/// lowering) sees one form.
+pub fn apply_task_awaits(units: &mut [CompilationUnit], spans: &std::collections::HashSet<Span>) {
+    if spans.is_empty() {
+        return;
+    }
+    rewrite_units(
+        units,
+        &Rewrites {
+            plans: &HashMap::new(),
+            components: &HashMap::new(),
+            destructuring: false,
+            anon: None,
+            outer: None,
+            late: None,
+            private: None,
+            awaits: Some(spans),
+        },
+    );
 }
 
 /// Rename the positional component reads the parser writes for a record
@@ -58,7 +81,7 @@ pub fn apply_call_expansions(
 /// field identifier's span. The destructuring temporaries also lose their
 /// written type here (see the `Stmt::VarDecl` arm of the walker).
 pub fn apply_component_names(units: &mut [CompilationUnit], components: &HashMap<Span, String>) {
-    rewrite_units(units, &Rewrites { plans: &HashMap::new(), components, destructuring: true, anon: None, outer: None, late: None, private: None });
+    rewrite_units(units, &Rewrites { plans: &HashMap::new(), components, destructuring: true, anon: None, outer: None, late: None, private: None, awaits: None });
 }
 
 /// Assert every read of a field `late_fields` gave a nullable slot:
@@ -73,6 +96,7 @@ pub(crate) fn rewrite_late_reads(units: &mut [CompilationUnit], reads: &crate::l
         outer: None,
         late: Some(reads),
         private: None,
+        awaits: None,
     };
     for unit in units.iter_mut().filter(|u| !u.is_external) {
         for item in &mut unit.items {
@@ -95,6 +119,7 @@ pub(crate) fn rename_private_dispatch(
         outer: None,
         late: None,
         private: Some(walk),
+        awaits: None,
     };
     for unit in units.iter_mut().filter(|u| !u.is_external) {
         for item in &mut unit.items {
@@ -122,6 +147,7 @@ pub fn rewrite_outer_refs(block: &mut juxc_ast::Block, names: &std::collections:
             outer: Some(names),
             late: None,
             private: None,
+            awaits: None,
         },
     );
 }
@@ -153,6 +179,7 @@ pub fn lift_anonymous_classes(
             outer: None,
             late: None,
             private: None,
+            awaits: None,
         },
     );
     anon.into_inner().1
@@ -177,6 +204,9 @@ pub(crate) struct Rewrites<'a> {
     /// Private members reached through a dispatch value, renamed to their
     /// hidden stand-ins (ERRATA E139).
     private: Option<&'a crate::private_dispatch::PrivateDispatch<'a>>,
+    /// `task.await()` calls, by span, each rewritten as `await task` (ASYNC
+    /// §18.1.4: the method is the keyword's other spelling).
+    awaits: Option<&'a std::collections::HashSet<Span>>,
 }
 
 fn rewrite_units(units: &mut [CompilationUnit], plans: &Rewrites<'_>) {
@@ -411,6 +441,14 @@ fn expand_expr(expr: &mut Expr, plans: &Rewrites<'_>) {
         Expr::TypeOf(inner, _) => expand_expr(inner, plans),
         // `out <place>` (§M.4) — recurse into the place.
         Expr::Out(inner, _) => expand_expr(inner, plans),
+        Expr::Call(c) if plans.awaits.is_some_and(|a| a.contains(&c.span)) => {
+            if let Expr::Field(f) = c.callee.as_mut() {
+                let span = c.span;
+                let mut task = std::mem::replace(f.object.as_mut(), Expr::This(Span::DUMMY));
+                expand_expr(&mut task, plans);
+                *expr = Expr::Await(Box::new(task), span);
+            }
+        }
         Expr::Call(c) => {
             // Apply this call's plan FIRST (it re-orders/splices the
             // argument vector), then recurse into the result so
