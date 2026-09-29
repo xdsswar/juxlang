@@ -2544,6 +2544,11 @@ impl RustEmitter {
             // the `emitting_method_receiver` marker, so in-place
             // mutation keeps working.
             Ty::Array { .. } => true,
+            // A nullable slot is an `Option` of its payload, as `Clone` and
+            // as non-`Copy` as the payload is: `h.maybe!!.push(x)` on a
+            // `Vec<int>?` field reads the handle out of the object's cell,
+            // and moving it out of the guard was rustc E0507.
+            Ty::Nullable(inner) => self.ty_needs_clone_on_field_read(inner),
             Ty::User { name, .. } => {
                 // The `Ty::User { name }` here can be either an FQN
                 // (multi-package programs) or a bare class name

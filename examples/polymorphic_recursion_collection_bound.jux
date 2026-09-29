@@ -1,0 +1,115 @@
+// A bound that holds the type parameter inside a collection, on a
+// polymorphic-recursion cycle (ERRATA E1XX-COLLREF, formerly E0438).
+//
+// `pack` calls itself at an ever-larger type argument, so it is compiled by
+// erasure: at run time its `T` is one boxed type, and a `Vec<T>` it builds is
+// a list of boxed values. The value's own `weigh` takes a `Vec<Item>`, a
+// different Rust list. The two are LINKED rather than copied: one storage,
+// seen from both sides, so what `weigh` pushes is in the caller's list, and
+// what the caller does to the list the value sees too -- even a list the value
+// kept and writes to later. That is Java's rule for a list handed to a method
+// (JUX-LANG-V1 §6.5.1).
+//
+// DIFFERENTIAL: tools/java-differential/cases/151_polymorphic_recursion_collection_bound
+
+import rust.std.*;
+
+interface Rel<L> { int weigh(L list); }
+
+class Item implements Rel<Vec<Item>> {
+    int w;
+    Item(int w) { this.w = w; }
+    public int weigh(Vec<Item> list) { list.push(this); return w + (int) list.len(); }
+}
+
+class Crate<T extends Rel<Vec<T>>> implements Rel<Vec<Crate<T>>> {
+    T inner;
+    Crate(T inner) { this.inner = inner; }
+    public int weigh(Vec<Crate<T>> list) {
+        var mine = new Vec<T>();
+        var got = inner.weigh(mine);
+        list.push(this);
+        return 1 + got + (int) mine.len() * 10 + (int) list.len() * 100;
+    }
+}
+
+<T extends Rel<Vec<T>>> int pack(T x, int n) {
+    if (n == 0) {
+        var seen = new Vec<T>();
+        var r = x.weigh(seen);
+        var again = x.weigh(seen);
+        return r * 1000 + again + (int) seen.len() * 1000000;
+    }
+    return pack<Crate<T>>(new Crate<T>(x), n - 1);
+}
+
+// A list the value KEEPS and writes to later, a list it hands back, and a
+// map: each is the one collection both sides hold.
+interface Keeper<L> {
+    void keep(L list);
+    void addLater();
+    L made();
+}
+
+interface Tally<M> { int tally(M byName); }
+
+class Leaf implements Keeper<Vec<Leaf>>, Tally<HashMap<String, Leaf>> {
+    int id;
+    Vec<Leaf>? kept = null;
+    Vec<Leaf> mine = new Vec<Leaf>();
+    Leaf(int id) { this.id = id; }
+    public void keep(Vec<Leaf> list) { this.kept = list; }
+    public void addLater() { this.kept!!.push(this); this.mine.push(this); }
+    public Vec<Leaf> made() { return this.mine; }
+    public int tally(HashMap<String, Leaf> byName) {
+        byName.insert("leaf" + id, this);
+        return (int) byName.len();
+    }
+}
+
+class Wrap<T extends Keeper<Vec<T>> & Tally<HashMap<String, T>>>
+        implements Keeper<Vec<Wrap<T>>>, Tally<HashMap<String, Wrap<T>>> {
+    T inner;
+    Vec<Wrap<T>>? kept = null;
+    Vec<Wrap<T>> mine = new Vec<Wrap<T>>();
+    Wrap(T inner) { this.inner = inner; }
+    public void keep(Vec<Wrap<T>> list) { this.kept = list; }
+    public void addLater() { this.kept!!.push(this); this.mine.push(this); }
+    public Vec<Wrap<T>> made() { return this.mine; }
+    public int tally(HashMap<String, Wrap<T>> byName) {
+        byName.insert("wrap", this);
+        return 100 + (int) byName.len();
+    }
+}
+
+<T extends Keeper<Vec<T>> & Tally<HashMap<String, T>>> void run(T x, int n) {
+    if (n == 0) {
+        var list = new Vec<T>();
+        x.keep(list);
+        print("before: " + list.len());
+        x.addLater();
+        x.addLater();
+        print("after: " + list.len());
+        var made = x.made();
+        print("made: " + made.len());
+        x.addLater();
+        print("made again: " + made.len() + " " + list.len());
+        made.clear();
+        x.addLater();
+        print("cleared then one: " + x.made().len());
+        var names = new HashMap<String, T>();
+        names.insert("first", x);
+        var t = x.tally(names);
+        print("tally: " + t + " " + names.len());
+        print("same: " + (list[0] == x));
+        return;
+    }
+    run<Wrap<T>>(new Wrap<T>(x), n - 1);
+}
+
+public void main() {
+    print(pack<Item>(new Item(4), 0));
+    print(pack<Item>(new Item(4), 3));
+    run<Leaf>(new Leaf(1), 0);
+    run<Leaf>(new Leaf(2), 2);
+}

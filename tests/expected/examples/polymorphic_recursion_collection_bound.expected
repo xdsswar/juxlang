@@ -1,0 +1,18 @@
+2005006
+2338438
+before: 0
+after: 2
+made: 2
+made again: 3 3
+cleared then one: 1
+tally: 2 2
+same: true
+before: 0
+after: 2
+made: 2
+made again: 3 3
+cleared then one: 1
+tally: 102 2
+same: true
+examples/polymorphic_recursion_collection_bound.jux:58:5: [W0457] warning: field `kept` forms a reference cycle on class `Leaf` -- classes are reference-counted, and objects that refer to each other in a cycle are never freed, so this leaks; mark a back-edge field `weak` to break it (§6.5)
+examples/polymorphic_recursion_collection_bound.jux:73:5: [W0457] warning: field `kept` forms a reference cycle on class `Wrap` -- classes are reference-counted, and objects that refer to each other in a cycle are never freed, so this leaks; mark a back-edge field `weak` to break it (§6.5)

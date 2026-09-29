@@ -5622,7 +5622,96 @@ depth 3), pinned by the output Java prints and differential case
 **Spec status:** `JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10 and
 `JUX-DIAGNOSTICS-ADDENDUM.md` §D.4's `E0438` row are amended; E142's
 remaining refusals are resolved, except the one above. GAPS.md gap 39i is
-closed.
+closed. Item 3 is resolved by E1XX-COLLREF.
+
+---
+
+## E1XX-COLLREF. A collection is shared on every channel, across erasure too
+
+**Conflict.** `JUX-LANG-V1.md` §6.5.1 says a collection is a reference on the
+same terms as a class instance: assignment, an argument, a return, a field, an
+element and a getter all hand on the SAME collection, and `clone()` is the only
+thing that copies. Wave 1 built the shared handle, and most channels used it.
+A probe of every channel found four places that did not:
+
+1. **Channels that moved the handle instead of sharing it.** A nullable local
+   (`Vec<int>? nv = v;`), a nullable parameter, a plain reassignment
+   (`w = v;`), a `switch` arm (`case A -> v`), a lambda returning its capture
+   (`() -> v`) and a nullable field asserted as a receiver (`h.maybe!!.push(x)`)
+   each moved the handle out of its source, so the next use of the source
+   stopped at an internal compiler error (rustc E0382/E0507). The nullable
+   local did the same to a class instance (`Node? n = a;`).
+2. **`new Vec<int>[n]`** dropped the element's type arguments, and would have
+   filled its slots by repeating one empty collection: every slot the same list.
+3. **The erasure boundary.** E143 kept `E0438` for a bound holding the
+   parameter inside a collection (`T extends Rel<Vec<T>>`): the erased code
+   holds a `Vec<JuxErased>`, the value's own `weigh` takes a `Vec<Item>`, and
+   the only conversion was a copy, which loses every write made through the
+   other name. The same two-types-for-one-list problem made a collection of
+   an erased parameter crossing into or out of the erased part of a program
+   (`grow<int>(1, acc, 3)` into a `Vec<T>` parameter, a `Vec<T>` returned or
+   stored in a field of an erased class) an internal compiler error.
+4. **A worker's copy.** JUX-ASYNC-ADDENDUM §18.2 gives a `Worker.spawn`
+   closure its own copy of a captured collection (E27), the one place §6.5.1
+   does not reach. A copy that is only read cannot be told from the original;
+   one that is WRITTEN drops the write without a word, which is exactly the
+   surprise §6.5.1 exists to rule out.
+
+**Resolution.**
+
+1. Every channel shares: a class or collection place read again later is
+   cloned into the nullable wrap, the reassignment, the `switch` arm and a
+   lambda's returned capture (a refcount bump), and `!!` on a field reads the
+   field as a value.
+2. `new T[n]` keeps `T`'s type arguments, and a collection element gets one
+   fresh collection per slot.
+3. **Linking.** Where a collection crosses an erasure boundary its two Rust
+   types are LINKED to one storage rather than converted by copy. The typed
+   collection (`Vec<Item>`) is the storage; the erased one (`Vec<JuxErased>`)
+   is a mirror of it, refreshed from it when its cell is borrowed and written
+   back into it when a mutable borrow ends. Each cell borrow is already short
+   and never held across Jux code (§CR.4.1), so a write through either side is
+   seen through the other exactly as for one collection with two names. A
+   collection the erased code built itself moves into a typed one the first
+   time the typed side asks for it, and its cell becomes the mirror; the same
+   typed collection crossing again is handed the same mirror. Nested
+   collections (`Vec<Vec<T>>`, `HashMap<String, T>`) and runtime-sized arrays
+   (`T[]`) are linked element by element, so an inner list is shared too.
+   The adapter that carries a bound for an erased value (E143) links its
+   arguments and results this way, and so does every argument, constructor
+   argument, return value and field of the erased family. Only a program with
+   an erased part carries the link runtime: its cells check for a link on each
+   borrow, and a mirror's refresh costs a pass over the collection. Every
+   other program keeps the plain cell and pays nothing.
+4. **`E0438` keeps one case**: a bound holding the parameter inside a FOREIGN
+   type that is neither a Jux class nor a collection (`T extends Rel<Box<T>>`).
+   Such a type has no conversion at all, shared or copied, so the cycle is
+   refused rather than miscompiled.
+5. **A write to a worker's copy is `E0702`.** A `Worker.spawn` closure may
+   read a captured collection or array; a mutating method on it, or a store
+   into it, is refused with the two ways to say what was meant: return the
+   worker's result, or copy explicitly (`var mine = xs.clone();`).
+
+The for-each rule is unchanged: a loop walks a shallow snapshot (§6.5.1), so a
+body that mutates the collection it iterates is well defined and never meets a
+held borrow; Java's `ConcurrentModificationException` has no counterpart.
+
+**Tests.** `examples/collection_alias_channels.jux` (every channel; Java
+differential case `150_collection_alias_channels`),
+`examples/array_of_collections.jux`,
+`examples/polymorphic_recursion_collection_bound.jux` (the former `E0438`
+program, a list the value keeps and writes to later, a map; case
+`151_polymorphic_recursion_collection_bound`),
+`examples/polymorphic_recursion_collection_slots.jux` (arguments, returns,
+constructor arguments, fields, a list of lists and an array; case
+`152_polymorphic_recursion_collection_slots`),
+`tests/ui/worker_collection_write`, and `tests/ui/generic_method_dispatch_limits`
+now holds the `Rel<Box<T>>` case.
+
+**Spec status:** `JUX-LANG-V1.md` §6.5.1 states the erasure and worker rules;
+JUX-ASYNC-ADDENDUM §18.2 states the `E0702` write rule;
+`JUX-TYPE-SYSTEM-ADDENDUM.md` §T.4.6 rule 10 and `JUX-DIAGNOSTICS-ADDENDUM.md`
+§D.4's `E0438` and `E0702` rows are amended. GAPS.md gap 40 is closed.
 
 ---
 When you edit any addendum that touches one of the items above,

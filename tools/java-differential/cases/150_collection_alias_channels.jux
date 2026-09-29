@@ -1,0 +1,96 @@
+// Every channel a collection travels through hands on the SAME collection
+// (JUX-LANG-V1 §6.5.1), the way a class instance already travels: a nullable
+// slot, a nullable parameter, a nullable return, a nullable field, a plain
+// reassignment, a `switch` arm, a lambda that returns a captured collection,
+// and a map or a list holding it. A write through any of the names is seen
+// through all of them.
+//
+// Each line below prints how many elements the ONE list `v` holds after the
+// write through the named channel, so the numbers climb by one each time.
+// A copy anywhere would stop the count.
+//
+// DIFFERENTIAL: tools/java-differential/cases/150_collection_alias_channels
+
+import rust.std.*;
+
+enum Kind { Mine, Fresh }
+
+class Holder {
+    public Vec<int>? maybe = null;
+    public Vec<int> items = new Vec<int>();
+    public void keep(Vec<int>? xs) { this.maybe = xs; }
+    public Vec<int>? kept() { return this.maybe; }
+}
+
+public void addOne(Vec<int>? xs, int x) { xs!!.push(x); }
+public Vec<int>? handBack(Vec<int> xs) { return xs; }
+
+public void main() {
+    var v = new Vec<int>();
+
+    Vec<int>? local = v;
+    local!!.push(1);
+    print("nullable local: " + v.len());
+
+    addOne(v, 2);
+    print("nullable parameter: " + v.len());
+
+    handBack(v)!!.push(3);
+    print("nullable return: " + v.len());
+
+    var h = new Holder();
+    h.keep(v);
+    h.kept()!!.push(4);
+    print("nullable field via method: " + v.len());
+
+    h.maybe = v;
+    h.maybe!!.push(5);
+    print("nullable field: " + v.len());
+
+    h.items = v;
+    h.items.push(6);
+    print("field: " + v.len());
+
+    var w = new Vec<int>();
+    w = v;
+    w.push(7);
+    print("reassignment: " + v.len());
+
+    Vec<int>? nw = null;
+    nw = v;
+    nw!!.push(8);
+    print("nullable reassignment: " + v.len());
+
+    var k = Kind.Mine;
+    var picked = switch (k) {
+        case Mine -> v;
+        case Fresh -> new Vec<int>();
+    };
+    picked.push(9);
+    print("switch arm: " + v.len());
+
+    () -> Vec<int> supplier = () -> v;
+    supplier().push(10);
+    supplier().push(11);
+    print("lambda result: " + v.len());
+
+    var byKey = new HashMap<String, Vec<int>>();
+    byKey.insert("v", v);
+    byKey.get("v")!!.push(12);
+    print("map value: " + v.len());
+
+    var outer = new Vec<Vec<int>>();
+    outer.push(v);
+    outer[0].push(13);
+    print("list element: " + v.len());
+
+    // The source name is still usable after every hand-off, and still
+    // names the collection every other name reaches.
+    print("sum: " + sumOf(local!!));
+}
+
+public int sumOf(Vec<int> xs) {
+    var total = 0;
+    for (var x : xs) { total += x; }
+    return total;
+}

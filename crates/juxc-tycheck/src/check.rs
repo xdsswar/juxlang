@@ -11866,7 +11866,10 @@ impl<'a> Checker<'a> {
             } else {
                 match self.worker_capture_blocker(&ty, 0) {
                     Some(why) => why,
-                    None => continue,
+                    None => {
+                        self.check_worker_collection_write(l, &name, &ty);
+                        continue;
+                    }
                 }
             };
             self.diagnostics.push(
@@ -11897,6 +11900,54 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+    }
+
+    /// **E0702** for a WRITE to a captured collection or array inside a
+    /// `Worker.spawn` closure. The worker receives its own copy (§18.2), which
+    /// is the one place a collection does not alias (JUX-LANG-V1 §6.5.1); a
+    /// copy that is only read is indistinguishable from the original, but one
+    /// that is written drops the write silently, which is the surprise §6.5.1
+    /// exists to rule out. So the copy has to be asked for (`clone()`), or the
+    /// worker's result returned (ERRATA E1XX-COLLREF).
+    fn check_worker_collection_write(&mut self, l: &juxc_ast::LambdaExpr, name: &str, ty: &Ty) {
+        let mut inner = ty;
+        while let Ty::Nullable(t) = inner {
+            inner = t;
+        }
+        let class_of: Option<String> = match inner {
+            Ty::Array { .. } => self.symbols.resolve_class("Vec").map(|(k, _)| k.clone()),
+            Ty::User { name: n, .. } if self.symbols.is_rust_collection(n) => {
+                self.symbols.resolve_class(n).map(|(k, _)| k.clone())
+            }
+            _ => return,
+        };
+        let mut_self = |m: &str| {
+            class_of
+                .as_deref()
+                .and_then(|c| self.symbols.classes.get(c))
+                .and_then(|c| c.methods.get(m))
+                .is_some_and(|ms| {
+                    ms.annotations
+                        .iter()
+                        .any(|a| a.name.segments.len() == 1 && a.name.segments[0].text.eq_ignore_ascii_case("mutself"))
+                })
+        };
+        let Some(at) = lent_param_written_at(l, name, &mut_self) else { return };
+        let what = if matches!(inner, Ty::Array { .. }) { "array" } else { "collection" };
+        self.diagnostics.push(
+            Diagnostic::error(
+                code::Code::E0702_ObjectCapturedBySpawn,
+                format!(
+                    "`{name}` is written inside a `Worker.spawn` closure, but a worker runs on another thread with \
+                     its OWN copy of a captured {what} (§18.2), so the write would never reach the `{name}` outside it",
+                ),
+            )
+            .with_span(at)
+            .with_help(format!(
+                "return what the worker computes and use it after `await`, or make the copy explicit inside the \
+                 closure: `var mine = {name}.clone();`"
+            )),
+        );
     }
 
     /// Where a `Worker.spawn` closure reaches `this`: an explicit `this`, or a

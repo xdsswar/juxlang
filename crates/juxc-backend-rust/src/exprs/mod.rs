@@ -1369,6 +1369,11 @@ impl RustEmitter {
         // an erased type parameter is boxed; one read out of such a slot is
         // unboxed to the type the checker gave it.
         if self.erasure_active() {
+            // A collection crossing the boundary is linked, not boxed (ERRATA
+            // E1XX-COLLREF).
+            if self.emit_linked(expr) {
+                return;
+            }
             let span = Self::erase_key(expr);
             if self.erase_on_emit.contains_key(&span) && self.erasing_now.insert((span, true)) {
                 let mark = self.erase_on_emit.get(&span).cloned().unwrap_or_default();
@@ -1978,9 +1983,19 @@ impl RustEmitter {
                     // of the `Ref` (rustc E0507).
                     let prev_fmt = std::mem::take(&mut self.emitting_format_arg);
                     let prev_cmp = std::mem::take(&mut self.emitting_comparison_operand);
+                    // The same for a method RECEIVER: `h.maybe!!.push(x)`
+                    // calls `push` on the unwrapped handle, not on the field,
+                    // so the field read is an ordinary value read that shares
+                    // the handle out of the object's cell.
+                    let prev_recv = std::mem::take(&mut self.emitting_method_receiver);
+                    let prev_out = std::mem::take(&mut self.emitting_out_place);
+                    let prev_lv = std::mem::take(&mut self.emitting_lvalue);
                     self.w.push('(');
                     self.emit_expr(inner);
                     self.w.push(')');
+                    self.emitting_method_receiver = prev_recv;
+                    self.emitting_out_place = prev_out;
+                    self.emitting_lvalue = prev_lv;
                     self.emitting_format_arg = prev_fmt;
                     self.emitting_comparison_operand = prev_cmp;
                     // `unwrap` CONSUMES the `Option`, so asserting on the same
@@ -3349,6 +3364,20 @@ impl RustEmitter {
                     self.emit_expr_coerced_to_iface(ret, e);
                 } else {
                     self.emit_expr(e);
+                    // `() -> items` hands out the captured collection (or
+                    // object) every time it runs: it is the SAME one each
+                    // time (§6.5.1), so the closure shares its capture rather
+                    // than moving it out, which an `Fn` cannot do (rustc
+                    // E0507).
+                    if let juxc_ast::Expr::Path(qn) = e.as_ref() {
+                        if let [only] = qn.segments.as_slice() {
+                            if !l.params.iter().any(|p| p.name.text == only.text)
+                                && self.captured_value_is_clone(&only.text, qn.span)
+                            {
+                                self.w.push_str(".clone()");
+                            }
+                        }
+                    }
                 }
             }
             juxc_ast::LambdaBody::Block(b) if ordering_from_int => {

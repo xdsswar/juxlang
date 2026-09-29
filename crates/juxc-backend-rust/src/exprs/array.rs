@@ -364,6 +364,18 @@ impl RustEmitter {
         }
     }
 
+    /// Whether the element of a `new T[n]` is a collection handle (§6.5.1),
+    /// whose default is a fresh collection per slot rather than one shared one.
+    fn new_array_element_is_handle(&self, elem: &juxc_ast::TypeRef) -> bool {
+        if elem.nullable || elem.array_shape.is_some() || elem.fn_shape.is_some() || elem.ptr_depth > 0 {
+            return false;
+        }
+        match self.ty_from_written_ref(elem) {
+            juxc_tycheck::Ty::User { name, .. } => self.collection_name_is_handle(&name),
+            _ => false,
+        }
+    }
+
     fn emit_new_array_inner(&mut self, n: &NewArrayExpr) {
         // Collect every dimension's size, outermost-first: the outer
         // `size` plus any `inner_sizes` from a multi-dim `new T[a][b]`.
@@ -465,6 +477,26 @@ impl RustEmitter {
             false
         };
         let want_dynamic = lhs_says_dynamic || !size_is_const || !has_target;
+
+        // An element that is itself a shared handle (a collection, §6.5.1)
+        // cannot be built by repetition either: `vec![empty; n]` clones ONE
+        // empty collection n times, and cloning a handle shares it, so every
+        // slot of `new Vec<int>[2]` would be the same list. Each slot gets a
+        // collection of its own.
+        if is_innermost && self.new_array_element_is_handle(&n.element_type) {
+            if want_dynamic {
+                self.w.push_str("(0..");
+                self.emit_array_repeat_len(size);
+                self.w.push_str(").map(|_| ");
+                self.emit_default_value_for(&n.element_type);
+                self.w.push_str(").collect::<Vec<_>>()");
+            } else {
+                self.w.push_str("std::array::from_fn(|_| ");
+                self.emit_default_value_for(&n.element_type);
+                self.w.push(')');
+            }
+            return;
+        }
 
         if want_dynamic {
             if is_innermost && elem_is_type_param {

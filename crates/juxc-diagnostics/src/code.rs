@@ -391,11 +391,14 @@ pub enum Code {
     /// it is `E0414`. Nothing emits it; the number is not reused.
     E0437_FieldThroughPolymorphicBase,
     /// E0438 — **Polymorphic recursion that cannot be erased** (ERRATA
-    /// E141, E142, E143): a function calling itself at an ever-larger
-    /// type argument is compiled by erasing the type arguments of every
-    /// function and class on that cycle, each bound kept as a dispatch
-    /// object or an adapter; a bound holding the parameter inside a Rust type
-    /// (`T extends Rel<Vec<T>>`) would need a copy that breaks sharing.
+    /// E141, E142, E143, E1XX-COLLREF): a function calling itself at an
+    /// ever-larger type argument is compiled by erasing the type arguments of
+    /// every function and class on that cycle, each bound kept as a dispatch
+    /// object or an adapter, and a collection holding the parameter
+    /// (`T extends Rel<Vec<T>>`) linked to the value's own collection. What
+    /// is left is a bound holding the parameter inside a FOREIGN type that is
+    /// neither a Jux class nor a collection (`T extends Rel<Box<T>>`), which
+    /// has no conversion at all.
     E0438_GenericVirtualMethod,
     /// E0442 — A **reference cast / type-test between unrelated types**
     /// (`(Dog) someString`, `x as Cat` where `x` can't be a `Cat`,

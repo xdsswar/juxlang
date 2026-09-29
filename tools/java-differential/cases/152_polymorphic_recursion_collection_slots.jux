@@ -1,0 +1,99 @@
+// A collection of an erased type parameter crossing into or out of the
+// erased part of a program (ERRATA E1XX-COLLREF).
+//
+// A function on a polymorphic-recursion cycle is compiled by erasure, so its
+// `Vec<T>` is a list of boxed values: a different Rust list from the caller's
+// `Vec<String>`. Every place the two meet -- an argument, a returned list, a
+// constructor argument, a field read or written from outside, a list of lists
+// and an array handed to a bound -- LINKS them to one storage, so a write on
+// either side is seen on the other, as it is for any collection with two
+// names (JUX-LANG-V1 §6.5.1). These all failed to compile before.
+//
+// DIFFERENTIAL: tools/java-differential/cases/152_polymorphic_recursion_collection_slots
+
+import rust.std.*;
+
+class Node<T> {
+    T value;
+    Vec<T> log;
+    Node(T value, Vec<T> log) { this.value = value; this.log = log; }
+    Vec<T> history() { return this.log; }
+    int remember(T v) { this.log.push(v); return (int) this.log.len(); }
+}
+
+<T> Vec<T> collect(T x, Vec<T> into, int n) {
+    into.push(x);
+    if (n == 0) { return into; }
+    var deeper = new Vec<Node<T>>();
+    var node = new Node<T>(x, into);
+    node.remember(x);
+    collect<Node<T>>(node, deeper, n - 1);
+    return into;
+}
+
+// A list of lists and an array, handed to a bound.
+interface Grid<G> { int fill(G rows); }
+interface Slots<A> { int put(A slots); }
+
+class Cell implements Grid<Vec<Vec<Cell>>>, Slots<Cell[]> {
+    int v;
+    Cell(int v) { this.v = v; }
+    public int fill(Vec<Vec<Cell>> rows) {
+        var row = new Vec<Cell>();
+        row.push(this);
+        rows.push(row);
+        if (rows.len() > 1) { rows[0].push(this); }
+        return (int) rows.len();
+    }
+    public int put(Cell[] slots) {
+        slots[0] = this;
+        return slots.length;
+    }
+}
+
+class Box<T extends Grid<Vec<Vec<T>>> & Slots<T[]>> implements Grid<Vec<Vec<Box<T>>>>, Slots<Box<T>[]> {
+    T inner;
+    Box(T inner) { this.inner = inner; }
+    public int fill(Vec<Vec<Box<T>>> rows) { rows.push(new Vec<Box<T>>()); return 10 + (int) rows.len(); }
+    public int put(Box<T>[] slots) { slots[1] = this; return 20 + slots.length; }
+}
+
+<T extends Grid<Vec<Vec<T>>> & Slots<T[]>> int go(T x, T y, int n) {
+    if (n == 0) {
+        var rows = new Vec<Vec<T>>();
+        var a = x.fill(rows);
+        var b = x.fill(rows);
+        var firstRow = rows[0];
+        var c = x.fill(rows);
+        T[] slots = new T[]{y, y};
+        var d = x.put(slots);
+        var same = slots[0] == x;
+        return a * 100000 + b * 10000 + c * 1000 + (int) firstRow.len() * 100 + d * 10 + (same ? 1 : 0);
+    }
+    return go<Box<T>>(new Box<T>(x), new Box<T>(y), n - 1);
+}
+
+public void main() {
+    // An argument, and the list handed back.
+    var mine = new Vec<String>();
+    var back = collect<String>("a", mine, 2);
+    print(mine.len() + " " + back.len());
+    back.push("z");
+    print(mine.len());
+
+    // A constructor argument, a method's list, a field read and written.
+    var log = new Vec<int>();
+    var n = new Node<int>(5, log);
+    n.remember(6);
+    print(log.len());
+    var h = n.history();
+    h.push(7);
+    print(n.log.len() + " " + log.len());
+    n.log = new Vec<int>();
+    n.log.push(1);
+    print(n.remember(2) + " " + log.len());
+
+    // A list of lists and an array, through a bound.
+    print(go<Cell>(new Cell(1), new Cell(2), 0));
+    print(go<Cell>(new Cell(1), new Cell(2), 2));
+}

@@ -5853,8 +5853,10 @@ impl crate::RustEmitter {
             // b;` followed by another use of `b` would otherwise be a
             // move-then-use (rustc E0382). The clone is the cheap `Rc`
             // refcount bump and goes INSIDE the wrap so the original
-            // binding survives.
-            if self.wrapper_value_needs_clone(arg) {
+            // binding survives. A collection place read again later is the
+            // same case (§6.5.1): `addTo(v)` into a `Vec<int>?` parameter
+            // hands over the handle, and `v` still names the collection.
+            if self.wrapper_value_needs_clone(arg) || self.value_place_needs_clone(arg) {
                 self.w.push_str(".clone()");
             }
             self.w.push(')');

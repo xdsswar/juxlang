@@ -525,7 +525,28 @@ Left open: `Result.from(() -> ...)` (§X.5.4) is not provided; it is a clean `E0
 | `climb<T extends Shape<T>>` over an abstract class, calling `climb<Framed<T>>` | `E0438` | works, matches Java |
 | `weave<T extends Joins<Pair<T>>>` calling `weave<Shell<T>>` | `E0438` | works, matches Java |
 | `Chunk<T, int N>` built as `Chunk<T, 3>` on a cycle, `int[N]` field | `E0438` | works |
-| `pack<T extends Rel<Vec<T>>>` calling `pack<Crate<T>>` | `E0438` | `E0438` (a copy would break the list's sharing) |
+| `pack<T extends Rel<Vec<T>>>` calling `pack<Crate<T>>` | `E0438` | `E0438` (a copy would break the list's sharing); works since gap 40 |
+
+### Collections by reference (added 2026-09-28)
+
+**40. CLOSED 2026-09-28 (ERRATA E1XX-COLLREF).** ~~A collection was not the same collection on every channel.~~ Wave 1 (TODO.md 1b, 1c) made a collection the shared handle a class instance is; a probe of every channel a collection travels through found the ones that still moved or copied it, and each is fixed: a nullable local, parameter or field, a reassignment, a `switch` arm and a lambda's returned capture share the handle (they stopped at an internal compiler error, rustc E0382/E0507, and the nullable local did the same to a class instance); `new Vec<int>[n]` gives each slot its own collection. Across erasure the erased `Vec<JuxErased>` is LINKED to the typed `Vec<X>`, one storage seen from both sides, which retires `E0438` for `T extends Rel<Vec<T>>` and makes a collection of an erased parameter crossing into or out of the erased part of a program (an argument, a return, a field, a constructor argument) compile at all. `E0438` keeps one case, a foreign non-collection type holding the parameter (`Rel<Box<T>>`), which has no conversion of any kind. A write to a collection a `Worker.spawn` closure captured, which reached only the worker's copy, is `E0702`. Tests: `examples/collection_alias_channels.jux` (Java differential case 150), `examples/array_of_collections.jux`, `examples/polymorphic_recursion_collection_bound.jux` (case 151), `examples/polymorphic_recursion_collection_slots.jux` (case 152), `tests/ui/worker_collection_write`, `tests/ui/generic_method_dispatch_limits`.
+
+| Probe | Before | Now |
+|---|---|---|
+| `Vec<int>? nv = v; nv!!.push(1); print(v.len())` (and `Node? n = a;`) | E0900 (rustc E0382) | works, matches Java |
+| `addTo(v)` into a `Vec<int>?` parameter, then `v.len()` | E0900 | works, matches Java |
+| `w = v; w.push(7)` then `v.len()` | E0900 | works, matches Java |
+| `var p = switch (k) { case A -> v; ... }` then `v.len()` | E0900 | works, matches Java |
+| `() -> Vec<int> s = () -> v; s().push(1)` | E0900 (rustc E0507) | works, matches Java |
+| `h.maybe!!.push(5)` on a `Vec<int>?` field | E0900 (rustc E0507) | works, matches Java |
+| `new Vec<int>[3]`, push into slot 0 | E0900 (rustc could not parse the default) | each slot its own list |
+| `pack<T extends Rel<Vec<T>>>` calling `pack<Crate<T>>`, the value pushing into the caller's list | `E0438` | works, matches Java |
+| a bound's list kept by the value and written to later; a list it hands back; a `HashMap<String, T>` | `E0438` | works, matches Java |
+| `grow<int>(1, acc, 3)` into a `Vec<T>` parameter of an erased function | E0900 | works, `acc` sees the push |
+| a `Vec<T>` field of an erased class, read and written from outside; a `Vec<T>` return | E0900 | works, matches Java |
+| a `Vec<Vec<T>>` and a `T[]` handed to a bound on a cycle | `E0438` | works, matches Java |
+| `pack<T extends Rel<Box<T>>>` | `E0438` | `E0438` (no conversion into `Box` exists) |
+| `Worker.spawn(() -> { xs.push(1); ... })` on a captured `Vec` | the push reached only the worker's copy | `E0702` |
 
 ---
 

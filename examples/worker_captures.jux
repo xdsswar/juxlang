@@ -2,8 +2,9 @@
 // (JUX-ASYNC-ADDENDUM §18.2, ERRATA E27).
 //
 // A worker takes its captures by value. For a collection or an array that
-// means its own copy of the contents: changes stay in the worker, and results
-// come back through the task. A class object is shared instead, upgraded to an
+// means its own copy of the contents, which it reads; a write to it would stay
+// in the worker unseen, so it is refused (E0702), and results come back
+// through the task. A class object is shared instead, upgraded to an
 // atomic handle, so a change made in the worker is seen by the caller. A
 // method's closure that reads a field of its own class captures `this`.
 
@@ -44,12 +45,14 @@ public async void main() {
     }
     print(await parallelSum(data));
 
-    // A captured collection is the worker's own copy.
+    // A captured collection is the worker's own copy, so the worker may only
+    // read it: a write would be lost (E0702). To change a copy, say so.
     var names = new Vec<String>();
     names.push("ann");
     var grown = Worker.spawn(() -> {
-        names.push("bob");
-        return names.len();
+        var mine = names.clone();
+        mine.push("bob");
+        return mine.len();
     });
     print(await grown);
     print(names.len());
